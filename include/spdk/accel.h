@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES
  *   All rights reserved.
  */
 
@@ -48,7 +48,8 @@ enum spdk_accel_opcode {
 	SPDK_ACCEL_OPC_DIF_VERIFY		= 11,
 	SPDK_ACCEL_OPC_DIF_GENERATE		= 12,
 	SPDK_ACCEL_OPC_DIF_GENERATE_COPY	= 13,
-	SPDK_ACCEL_OPC_LAST			= 14,
+	SPDK_ACCEL_OPC_CHECK_CRC32C		= 14,
+	SPDK_ACCEL_OPC_LAST			= 15,
 };
 
 enum spdk_accel_cipher {
@@ -262,6 +263,45 @@ int spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst, void *s
 int spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst, struct iovec *src_iovs,
 				   uint32_t iovcnt, uint32_t *crc_dst, uint32_t seed,
 				   int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a CRC-32C checking request.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param src The source address for the data.
+ * \param seed Four byte seed value.
+ * \param nbytes Length in bytes.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_check_crc32c(struct spdk_io_channel *ch, uint32_t *crc, void *src,
+				   uint32_t seed,
+				   uint64_t nbytes, spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a chained CRC-32C checking request.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param iovs The io vector array which stores the src data and len.
+ * \param iovcnt The size of the iov.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc, struct iovec *iovs,
+				    uint32_t iovcnt, uint32_t seed, spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Build and submit a memory compress request.
@@ -585,7 +625,7 @@ int spdk_accel_append_encrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			      uint64_t iv, uint32_t block_size, int flags,
-			      spdk_accel_step_cb cb_fn, void *cb_arg);
+			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
 
 /**
  * Append a decrypt operation to a sequence.
@@ -623,7 +663,82 @@ int spdk_accel_append_decrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			      uint64_t iv, uint32_t block_size, int flags,
-			      spdk_accel_step_cb cb_fn, void *cb_arg);
+			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
+
+/**
+ * Append a crc32c operation to a sequence.
+ *
+ * \param seq Sequence object.  If NULL, a new sequence object will be created.
+ * \param ch I/O channel.
+ * \param dst Destination to write the calculated value.
+ * \param iovs Source I/O vector array.
+ * \param iovcnt Size of the `iovs` array.
+ * \param domain Memory domain to which the source buffers belong.
+ * \param domain_ctx Source buffer domain context.
+ * \param seed Initial value.
+ * \param cb_fn Callback to be executed once this operation is completed.
+ * \param cb_arg Argument to be passed to `cb_fn`.
+ *
+ * \return 0 if operation was successfully added to the sequence, negative errno otherwise.
+ */
+int spdk_accel_append_crc32c(struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
+			     uint32_t *dst, struct iovec *iovs, uint32_t iovcnt,
+			     struct spdk_memory_domain *domain, void *domain_ctx,
+			     uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
+
+/**
+ * Append a copy + crc32c operation to a sequence.
+ *
+ * \param seq Sequence object.  If NULL, a new sequence object will be created.
+ * \param ch I/O channel.
+ * \param dst_crc Destination to write the calculated value.
+ * \param dst_iovs The io vector array to write the data to.
+ * \param dst_iovcnt The size of the destination io vectors.
+ * \param src_domain Memory domain to which the destination buffers belong.
+ * \param src_domain_ctx Destination buffer domain context.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param src_iovcnt The size of the source io vectors.
+ * \param src_domain Memory domain to which the source buffers belong.
+ * \param src_domain_ctx Source buffer domain context.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_append_copy_crc32c(struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
+				  uint32_t *dst_crc, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+				  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				  struct iovec *src_iovs, uint32_t src_iovcnt,
+				  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				  uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
+
+/**
+ * Append a check crc32c operation to a sequence.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param seq Sequence object. If NULL, a new sequence object will be created.
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param src_iovcnt The size of the iov.
+ * \param src_domain Memory domain to which the source buffers belong.
+ * \param src_domain_ctx Source buffer domain context.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_append_check_crc32c(struct spdk_accel_sequence **seq,
+				   struct spdk_io_channel *ch,
+				   uint32_t *crc,
+				   struct iovec *src_iovs, uint32_t src_iovcnt,
+				   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				   uint32_t seed,
+				   spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Append a crc32c operation to a sequence.
@@ -714,6 +829,23 @@ void spdk_accel_put_buf(struct spdk_io_channel *ch, void *buf,
  *  or -ENOENT no module was found at this time for the provided opcode.
  */
 int spdk_accel_get_opc_module_name(enum spdk_accel_opcode opcode, const char **module_name);
+
+/**
+ * Return the memory domain used by specific opcode.
+ *
+ * The returned memory domain depends on the accel module which implements the \b opcode
+ *
+ * \param opcode Accel Framework Opcode enum value.
+ * \param domains Pointer to an array of memory domains to be filled by this function. The user should allocate big enough
+  * array to keep all memory domains.
+ * \param array_size size of \b domains array
+ * \return the number of entries in \b domains array or negated errno. If returned value is bigger than \b array_size passed by the user
+  * then the user should increase the size of \b domains array and call this function again. There is no guarantees that
+  * the content of \b domains array is valid in that case.
+ */
+int spdk_accel_get_opc_memory_domain(enum spdk_accel_opcode opcode,
+				     struct spdk_memory_domain **domains,
+				     int array_size);
 
 /**
  * Override the assignment of an opcode to an module.

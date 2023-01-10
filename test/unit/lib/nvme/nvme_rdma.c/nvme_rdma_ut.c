@@ -1,10 +1,11 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 #include "spdk_internal/cunit.h"
+#include "spdk_internal/rdma.h"
 #include "nvme/nvme_rdma.c"
 #include "common/lib/nvme/common_stubs.h"
 #include "common/lib/test_rdma.c"
@@ -38,7 +39,6 @@ DEFINE_STUB(spdk_memory_domain_get_context, struct spdk_memory_domain_ctx *,
 	    (struct spdk_memory_domain *device), NULL);
 DEFINE_STUB(spdk_memory_domain_get_dma_device_type, enum spdk_dma_device_type,
 	    (struct spdk_memory_domain *device), SPDK_DMA_DEVICE_TYPE_RDMA);
-DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *device));
 DEFINE_STUB(spdk_memory_domain_pull_data, int, (struct spdk_memory_domain *src_domain,
 		void *src_domain_ctx, struct iovec *src_iov, uint32_t src_iov_cnt, struct iovec *dst_iov,
 		uint32_t dst_iov_cnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
@@ -49,19 +49,11 @@ DEFINE_STUB_V(spdk_nvme_qpair_print_command, (struct spdk_nvme_qpair *qpair,
 DEFINE_STUB_V(spdk_nvme_qpair_print_completion, (struct spdk_nvme_qpair *qpair,
 		struct spdk_nvme_cpl *cpl));
 
-DEFINE_RETURN_MOCK(spdk_memory_domain_create, int);
-int
-spdk_memory_domain_create(struct spdk_memory_domain **domain, enum spdk_dma_device_type type,
-			  struct spdk_memory_domain_ctx *ctx, const char *id)
-{
-	static struct spdk_memory_domain *__dma_dev = (struct spdk_memory_domain *)0xdeaddead;
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
 
-	HANDLE_RETURN_MOCK(spdk_memory_domain_create);
-
-	*domain = __dma_dev;
-
-	return 0;
-}
+DEFINE_STUB(spdk_nvme_qpair_is_connected, bool, (struct spdk_nvme_qpair *qpair), true);
 
 static struct spdk_memory_domain_translation_result g_memory_translation_translation = {.size = sizeof(struct spdk_memory_domain_translation_result) };
 
@@ -194,7 +186,7 @@ test_nvme_rdma_build_sgl_request(void)
 	ctrlr.cdata.nvmf_specific.msdbd = 16;
 	ctrlr.ioccsz_bytes = 4096;
 
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
@@ -301,7 +293,7 @@ test_nvme_rdma_build_sgl_inline_request(void)
 	ctrlr.max_sges = NVME_RDMA_MAX_SGL_DESCRIPTORS;
 	ctrlr.cdata.nvmf_specific.msdbd = 16;
 
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
@@ -361,7 +353,7 @@ test_nvme_rdma_build_contig_request(void)
 	ctrlr.max_sges = NVME_RDMA_MAX_SGL_DESCRIPTORS;
 	ctrlr.cdata.nvmf_specific.msdbd = 16;
 
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
@@ -404,7 +396,7 @@ test_nvme_rdma_build_contig_inline_request(void)
 	ctrlr.max_sges = NVME_RDMA_MAX_SGL_DESCRIPTORS;
 	ctrlr.cdata.nvmf_specific.msdbd = 16;
 
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
@@ -784,6 +776,7 @@ test_nvme_rdma_req_put_and_get(void)
 
 	/* case 1: nvme_rdma_req_put */
 	TAILQ_INIT(&rqpair.free_reqs);
+	TAILQ_INIT(&rqpair.outstanding_reqs);
 	rdma_req.completion_flags = 1;
 	rdma_req.req = (struct nvme_request *)0xDEADBEFF;
 	rdma_req.id = 10086;
@@ -817,10 +810,11 @@ test_nvme_rdma_req_init(void)
 	ctrlr.max_sges = NVME_RDMA_MAX_SGL_DESCRIPTORS;
 	ctrlr.cdata.nvmf_specific.msdbd = 16;
 
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
+	rqpair.num_entries = 32;
 	cmd.sgl[0].address = 0x1111;
 	rdma_req.id = 0;
 	req.cmd.opc = SPDK_NVME_DATA_HOST_TO_CONTROLLER;
@@ -970,7 +964,7 @@ test_nvme_rdma_qpair_init(void)
 	rqpair.qpair.poll_group = NULL;
 	rqpair.qpair.ctrlr = &rctrlr.ctrlr;
 	g_spdk_rdma_qp.qp = &qp;
-	MOCK_SET(spdk_rdma_get_pd, pd);
+	MOCK_SET(spdk_rdma_utils_get_pd, pd);
 
 	rc = nvme_rdma_qpair_init(&rqpair);
 	CU_ASSERT(rc == 0);
@@ -982,7 +976,7 @@ test_nvme_rdma_qpair_init(void)
 	CU_ASSERT(rqpair.cq == (struct ibv_cq *)0xFEEDBEEF);
 	CU_ASSERT(rqpair.memory_domain != NULL);
 
-	MOCK_CLEAR(spdk_rdma_get_pd);
+	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
 
 static void
@@ -998,7 +992,7 @@ test_nvme_rdma_qpair_submit_request(void)
 	req.cmd.opc = SPDK_NVME_DATA_HOST_TO_CONTROLLER;
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
 	req.payload_size = 0;
-	rqpair.mr_map = (struct spdk_rdma_mem_map *)0xdeadbeef;
+	rqpair.mr_map = (struct spdk_rdma_utils_mem_map *)0xdeadbeef;
 	rqpair.rdma_qp = (struct spdk_rdma_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.num_entries = 1;
@@ -1028,68 +1022,12 @@ test_nvme_rdma_qpair_submit_request(void)
 }
 
 static void
-test_nvme_rdma_memory_domain(void)
-{
-	struct nvme_rdma_memory_domain *domain_1 = NULL, *domain_2 = NULL, *domain_tmp;
-	struct ibv_pd *pd_1 = (struct ibv_pd *)0x1, *pd_2 = (struct ibv_pd *)0x2;
-	/* Counters below are used to check the number of created/destroyed rdma_dma_device objects.
-	 * Since other unit tests may create dma_devices, we can't just check that the queue is empty or not */
-	uint32_t dma_dev_count_start = 0, dma_dev_count = 0, dma_dev_count_end = 0;
-
-	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
-		dma_dev_count_start++;
-	}
-
-	/* spdk_memory_domain_create failed, expect fail */
-	MOCK_SET(spdk_memory_domain_create, -1);
-	domain_1 = nvme_rdma_get_memory_domain(pd_1);
-	CU_ASSERT(domain_1 == NULL);
-	MOCK_CLEAR(spdk_memory_domain_create);
-
-	/* Normal scenario */
-	domain_1 = nvme_rdma_get_memory_domain(pd_1);
-	SPDK_CU_ASSERT_FATAL(domain_1 != NULL);
-	CU_ASSERT(domain_1->domain != NULL);
-	CU_ASSERT(domain_1->pd == pd_1);
-	CU_ASSERT(domain_1->ref == 1);
-
-	/* Request the same pd, ref counter increased */
-	CU_ASSERT(nvme_rdma_get_memory_domain(pd_1) == domain_1);
-	CU_ASSERT(domain_1->ref == 2);
-
-	/* Request another pd */
-	domain_2 = nvme_rdma_get_memory_domain(pd_2);
-	SPDK_CU_ASSERT_FATAL(domain_2 != NULL);
-	CU_ASSERT(domain_2->domain != NULL);
-	CU_ASSERT(domain_2->pd == pd_2);
-	CU_ASSERT(domain_2->ref == 1);
-
-	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
-		dma_dev_count++;
-	}
-	CU_ASSERT(dma_dev_count == dma_dev_count_start + 2);
-
-	/* put domain_1, decrement refcount */
-	nvme_rdma_put_memory_domain(domain_1);
-
-	/* Release both devices */
-	CU_ASSERT(domain_2->ref == 1);
-	nvme_rdma_put_memory_domain(domain_1);
-	nvme_rdma_put_memory_domain(domain_2);
-
-	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
-		dma_dev_count_end++;
-	}
-	CU_ASSERT(dma_dev_count_start == dma_dev_count_end);
-}
-
-static void
 test_rdma_ctrlr_get_memory_domains(void)
 {
 	struct nvme_rdma_ctrlr rctrlr = {};
 	struct nvme_rdma_qpair rqpair = {};
 	struct spdk_memory_domain *domain = (struct spdk_memory_domain *)0xbaadbeef;
-	struct nvme_rdma_memory_domain rdma_domain = { .domain = domain };
+	struct spdk_rdma_utils_memory_domain rdma_domain = { .domain = domain };
 	struct spdk_memory_domain *domains[1] = {NULL};
 
 	rqpair.memory_domain = &rdma_domain;
@@ -1121,19 +1059,21 @@ test_rdma_get_memory_translation(void)
 		.memory_domain = (struct spdk_memory_domain *) 0xdeaddead
 	};
 	struct nvme_request req = {.payload = {.opts = &io_opts}};
-	struct nvme_rdma_memory_translation_ctx ctx = {
+	struct spdk_nvme_rdma_req rdma_req = {.req = &req };
+	struct spdk_rdma_memory_translation_ctx ctx = {
 		.addr = (void *) 0xBAADF00D,
 		.length = 0x100
 	};
 	int rc;
 
-	rqpair.memory_domain = nvme_rdma_get_memory_domain(rqpair.rdma_qp->qp->pd);
+	rqpair.memory_domain = spdk_rdma_utils_get_memory_domain(rqpair.rdma_qp->qp->pd,
+			       SPDK_DMA_DEVICE_TYPE_RDMA);
 	SPDK_CU_ASSERT_FATAL(rqpair.memory_domain != NULL);
 
 	/* case 1, using extended IO opts with DMA device.
 	 * Test 1 - spdk_dma_translate_data error, expect fail */
 	MOCK_SET(spdk_memory_domain_translate_data, -1);
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(&rdma_req, &rqpair, &ctx);
 	CU_ASSERT(rc != 0);
 	MOCK_CLEAR(spdk_memory_domain_translate_data);
 
@@ -1144,7 +1084,7 @@ test_rdma_get_memory_translation(void)
 	g_memory_translation_translation.rdma.lkey = 123;
 	g_memory_translation_translation.rdma.rkey = 321;
 
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(&rdma_req, &rqpair, &ctx);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ctx.lkey == g_memory_translation_translation.rdma.lkey);
 	CU_ASSERT(ctx.rkey == g_memory_translation_translation.rdma.rkey);
@@ -1154,19 +1094,19 @@ test_rdma_get_memory_translation(void)
 	/* case 2, using rdma translation
 	 * Test 1 - spdk_rdma_get_translation error, expect fail */
 	req.payload.opts = NULL;
-	MOCK_SET(spdk_rdma_get_translation, -1);
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	MOCK_SET(spdk_rdma_utils_get_translation, -1);
+	rc = nvme_rdma_get_memory_translation(&rdma_req, &rqpair, &ctx);
 	CU_ASSERT(rc != 0);
-	MOCK_CLEAR(spdk_rdma_get_translation);
+	MOCK_CLEAR(spdk_rdma_utils_get_translation);
 
 	/* Test 2 - expect pass */
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(&rdma_req, &rqpair, &ctx);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ctx.lkey == RDMA_UT_LKEY);
 	CU_ASSERT(ctx.rkey == RDMA_UT_RKEY);
 
 	/* Cleanup */
-	nvme_rdma_put_memory_domain(rqpair.memory_domain);
+	spdk_rdma_utils_put_memory_domain(rqpair.memory_domain);
 }
 
 static void
@@ -1450,7 +1390,6 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvme_rdma_validate_cm_event);
 	CU_ADD_TEST(suite, test_nvme_rdma_qpair_init);
 	CU_ADD_TEST(suite, test_nvme_rdma_qpair_submit_request);
-	CU_ADD_TEST(suite, test_nvme_rdma_memory_domain);
 	CU_ADD_TEST(suite, test_rdma_ctrlr_get_memory_domains);
 	CU_ADD_TEST(suite, test_rdma_get_memory_translation);
 	CU_ADD_TEST(suite, test_get_rdma_qpair_from_wc);

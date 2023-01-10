@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2019 Intel Corporation.
+#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 
 import sys
@@ -11,7 +12,8 @@ def deprecated_alias(old_name):
     def wrap(f):
         def old_f(*args, **kwargs):
             ret = f(*args, **kwargs)
-            print("{} is deprecated, use {} instead.".format(old_name, f.__name__), file=sys.stderr)
+            sys.stderr.write("{} is deprecated, use {} instead.\n".format(
+                old_name, f.__name__))
             return ret
         old_f.__name__ = old_name
         deprecated_aliases[old_name] = f.__name__

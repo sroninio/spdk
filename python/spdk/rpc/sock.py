@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2021 Intel Corporation.
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 
 
@@ -27,7 +28,15 @@ def sock_impl_set_options(client,
                           enable_zerocopy_send_client=None,
                           zerocopy_threshold=None,
                           tls_version=None,
-                          enable_ktls=None):
+                          enable_ktls=None,
+                          flush_batch_timeout=None,
+                          flush_batch_iovcnt_threshold=None,
+                          flush_batch_bytes_threshold=None,
+                          enable_zerocopy_recv=None,
+                          enable_tcp_nodelay=None,
+                          buffers_pool_size=None,
+                          packets_pool_size=None,
+                          enable_early_init=None):
     """Set parameters for the socket layer implementation.
 
     Args:
@@ -42,6 +51,14 @@ def sock_impl_set_options(client,
         zerocopy_threshold: set zerocopy_threshold in bytes(optional)
         tls_version: set TLS protocol version (optional)
         enable_ktls: enable or disable Kernel TLS (optional)
+        flush_batch_timeout: set flush_batch_timeout(optional)
+        flush_batch_iovcnt_threshold: set flush_batch_iovcnt_threshold(optional)
+        flush_batch_bytes_threshold: set flush_batch_bytes_threshold(optional)
+        enable_zerocopy_recv: enable or disable zerocopy on receive (optional)
+        enable_tcp_nodelay: enable or disable TCP_NODELAY socket option (optional)
+        buffers_pool_size: per poll group socket buffers pool size (optional)
+        packets_pool_size: per poll group packets pool size (optional)
+        enable_early_init: enable or disable early initialization (optional)
     """
     params = {}
 
@@ -66,6 +83,22 @@ def sock_impl_set_options(client,
         params['tls_version'] = tls_version
     if enable_ktls is not None:
         params['enable_ktls'] = enable_ktls
+    if flush_batch_timeout is not None:
+        params['flush_batch_timeout'] = flush_batch_timeout
+    if flush_batch_iovcnt_threshold is not None:
+        params['flush_batch_iovcnt_threshold'] = flush_batch_iovcnt_threshold
+    if flush_batch_bytes_threshold is not None:
+        params['flush_batch_bytes_threshold'] = flush_batch_bytes_threshold
+    if enable_zerocopy_recv is not None:
+        params['enable_zerocopy_recv'] = enable_zerocopy_recv
+    if enable_tcp_nodelay is not None:
+        params['enable_tcp_nodelay'] = enable_tcp_nodelay
+    if buffers_pool_size is not None:
+        params['buffers_pool_size'] = buffers_pool_size
+    if packets_pool_size is not None:
+        params['packets_pool_size'] = packets_pool_size
+    if enable_early_init is not None:
+        params['enable_early_init'] = enable_early_init
 
     return client.call('sock_impl_set_options', params)
 

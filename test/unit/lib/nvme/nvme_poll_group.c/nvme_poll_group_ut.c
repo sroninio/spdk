@@ -1,7 +1,8 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
+ *   Copyright (c) 2021 Mellanox Technologies LTD.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
  */
 
 #include "spdk_internal/cunit.h"
@@ -47,6 +48,10 @@ DEFINE_STUB(nvme_transport_get_trtype,
 	    enum spdk_nvme_transport_type,
 	    (const struct spdk_nvme_transport *transport),
 	    SPDK_NVME_TRANSPORT_PCIE);
+DEFINE_STUB(nvme_transport_get_trname,
+	    const char *,
+	    (const struct spdk_nvme_transport *transport),
+	    SPDK_NVME_TRANSPORT_NAME_PCIE);
 
 int
 nvme_transport_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,

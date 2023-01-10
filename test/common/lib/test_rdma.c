@@ -1,10 +1,12 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 
+#include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/rdma.h"
 #include "spdk_internal/mock.h"
 
@@ -36,9 +38,29 @@ DEFINE_STUB(spdk_rdma_qp_queue_recv_wrs, bool, (struct spdk_rdma_qp *spdk_rdma_q
 		struct ibv_recv_wr *first), true);
 DEFINE_STUB(spdk_rdma_qp_flush_recv_wrs, int, (struct spdk_rdma_qp *spdk_rdma_qp,
 		struct ibv_recv_wr **bad_wr), 0);
-DEFINE_STUB(spdk_rdma_create_mem_map, struct spdk_rdma_mem_map *, (struct ibv_pd *pd,
-		struct spdk_nvme_rdma_hooks *hooks, enum spdk_rdma_memory_map_role role), NULL)
-DEFINE_STUB_V(spdk_rdma_free_mem_map, (struct spdk_rdma_mem_map **map));
+DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (struct ibv_pd *pd,
+		struct spdk_nvme_rdma_hooks *hooks, int acces_flags), NULL)
+DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **map));
+
+DEFINE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain, struct spdk_rdma_utils_memory_domain *);
+struct spdk_rdma_utils_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
+		enum spdk_dma_device_type type)
+{
+	static struct spdk_rdma_utils_memory_domain domain;
+
+	HANDLE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain);
+	return &domain;
+}
+
+DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_rdma_utils_memory_domain *domain));
+
+DEFINE_STUB(spdk_rdma_accel_sequence_supported, bool, (struct spdk_rdma_qp *qp), false);
+DEFINE_STUB(spdk_rdma_get_io_context_size, size_t, (void), 0);
+DEFINE_STUB(spdk_rdma_accel_sequence_finish, int, (struct spdk_rdma_qp *qp, void *rdma_io_ctx,
+		struct spdk_accel_sequence *seq, spdk_rdma_accel_seq_cb cb_fn, void *cb_ctx), 0);
+DEFINE_STUB(spdk_rdma_accel_seq_get_translation, int, (void *rdma_io_ctx,
+		struct  spdk_rdma_memory_translation_ctx *translation), 0);
+DEFINE_STUB(spdk_rdma_accel_sequence_release, int, (struct spdk_rdma_qp *qp, void *rdma_io_ctx), 0);
 
 /* used to mock out having to split an SGL over a memory region */
 size_t g_mr_size;
@@ -49,14 +71,17 @@ struct ibv_mr g_rdma_mr = {
 	.rkey = RDMA_UT_RKEY
 };
 
-DEFINE_RETURN_MOCK(spdk_rdma_get_translation, int);
+static TAILQ_HEAD(, spdk_rdma_utils_memory_domain) g_memory_domains = TAILQ_HEAD_INITIALIZER(
+			g_memory_domains);
+
+DEFINE_RETURN_MOCK(spdk_rdma_utils_get_translation, int);
 int
-spdk_rdma_get_translation(struct spdk_rdma_mem_map *map, void *address,
-			  size_t length, struct spdk_rdma_memory_translation *translation)
+spdk_rdma_utils_get_translation(struct spdk_rdma_utils_mem_map *map, void *address,
+				size_t length, struct spdk_rdma_utils_memory_translation *translation)
 {
 	translation->mr_or_key.mr = &g_rdma_mr;
-	translation->translation_type = SPDK_RDMA_TRANSLATION_MR;
-	HANDLE_RETURN_MOCK(spdk_rdma_get_translation);
+	translation->translation_type = SPDK_RDMA_UTILS_TRANSLATION_MR;
+	HANDLE_RETURN_MOCK(spdk_rdma_utils_get_translation);
 
 	if (g_mr_size && length > g_mr_size) {
 		if (g_mr_next_size) {
@@ -68,12 +93,12 @@ spdk_rdma_get_translation(struct spdk_rdma_mem_map *map, void *address,
 	return 0;
 }
 
-DEFINE_RETURN_MOCK(spdk_rdma_get_pd, struct ibv_pd *);
+DEFINE_RETURN_MOCK(spdk_rdma_utils_get_pd, struct ibv_pd *);
 struct ibv_pd *
-spdk_rdma_get_pd(struct ibv_context *context)
+spdk_rdma_utils_get_pd(struct ibv_context *context)
 {
-	HANDLE_RETURN_MOCK(spdk_rdma_get_pd);
+	HANDLE_RETURN_MOCK(spdk_rdma_utils_get_pd);
 	return NULL;
 }
 
-DEFINE_STUB_V(spdk_rdma_put_pd, (struct ibv_pd *pd));
+DEFINE_STUB_V(spdk_rdma_utils_put_pd, (struct ibv_pd *pd));

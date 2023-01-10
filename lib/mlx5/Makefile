@@ -1,5 +1,5 @@
 #  SPDX-License-Identifier: BSD-3-Clause
-#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -9,7 +9,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 SO_VER := 2
 SO_MINOR := 0
 
-C_SRCS = mlx5_crypto.c
+C_SRCS = mlx5_crypto.c mlx5_qp.c mlx5_dma.c mlx5_umr.c
 LIBNAME = mlx5
 
 LOCAL_SYS_LIBS += -lmlx5 -libverbs -lrdmacm

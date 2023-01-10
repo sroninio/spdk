@@ -2,7 +2,7 @@
  *   Copyright (C) 2015 Intel Corporation.
  *   All rights reserved.
  *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2023 Samsung Electronics Co., Ltd. All rights reserved.
  */
 
@@ -441,6 +441,10 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 	req->md_offset = md_offset;
 	req->accel_sequence = accel_sequence;
 
+	if (ns->ctrlr->opts.disable_io_split) {
+		goto end;
+	}
+
 	/* Zone append commands cannot be split. */
 	if (opc == SPDK_NVME_OPC_ZONE_APPEND) {
 		assert(ns->csi == SPDK_NVME_CSI_ZNS);
@@ -485,6 +489,7 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		}
 	}
 
+end:
 	_nvme_ns_cmd_setup_request(ns, req, opc, lba, lba_count, io_flags, apptag_mask, apptag, cdw13);
 	return req;
 }
@@ -621,6 +626,102 @@ spdk_nvme_ns_cmd_comparev_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpai
 					      ns->sectors_per_stripe,
 					      qpair->ctrlr->opts.io_queue_requests,
 					      rc);
+	}
+}
+
+int
+spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
+{
+	assert(nvme_zcopy_io != NULL);
+
+	if (nvme_zcopy_io->commit) {
+		/* TODO: support zcopy write here */
+		SPDK_ERRLOG("zcopy write is not supported\n");
+		return -ENOTSUP;
+	} else {
+		struct nvme_request *req = SPDK_CONTAINEROF(nvme_zcopy_io,
+					   struct nvme_request,
+					   zcopy);
+		struct spdk_nvme_cpl cpl;
+		int rc = 0;
+		struct spdk_nvme_qpair *qpair;
+
+		assert(req != NULL);
+
+		qpair = req->qpair;
+
+		assert(qpair != NULL);
+
+		assert(qpair->outstanding_zcopy_reqs > 0);
+		qpair->outstanding_zcopy_reqs--;
+
+		/* For Zcopy read, just need to free zcopy buffer here */
+		spdk_nvme_request_free_zcopy(req);
+		if (req->is_parent) {
+			if (req->num_children > 0) {
+				rc = nvme_request_free_children_zcopy(qpair, req);
+			}
+			req->is_parent = false;
+			nvme_free_request(req);
+		} else {
+			rc = nvme_transport_qpair_free_request(qpair, req);
+		}
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to free request %p for zcopy on qpair %d\n",
+				    req, qpair->id);
+			cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			cpl.status.sct = SPDK_NVME_SCT_VENDOR_SPECIFIC;
+		} else {
+			cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+			cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+			cb_fn(cb_arg, &cpl, NULL);
+		}
+
+		return rc;
+	}
+}
+
+/* TODO: Add support for MD as a separate buffer */
+int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
+{
+	struct nvme_request *req;
+	struct nvme_payload payload;
+	int rc = 0;
+
+	if (!_is_io_flags_valid(io_flags)) {
+		return -EINVAL;
+	}
+
+	if (populate) {
+		struct spdk_nvme_zcopy_io zcopy;
+		zcopy.zcopy_cb_fn = cb_fn;
+		zcopy.populate = populate;
+		payload.zcopy = &zcopy;
+		payload.opts = NULL;
+		req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, NULL,
+				      cb_arg, SPDK_NVME_OPC_READ, io_flags,
+				      apptag_mask, apptag, 0, false, NULL, &rc);
+		if (req != NULL) {
+			req->zcopy.zcopy_cb_fn = cb_fn;
+			req->zcopy.populate = populate;
+			req->payload.zcopy = &req->zcopy;
+			return nvme_qpair_submit_request(qpair, req);
+		} else {
+			return nvme_ns_map_failure_rc(lba_count,
+						      ns->sectors_per_max_io,
+						      ns->sectors_per_stripe,
+						      qpair->ctrlr->opts.io_queue_requests,
+						      rc);
+		}
+	} else {
+		/* TODO: support zcopy write here */
+		return -ENOTSUP;
 	}
 }
 
@@ -1459,6 +1560,12 @@ spdk_nvme_ns_cmd_io_mgmt_send(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *q
 
 	cmd->cdw10_bits.mgmt_send_recv.mo = mo;
 	cmd->cdw10_bits.mgmt_send_recv.mos = mos;
+
+	if (spdk_nvme_ctrlr_get_data(ns->ctrlr)->ctratt.host_id_exhid_supported) {
+		/* Extended Data Strcutre bit should be set to true if 128
+		 * bit format is supported */
+		cmd->cdw11_bits.resv_report.eds = true;
+	}
 
 	return nvme_qpair_submit_request(qpair, req);
 }

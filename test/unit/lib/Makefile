@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -11,7 +12,7 @@ DIRS-y += notify nvme nvmf scsi sock thread util env_dpdk init rpc
 DIRS-$(CONFIG_IDXD) += idxd
 DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_VHOST) += vhost
-DIRS-$(CONFIG_RDMA) += rdma
+DIRS-$(CONFIG_RDMA) += rdma_utils
 ifeq ($(OS),Linux)
 DIRS-y += ftl
 endif

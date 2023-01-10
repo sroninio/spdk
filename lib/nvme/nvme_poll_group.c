@@ -1,7 +1,8 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
+ *   Copyright (c) 2021 Mellanox Technologies LTD.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
  */
 
 #include "nvme_internal.h"
@@ -25,13 +26,15 @@ spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
 	} \
 
 		SET_FIELD(submit_accel_crc32c);
+		SET_FIELD(get_accel_channel);
+		SET_FIELD(get_iobuf_channel);
 		SET_FIELD(append_crc32c);
 		SET_FIELD(finish_sequence);
 		SET_FIELD(reverse_sequence);
 		SET_FIELD(abort_sequence);
 		/* Do not remove this statement, you should always update this statement when you adding a new field,
 		 * and do not forget to add the SET_FIELD statement for your added field. */
-		SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_accel_fn_table) == 48, "Incorrect size");
+		SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_accel_fn_table) == 64, "Incorrect size");
 
 #undef SET_FIELD
 	}
@@ -199,6 +202,16 @@ spdk_nvme_poll_group_all_connected(struct spdk_nvme_poll_group *group)
 	return rc;
 }
 
+void
+spdk_nvme_poll_group_process_events(struct spdk_nvme_poll_group *group)
+{
+	struct spdk_nvme_transport_poll_group *tgroup;
+
+	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
+		nvme_transport_poll_group_process_events(tgroup);
+	}
+}
+
 void *
 spdk_nvme_poll_group_get_ctx(struct spdk_nvme_poll_group *group)
 {
@@ -288,7 +301,15 @@ spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
 
 	for (i = 0; i < stat->num_transports; i++) {
 		STAILQ_FOREACH(tgroup, &group->tgroups, link) {
-			if (nvme_transport_get_trtype(tgroup->transport) == stat->transport_stat[i]->trtype) {
+			spdk_nvme_transport_type_t trtype = nvme_transport_get_trtype(tgroup->transport);
+			const char *trname = nvme_transport_get_trname(tgroup->transport);
+
+			if ((trtype != SPDK_NVME_TRANSPORT_CUSTOM &&
+			     trtype != SPDK_NVME_TRANSPORT_CUSTOM_FABRICS &&
+			     trtype == stat->transport_stat[i]->trtype) ||
+			    ((trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+			      trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) &&
+			     !strcasecmp(trname, stat->transport_stat[i]->trname))) {
 				nvme_transport_poll_group_free_stats(tgroup, stat->transport_stat[i]);
 				freed_stats++;
 				break;

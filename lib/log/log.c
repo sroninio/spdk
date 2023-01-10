@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -138,8 +139,9 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 	  const char *format, va_list ap)
 {
 	int severity = LOG_INFO;
-	char buf[MAX_TMPBUF];
+	char *buf, buf1[MAX_TMPBUF], *buf2 = NULL;
 	char timestamp[64];
+	int rc;
 
 	if (g_log) {
 		g_log(level, file, line, func, format, ap);
@@ -155,7 +157,20 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 		return;
 	}
 
-	vsnprintf(buf, sizeof(buf), format, ap);
+	rc = vsnprintf(buf1, sizeof(buf1), format, ap);
+	assert(rc >= 0);
+
+	if (rc <= MAX_TMPBUF) {
+		buf = buf1;
+	} else {
+		rc = vasprintf(&buf2, format, ap);
+		if (rc < 0) {
+			/* Allow output to be truncated. */
+			buf = buf1;
+		} else {
+			buf = buf2;
+		}
+	}
 
 	if (level <= g_spdk_log_print_level) {
 		get_timestamp_prefix(timestamp, sizeof(timestamp));
@@ -173,16 +188,32 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 			syslog(severity, "%s", buf);
 		}
 	}
+
+	free(buf2);
 }
 
 void
 spdk_vflog(FILE *fp, const char *file, const int line, const char *func,
 	   const char *format, va_list ap)
 {
-	char buf[MAX_TMPBUF];
+	char *buf, buf1[MAX_TMPBUF], *buf2 = NULL;
 	char timestamp[64];
+	int rc;
 
-	vsnprintf(buf, sizeof(buf), format, ap);
+	rc = vsnprintf(buf1, sizeof(buf1), format, ap);
+	assert(rc >= 0);
+
+	if (rc <= MAX_TMPBUF) {
+		buf = buf1;
+	} else {
+		rc = vasprintf(&buf2, format, ap);
+		if (rc < 0) {
+			/* Allow output to be truncated. */
+			buf = buf1;
+		} else {
+			buf = buf2;
+		}
+	}
 
 	get_timestamp_prefix(timestamp, sizeof(timestamp));
 
@@ -193,6 +224,8 @@ spdk_vflog(FILE *fp, const char *file, const int line, const char *func,
 	}
 
 	fflush(fp);
+
+	free(buf2);
 }
 
 void

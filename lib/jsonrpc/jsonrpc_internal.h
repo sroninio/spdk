@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -18,7 +19,7 @@
 #define SPDK_JSONRPC_ID_MAX_LEN		128
 #define SPDK_JSONRPC_MAX_CONNS		64
 #define SPDK_JSONRPC_MAX_VALUES		1024
-#define SPDK_JSONRPC_CLIENT_MAX_VALUES		8192
+#define SPDK_JSONRPC_CLIENT_MAX_VALUES		32768
 
 struct spdk_jsonrpc_request {
 	struct spdk_jsonrpc_server_conn *conn;

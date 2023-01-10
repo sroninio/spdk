@@ -1,7 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
-#  Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 # A quick note on organization:
@@ -35,16 +35,20 @@ endif
 
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
-DEPDIRS-rdma := log util
+DEPDIRS-rdma_utils := log util
+DEPDIRS-rdma := log util dma
+ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
+DEPDIRS-rdma += accel mlx5
+endif
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 
-DEPDIRS-nvme := log sock util trace
+DEPDIRS-nvme := log sock util trace accel
 ifeq ($(OS),Linux)
 DEPDIRS-nvme += vfio_user
 endif
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvme += rdma dma
+DEPDIRS-nvme += rdma rdma_utils
 endif
 
 DEPDIRS-blob := log util thread dma
@@ -71,10 +75,10 @@ DEPDIRS-ublk := log util thread $(JSON_LIBS) bdev
 endif
 DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvmf += rdma
+DEPDIRS-nvmf += rdma rdma_utils
 endif
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-mlx5 = log rdma util
+DEPDIRS-mlx5 = log rdma_utils util
 endif
 DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 
@@ -108,7 +112,7 @@ DEPDIRS-accel_dpdk_compressdev := log thread $(JSON_LIBS) accel util
 DEPDIRS-accel_error := accel $(JSON_LIBS) thread util
 
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma util
+DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma_utils util
 endif
 
 # module/env_dpdk
@@ -117,6 +121,7 @@ DEPDIRS-env_dpdk_rpc := $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util
 DEPDIRS-sock_uring := log sock util
+DEPDIRS-sock_xlio := log sock util rdma env_dpdk event
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util json

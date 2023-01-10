@@ -1,6 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2016 Intel Corporation.
-#  Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES.
+#  Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -101,6 +101,10 @@ ifeq ($(OS), Linux)
 ifeq ($(CONFIG_URING),y)
 SOCK_MODULES_LIST += sock_uring
 endif
+endif
+
+ifeq ($(CONFIG_XLIO),y)
+SOCK_MODULES_LIST += sock_xlio
 endif
 
 ACCEL_MODULES_LIST = accel_error accel_ioat ioat

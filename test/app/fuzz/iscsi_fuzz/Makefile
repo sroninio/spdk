@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2019 Intel Corporation
+#  Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #  All rights reserved.
 #
 
@@ -14,10 +15,12 @@ CFLAGS += -I$(SPDK_ROOT_DIR)/include
 
 C_SRCS := iscsi_fuzz.c
 
-ISCSI_OBJS = md5 param conn tgt_node init_grp portal_grp
+ISCSI_OBJS = param conn tgt_node init_grp portal_grp
+UTIL_OBJS = md5
 
 LIBS += $(SCSI_OBJS:%=$(SPDK_ROOT_DIR)/lib/scsi/%.o)
 LIBS += $(ISCSI_OBJS:%=$(SPDK_ROOT_DIR)/lib/iscsi/%.o)
+LIBS += $(UTIL_OJBS:%=$(SPDK_ROOT_DIR)/lib/util/%.o)
 
 SPDK_LIB_LIST += $(SOCK_MODULES_LIST) event scsi
 

@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
- *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -2756,7 +2756,7 @@ verify_test_params(void)
 		return 1;
 	}
 
-	if (g_io_size > SPDK_BDEV_LARGE_BUF_MAX_SIZE) {
+	if (false && (g_io_size > SPDK_BDEV_LARGE_BUF_MAX_SIZE)) {
 		printf("I/O size of %d is greater than zero copy threshold (%d).\n",
 		       g_io_size, SPDK_BDEV_LARGE_BUF_MAX_SIZE);
 		printf("Zero copy mechanism will not be used.\n");

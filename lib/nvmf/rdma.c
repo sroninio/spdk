@@ -18,6 +18,7 @@
 #include "spdk_internal/assert.h"
 #include "spdk/log.h"
 #include "spdk_internal/rdma.h"
+#include "spdk_internal/rdma_utils.h"
 
 #include "nvmf_internal.h"
 #include "transport.h"
@@ -263,7 +264,7 @@ struct spdk_nvmf_rdma_resource_opts {
 	struct spdk_nvmf_rdma_qpair	*qpair;
 	/* qp points either to an ibv_qp object or an ibv_srq object depending on the value of shared. */
 	void				*qp;
-	struct spdk_rdma_mem_map	*map;
+	struct spdk_rdma_utils_mem_map	*map;
 	uint32_t			max_queue_depth;
 	uint32_t			in_capsule_data_size;
 	bool				shared;
@@ -458,7 +459,7 @@ struct spdk_nvmf_rdma_device {
 	struct ibv_device_attr			attr;
 	struct ibv_context			*context;
 
-	struct spdk_rdma_mem_map		*map;
+	struct spdk_rdma_utils_mem_map		*map;
 	struct ibv_pd				*pd;
 
 	int					num_srq;
@@ -723,15 +724,15 @@ nvmf_rdma_resources_destroy(struct spdk_nvmf_rdma_resources *resources)
 static struct spdk_nvmf_rdma_resources *
 nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 {
-	struct spdk_nvmf_rdma_resources		*resources;
-	struct spdk_nvmf_rdma_request		*rdma_req;
-	struct spdk_nvmf_rdma_recv		*rdma_recv;
-	struct spdk_rdma_qp			*qp = NULL;
-	struct spdk_rdma_srq			*srq = NULL;
-	struct ibv_recv_wr			*bad_wr = NULL;
-	struct spdk_rdma_memory_translation	translation;
-	uint32_t				i;
-	int					rc = 0;
+	struct spdk_nvmf_rdma_resources			*resources;
+	struct spdk_nvmf_rdma_request			*rdma_req;
+	struct spdk_nvmf_rdma_recv			*rdma_recv;
+	struct spdk_rdma_qp				*qp = NULL;
+	struct spdk_rdma_srq				*srq = NULL;
+	struct ibv_recv_wr				*bad_wr = NULL;
+	struct spdk_rdma_utils_memory_translation	translation;
+	uint32_t					i;
+	int						rc = 0;
 
 	resources = calloc(1, sizeof(struct spdk_nvmf_rdma_resources));
 	if (!resources) {
@@ -794,22 +795,23 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 
 		rdma_recv->sgl[0].addr = (uintptr_t)&resources->cmds[i];
 		rdma_recv->sgl[0].length = sizeof(resources->cmds[i]);
-		rc = spdk_rdma_get_translation(opts->map, &resources->cmds[i], sizeof(resources->cmds[i]),
-					       &translation);
+		rc = spdk_rdma_utils_get_translation(opts->map, &resources->cmds[i], sizeof(resources->cmds[i]),
+						     &translation);
 		if (rc) {
 			goto cleanup;
 		}
-		rdma_recv->sgl[0].lkey = spdk_rdma_memory_translation_get_lkey(&translation);
+		rdma_recv->sgl[0].lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
 		rdma_recv->wr.num_sge = 1;
 
 		if (rdma_recv->buf) {
 			rdma_recv->sgl[1].addr = (uintptr_t)rdma_recv->buf;
 			rdma_recv->sgl[1].length = opts->in_capsule_data_size;
-			rc = spdk_rdma_get_translation(opts->map, rdma_recv->buf, opts->in_capsule_data_size, &translation);
+			rc = spdk_rdma_utils_get_translation(opts->map, rdma_recv->buf, opts->in_capsule_data_size,
+							     &translation);
 			if (rc) {
 				goto cleanup;
 			}
-			rdma_recv->sgl[1].lkey = spdk_rdma_memory_translation_get_lkey(&translation);
+			rdma_recv->sgl[1].lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
 			rdma_recv->wr.num_sge++;
 		}
 
@@ -839,12 +841,12 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 
 		rdma_req->rsp.sgl[0].addr = (uintptr_t)&resources->cpls[i];
 		rdma_req->rsp.sgl[0].length = sizeof(resources->cpls[i]);
-		rc = spdk_rdma_get_translation(opts->map, &resources->cpls[i], sizeof(resources->cpls[i]),
-					       &translation);
+		rc = spdk_rdma_utils_get_translation(opts->map, &resources->cpls[i], sizeof(resources->cpls[i]),
+						     &translation);
 		if (rc) {
 			goto cleanup;
 		}
-		rdma_req->rsp.sgl[0].lkey = spdk_rdma_memory_translation_get_lkey(&translation);
+		rdma_req->rsp.sgl[0].lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
 
 		rdma_req->rsp_wr.type = RDMA_WR_TYPE_SEND;
 		rdma_req->rsp.wr.wr_id = (uintptr_t)&rdma_req->rsp_wr;
@@ -1531,7 +1533,7 @@ nvmf_rdma_fill_wr_sgl(struct spdk_nvmf_rdma_poll_group *rgroup,
 		      struct ibv_send_wr *wr,
 		      uint32_t total_length)
 {
-	struct spdk_rdma_memory_translation mem_translation;
+	struct spdk_rdma_utils_memory_translation mem_translation;
 	struct ibv_sge	*sg_ele;
 	struct iovec *iov;
 	uint32_t lkey, remaining;
@@ -1541,12 +1543,12 @@ nvmf_rdma_fill_wr_sgl(struct spdk_nvmf_rdma_poll_group *rgroup,
 
 	while (total_length && wr->num_sge < SPDK_NVMF_MAX_SGL_ENTRIES) {
 		iov = &rdma_req->req.iov[rdma_req->iovpos];
-		rc = spdk_rdma_get_translation(device->map, iov->iov_base, iov->iov_len, &mem_translation);
+		rc = spdk_rdma_utils_get_translation(device->map, iov->iov_base, iov->iov_len, &mem_translation);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
 
-		lkey = spdk_rdma_memory_translation_get_lkey(&mem_translation);
+		lkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
 		sg_ele = &wr->sg_list[wr->num_sge];
 		remaining = spdk_min((uint32_t)iov->iov_len - rdma_req->offset, total_length);
 
@@ -1581,7 +1583,7 @@ nvmf_rdma_fill_wr_sgl_with_dif(struct spdk_nvmf_rdma_poll_group *rgroup,
 			       uint32_t total_length,
 			       uint32_t num_extra_wrs)
 {
-	struct spdk_rdma_memory_translation mem_translation;
+	struct spdk_rdma_utils_memory_translation mem_translation;
 	struct spdk_dif_ctx *dif_ctx = &rdma_req->req.dif.dif_ctx;
 	struct ibv_sge *sg_ele;
 	struct iovec *iov;
@@ -1608,12 +1610,12 @@ nvmf_rdma_fill_wr_sgl_with_dif(struct spdk_nvmf_rdma_poll_group *rgroup,
 
 	while (total_length && (num_extra_wrs || wr->num_sge < SPDK_NVMF_MAX_SGL_ENTRIES)) {
 		iov = rdma_iov + rdma_req->iovpos;
-		rc = spdk_rdma_get_translation(device->map, iov->iov_base, iov->iov_len, &mem_translation);
+		rc = spdk_rdma_utils_get_translation(device->map, iov->iov_base, iov->iov_len, &mem_translation);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
 
-		lkey = spdk_rdma_memory_translation_get_lkey(&mem_translation);
+		lkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
 		sg_ele = &wr->sg_list[wr->num_sge];
 		remaining = spdk_min((uint32_t)iov->iov_len - rdma_req->offset, total_length);
 
@@ -2613,7 +2615,7 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 
 	assert(device->map == NULL);
 
-	device->map = spdk_rdma_create_mem_map(device->pd, &g_nvmf_hooks, SPDK_RDMA_MEMORY_MAP_ROLE_TARGET);
+	device->map = spdk_rdma_utils_create_mem_map(device->pd, &g_nvmf_hooks, IBV_ACCESS_LOCAL_WRITE);
 	if (!device->map) {
 		SPDK_ERRLOG("Unable to allocate memory map for listen address\n");
 		destroy_ib_device(rtransport, device);
@@ -2688,6 +2690,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	uint32_t			min_shared_buffers;
 	uint32_t			min_in_capsule_data_size;
 	int				max_device_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
+	uint16_t			data_wr_pool_size = opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES;
 
 	rtransport = calloc(1, sizeof(*rtransport));
 	if (!rtransport) {
@@ -2795,8 +2798,14 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		return NULL;
 	}
 
+	if (data_wr_pool_size < SPDK_NVMF_MAX_SGL_ENTRIES * 2 * spdk_env_get_core_count()) {
+		data_wr_pool_size = SPDK_NVMF_MAX_SGL_ENTRIES * 2 * spdk_env_get_core_count();
+		SPDK_WARNLOG("data_wr_pool_size is changed to %u to guarantee enough cache for handling at least one IO in each core\n",
+			     data_wr_pool_size);
+	}
+
 	rtransport->data_wr_pool = spdk_mempool_create("spdk_nvmf_rdma_wr_data",
-				   opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES,
+				   data_wr_pool_size,
 				   sizeof(struct spdk_nvmf_rdma_request_data),
 				   SPDK_MEMPOOL_DEFAULT_CACHE_SIZE,
 				   SPDK_ENV_SOCKET_ID_ANY);
@@ -2870,7 +2879,7 @@ destroy_ib_device(struct spdk_nvmf_rdma_transport *rtransport,
 		  struct spdk_nvmf_rdma_device *device)
 {
 	TAILQ_REMOVE(&rtransport->devices, device, link);
-	spdk_rdma_free_mem_map(&device->map);
+	spdk_rdma_utils_free_mem_map(&device->map);
 	if (device->pd) {
 		if (!g_nvmf_hooks.get_ibv_pd) {
 			ibv_dealloc_pd(device->pd);
@@ -3437,6 +3446,21 @@ nvmf_rdma_qpair_process_pending(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 	if (!STAILQ_EMPTY(&resources->incoming_queue) && STAILQ_EMPTY(&resources->free_queue)) {
 		rqpair->poller->stat.pending_free_request++;
+	}
+}
+
+static void
+nvmf_rdma_qpair_process_pending_buf_queue(struct spdk_nvmf_rdma_transport *rtransport,
+		struct spdk_nvmf_rdma_poller *rpoller)
+{
+	struct spdk_nvmf_request *req, *tmp;
+	struct spdk_nvmf_rdma_request *rdma_req;
+
+	STAILQ_FOREACH_SAFE(req, &rpoller->group->group.pending_buf_queue, buf_link, tmp) {
+		rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
+		if (nvmf_rdma_request_process(rtransport, rdma_req) == false) {
+			break;
+		}
 	}
 }
 
@@ -4829,6 +4853,11 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 	if (error == true) {
 		return -1;
+	}
+
+	/* Some requests may still be pending even though nothing can be reaped */
+	if (!reaped) {
+		nvmf_rdma_qpair_process_pending_buf_queue(rtransport, rpoller);
 	}
 
 	/* submit outstanding work requests. */

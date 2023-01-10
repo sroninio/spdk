@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -22,6 +23,11 @@ extern "C" {
 
 struct spdk_sock;
 struct spdk_sock_group;
+
+struct spdk_sock_buf {
+	struct iovec iov;
+	struct spdk_sock_buf *next;
+};
 
 /**
  * Anywhere this struct is used, an iovec array is assumed to
@@ -62,6 +68,7 @@ struct spdk_sock_request {
 		bool				is_zcopy;
 	} internal;
 
+	uint32_t			*mkeys;
 	int				iovcnt;
 	/* struct iovec			iov[]; */
 };
@@ -136,6 +143,21 @@ struct spdk_sock_impl_opts {
 	uint32_t zerocopy_threshold;
 
 	/**
+	 * Wait for microseconds to skip flushing requests.
+	 */
+	uint32_t flush_batch_timeout;
+
+	/**
+	 * Skip flushing requests if queued iovcnt is smaller than this threshold.
+	 */
+	int flush_batch_iovcnt_threshold;
+
+	/**
+	 * Skip flushing requests if queued total Length is smaller than this threshold.
+	 */
+	uint32_t flush_batch_bytes_threshold;
+
+	/**
 	 * TLS protocol version. Used by ssl socket module.
 	 */
 	uint32_t tls_version;
@@ -188,6 +210,40 @@ struct spdk_sock_impl_opts {
 	 * example: "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256"
 	 */
 	const char *tls_cipher_suites;
+
+	/**
+	 * Enable or disable use of zero copy flow on receive. Used by xlio socket module.
+	 */
+	bool enable_zerocopy_recv;
+
+	/**
+	 * Enable or disable use of TCP_NODELAY socket option. Used by xlio socket module.
+	 */
+	bool enable_tcp_nodelay;
+
+	/**
+	 * Socket buffers per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t buffers_pool_size;
+
+	/**
+	 * Packets per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t packets_pool_size;
+
+	/**
+	 * Enable or disable early initialization. Used by xlio socket module.
+	 */
+	bool enable_early_init;
+};
+
+/**
+ * SPDK socket capabilities. The structure is used to get capabilities specific for a socket instance
+ */
+struct spdk_sock_caps {
+	bool zcopy_send;
+	void *ibv_pd;
+	bool zcopy_recv;
 };
 
 /**
@@ -644,6 +700,46 @@ const char *spdk_sock_get_default_impl(void);;
  * \param w JSON write context
  */
 void spdk_sock_write_config_json(struct spdk_json_write_ctx *w);
+
+int spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps);
+
+/**
+ * Receive a message from the given socket in zero copy mode.
+ *
+ * Messages are delivered in chunks as a list of @ref spdk_sock_buf
+ * structures. These structures point to buffers which belong to
+ * socket layer. When data in the buffers is consumed buffers shall be
+ * released with @ref spdk_sock_free_bufs function.
+ *
+ * \param sock Socket to receive message.
+ * \param len Length of the data to be read.
+ * \param sock_buf Placeholder for pointer to socket buffers list.
+ *
+ * \return the length of the received message on success, -1 on failure.
+ */
+ssize_t spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
+
+/**
+ * Release socket buffers.
+ *
+ * This function can be used to release multiple buffers at once if
+ * they are chained together. Buffers do not have to be released in
+ * the same order and same batches as they were received.
+ *
+ * \param sock Socket on which buffers were received.
+ * \param sock_buf Pointer to buffers list to release.
+ *
+ * \return 0 on success, -1 on failure.
+ */
+int spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+
+/**
+ * Initialize socket layer.
+ *
+ * This function will initialize generic socket layer and all
+ * registered socket implementations.
+ */
+void spdk_sock_initialize(void);
 
 #ifdef __cplusplus
 }

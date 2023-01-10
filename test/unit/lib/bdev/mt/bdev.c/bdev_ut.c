@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
- *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -14,6 +14,7 @@
 #undef SPDK_CONFIG_VTUNE
 
 #include "bdev/bdev.c"
+#include "bdev/bdev_qos_limits.c"
 
 #define BDEV_UT_NUM_THREADS 3
 
@@ -35,6 +36,13 @@ DEFINE_STUB(spdk_accel_append_copy, int,
 	     struct iovec *src_iovs, uint32_t src_iovcnt, struct spdk_memory_domain *src_domain,
 	     void *src_domain_ctx, int flags, spdk_accel_step_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), NULL);
+
+DEFINE_STUB_V(spdk_bdev_group_get_qos_rate_limits, (struct spdk_bdev_group *group,
+		uint64_t *limits));
+DEFINE_STUB(bdev_group_get_qos_limits, struct bdev_qos_limits *, (struct spdk_bdev_group *group),
+	    NULL);
+DEFINE_STUB(bdev_group_qos_bdev_poll, bool, (struct spdk_bdev_group *group, struct spdk_bdev *bdev,
+		uint64_t now), true);
 
 DEFINE_RETURN_MOCK(spdk_memory_domain_pull_data, int);
 int
@@ -998,19 +1006,25 @@ basic_qos(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	bdev->internal.qos = calloc(1, sizeof(*bdev->internal.qos));
-	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
+	/* setup_test() automatically opens the bdev,
+	 * but this test needs to do that in a different
+	 * way. */
+	spdk_bdev_close(g_desc);
+	CU_ASSERT(bdev->internal.qos == NULL);
 	/*
 	 * Enable read/write IOPS, read only byte per second and
 	 * read/write byte per second rate limits.
 	 * In this case, all rate limits will take equal effect.
 	 */
 	/* 2000 read/write I/O per second, or 2 per millisecond */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].limit = 2000;
-	/* 8K read/write byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT].limit = 8192000;
-	/* 8K read only byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT].limit = 8192000;
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
+	/* 8Mb read/write per second with 4K block size */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
+	/* 8Mb read only per second with 4K block size */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 8;
+
+	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	poll_threads();
 
 	g_get_io_channel = true;
 
@@ -1104,7 +1118,7 @@ basic_qos(void)
 	 */
 	spdk_bdev_close(g_desc);
 	poll_threads();
-	CU_ASSERT(bdev->internal.qos->ch == NULL);
+	CU_ASSERT(bdev->internal.qos == NULL);
 
 	/*
 	 * Open the bdev again which shall setup the qos channel as the
@@ -1125,12 +1139,12 @@ basic_qos(void)
 	/* Close the descriptor, which should stop the qos channel */
 	spdk_bdev_close(g_desc);
 	poll_threads();
-	CU_ASSERT(bdev->internal.qos->ch == NULL);
+	CU_ASSERT(bdev->internal.qos == NULL);
 
 	/* Open the bdev again, no qos channel setup without valid channels. */
 	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
 	poll_threads();
-	CU_ASSERT(bdev->internal.qos->ch == NULL);
+	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 
 	/* Create the channels in reverse order. */
 	set_thread(1);
@@ -1172,23 +1186,29 @@ io_during_qos_queue(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	bdev->internal.qos = calloc(1, sizeof(*bdev->internal.qos));
-	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
+	/* setup_test() automatically opens the bdev,
+	 * but this test needs to do that in a different
+	 * way. */
+	spdk_bdev_close(g_desc);
+	CU_ASSERT(bdev->internal.qos == NULL);
 
-	/*
-	 * Enable read/write IOPS, read only byte per sec, write only
-	 * byte per sec and read/write byte per sec rate limits.
-	 * In this case, both read only and write only byte per sec
-	 * rate limit will take effect.
-	 */
+	/* AM: this test is different from original one due to configuration restructions - we can't set
+	 * limit with byte granularity to allow only few IOs per time slice.
+	 * 8Mb RW per second is 8388 bytes per time slice. Both reads and 1 write fit into this limit since
+	 * it is allowed to push the limit beyond zero */
+
 	/* 4000 read/write I/O per second, or 4 per millisecond */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].limit = 4000;
-	/* 8K byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT].limit = 8192000;
-	/* 4K byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT].limit = 4096000;
-	/* 4K byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT].limit = 4096000;
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 4000;
+	/* 8Mb byte per second */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
+	/* 4Mb byte per second */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 4;
+	/* 4Mb byte per second */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 4;
+
+	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	poll_threads();
+	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 
 	g_get_io_channel = true;
 
@@ -1227,13 +1247,8 @@ io_during_qos_queue(void)
 	stub_complete_io(g_bdev.io_target, 0);
 	poll_threads();
 
-	/* Only one of the two read I/Os should complete. (logical XOR) */
-	if (status0 == SPDK_BDEV_IO_STATUS_SUCCESS) {
-		CU_ASSERT(status1 == SPDK_BDEV_IO_STATUS_PENDING);
-	} else {
-		CU_ASSERT(status1 == SPDK_BDEV_IO_STATUS_SUCCESS);
-	}
-	/* The write I/O should complete. */
+	CU_ASSERT(status0 == SPDK_BDEV_IO_STATUS_SUCCESS);
+	CU_ASSERT(status1 == SPDK_BDEV_IO_STATUS_SUCCESS);
 	CU_ASSERT(status2 == SPDK_BDEV_IO_STATUS_SUCCESS);
 
 	/* Advance in time by a millisecond */
@@ -1245,11 +1260,6 @@ io_during_qos_queue(void)
 	stub_complete_io(g_bdev.io_target, 0);
 	set_thread(0);
 	stub_complete_io(g_bdev.io_target, 0);
-	poll_threads();
-
-	/* Now the second read I/O should be done */
-	CU_ASSERT(status0 == SPDK_BDEV_IO_STATUS_SUCCESS);
-	CU_ASSERT(status1 == SPDK_BDEV_IO_STATUS_SUCCESS);
 
 	/* Tear down the channels */
 	set_thread(1);
@@ -1275,8 +1285,11 @@ io_during_qos_reset(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	bdev->internal.qos = calloc(1, sizeof(*bdev->internal.qos));
-	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
+	/* setup_test() automatically opens the bdev,
+	 * but this test needs to do that in a different
+	 * way. */
+	spdk_bdev_close(g_desc);
+	CU_ASSERT(bdev->internal.qos == NULL);
 
 	/*
 	 * Enable read/write IOPS, write only byte per sec and
@@ -1285,11 +1298,15 @@ io_during_qos_reset(void)
 	 * take effect first.
 	 */
 	/* 2000 read/write I/O per second, or 2 per millisecond */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].limit = 2000;
-	/* 4K byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT].limit = 4096000;
-	/* 8K byte per millisecond with 4K block size */
-	bdev->internal.qos->rate_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT].limit = 8192000;
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
+	/* 4Mb per second with 4K block size */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 4;
+	/* 8Mb per second with 4K block size */
+	bdev->internal.qos_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 8;
+
+	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	poll_threads();
+	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 
 	g_get_io_channel = true;
 
@@ -1677,10 +1694,6 @@ qos_dynamic_enable(void)
 
 	setup_test();
 	MOCK_SET(spdk_get_ticks, 0);
-
-	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		limits[i] = UINT64_MAX;
-	}
 
 	bdev = &g_bdev.bdev;
 

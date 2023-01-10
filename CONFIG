@@ -1,7 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
 #  All rights reserved.
-#  Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
 #
 
@@ -226,3 +226,7 @@ CONFIG_MAX_LCORES=
 
 # Build all Go components
 CONFIG_GOLANG=n
+
+# Build with libxlio suport.
+CONFIG_XLIO=n
+CONFIG_XLIO_DIR=

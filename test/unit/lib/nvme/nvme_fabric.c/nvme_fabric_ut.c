@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -358,6 +358,7 @@ test_nvme_fabric_qpair_connect(void)
 	req.qpair = &qpair;
 	reserved_req.qpair = &qpair;
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	STAILQ_INSERT_HEAD(&qpair.free_req, &req, stailq);
 	qpair.reserved_req = &reserved_req;
 	memset(&g_nvmf_data, 0, sizeof(g_nvmf_data));

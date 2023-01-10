@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_INTERNAL_TRACE_DEFS
@@ -15,6 +15,7 @@
 #define OWNER_SCSI_DEV		0x10
 #define OWNER_FTL		0x20
 #define OWNER_NVMF_TCP		0x30
+#define OWNER_NVME_NVDA_TCP_QP	0xF0
 
 /* Object definitions */
 #define OBJECT_ISCSI_PDU	0x1
@@ -26,6 +27,7 @@
 #define OBJECT_NVMF_RDMA_IO	0x40
 #define OBJECT_NVMF_TCP_IO	0x80
 #define OBJECT_NVMF_FC_IO	0xA0
+#define OBJECT_NVME_NVDA_TCP_REQ	0xF0
 
 /* Trace group definitions */
 #define TRACE_GROUP_ISCSI	0x1
@@ -42,6 +44,7 @@
 #define TRACE_GROUP_ACCEL_IAA	0xC
 #define TRACE_GROUP_NVME_TCP	0xD
 #define TRACE_GROUP_BDEV_NVME	0xE
+#define TRACE_GROUP_NVME_NVDA_TCP	0xF
 
 /* Bdev tracepoint definitions */
 #define TRACE_BDEV_IO_START		SPDK_TPOINT_ID(TRACE_GROUP_BDEV, 0x0)
@@ -157,5 +160,9 @@
 /* Bdev nvme tracepoint definitions */
 #define TRACE_BDEV_NVME_IO_START	SPDK_TPOINT_ID(TRACE_GROUP_BDEV_NVME, 0x0)
 #define TRACE_BDEV_NVME_IO_DONE		SPDK_TPOINT_ID(TRACE_GROUP_BDEV_NVME, 0x1)
+
+/* NVMe NVDA_TCP tracepoint definitions */
+#define TRACE_NVME_NVDA_TCP_SUBMIT		SPDK_TPOINT_ID(TRACE_GROUP_NVME_NVDA_TCP, 0x0)
+#define TRACE_NVME_NVDA_TCP_COMPLETE		SPDK_TPOINT_ID(TRACE_GROUP_NVME_NVDA_TCP, 0x1)
 
 #endif /* SPDK_INTERNAL_TRACE_DEFS */

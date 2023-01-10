@@ -1,0 +1,26 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "accel",
+      "config": [
+        {
+          "method": "mlx5_scan_accel_module",
+          "params": {
+            "allowed_devs": "mlx5_0",
+            "split_mb_blocks": 12
+          }
+        },
+        {
+          "method": "accel_crypto_key_create",
+          "params": {
+            "name": "test_dek",
+            "cipher": "AES_XTS",
+            "key": "00112233445566778899001122334455",
+            "key2": "11223344556677889900112233445500",
+            "tweak_mode": "INCR_512_UPPER_LBA"
+          }
+        }
+      ]
+    }
+  ]
+}

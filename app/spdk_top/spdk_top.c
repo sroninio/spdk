@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -27,7 +28,7 @@
 #endif
 
 #define RPC_MAX_THREADS 1024
-#define RPC_MAX_POLLERS 1024
+#define RPC_MAX_POLLERS 8192
 #define RPC_MAX_CORES 255
 #define MAX_THREAD_NAME 128
 #define MAX_POLLER_NAME 128

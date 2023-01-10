@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -631,6 +631,7 @@ test_nvme_qpair_manual_complete_request(void)
 	req.num_children = 0;
 	qpair.ctrlr->opts.disable_error_logging = false;
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	SPDK_CU_ASSERT_FATAL(STAILQ_EMPTY(&qpair.free_req));
 	qpair.num_outstanding_reqs = 1;
 
@@ -658,10 +659,10 @@ test_nvme_qpair_init_deinit(void)
 
 	ctrlr.trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
 
-	rc = nvme_qpair_init(&qpair, 1, &ctrlr, SPDK_NVME_QPRIO_HIGH, 3, false);
+	rc = nvme_qpair_init(&qpair, 1, &ctrlr, SPDK_NVME_QPRIO_URGENT, 3, false);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(qpair.id == 1);
-	CU_ASSERT(qpair.qprio == SPDK_NVME_QPRIO_HIGH);
+	CU_ASSERT(qpair.qprio == SPDK_NVME_QPRIO_URGENT);
 	CU_ASSERT(qpair.in_completion_context == 0);
 	CU_ASSERT(qpair.delete_after_completion_context == 0);
 	CU_ASSERT(qpair.no_deletion_notification_needed == 0);

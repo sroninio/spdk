@@ -2,6 +2,7 @@
  *
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_internal/cunit.h"
@@ -408,8 +409,9 @@ spdk_nvme_ctrlr_get_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
 	struct nvme_request	req;		\
 						\
 	STAILQ_INIT(&adminq.free_req);		\
+	adminq.active_free_req = &adminq.free_req;		\
 	STAILQ_INSERT_HEAD(&adminq.free_req, &req, stailq);	\
-	ctrlr.adminq = &adminq;	\
+	ctrlr.adminq = &adminq;					\
 	CU_ASSERT(pthread_mutex_init(&ctrlr.ctrlr_lock, NULL) == 0);
 
 #define DECONSTRUCT_CTRLR() \
@@ -645,6 +647,9 @@ test_io_cmd_raw_no_payload_build(void)
 	struct spdk_nvme_qpair  qpair = {};
 	struct spdk_nvme_cmd    cmd = {};
 
+	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
+
 	verify_fn = verify_io_cmd_raw_no_payload_build;
 
 	spdk_nvme_ctrlr_io_cmd_raw_no_payload_build(&ctrlr, &qpair, &cmd, NULL, NULL);
@@ -659,6 +664,9 @@ test_io_raw_cmd(void)
 	struct spdk_nvme_qpair	qpair = {};
 	struct spdk_nvme_cmd	cmd = {};
 
+	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
+
 	verify_fn = verify_io_raw_cmd;
 
 	spdk_nvme_ctrlr_cmd_io_raw(&ctrlr, &qpair, &cmd, NULL, 1, NULL, NULL);
@@ -672,6 +680,9 @@ test_io_raw_cmd_with_md(void)
 	DECLARE_AND_CONSTRUCT_CTRLR();
 	struct spdk_nvme_qpair	qpair = {};
 	struct spdk_nvme_cmd	cmd = {};
+
+	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 
 	verify_fn = verify_io_raw_cmd_with_md;
 
@@ -878,6 +889,9 @@ test_nvme_request_add_abort(void)
 	struct spdk_nvme_qpair admin_qpair = {};
 	struct spdk_nvme_ctrlr ctrlr = {};
 
+	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
+
 	parent.qpair = &qpair;
 	qpair.ctrlr = &ctrlr;
 	ctrlr.adminq = &admin_qpair;
@@ -889,6 +903,7 @@ test_nvme_request_add_abort(void)
 	/* For allocating request */
 	TAILQ_INIT(&parent.children);
 	STAILQ_INIT(&admin_qpair.free_req);
+	admin_qpair.active_free_req = &admin_qpair.free_req;
 	STAILQ_INSERT_HEAD(&admin_qpair.free_req, &child, stailq);
 
 	rc = nvme_request_add_abort(&req, &parent);
@@ -937,6 +952,7 @@ test_spdk_nvme_ctrlr_cmd_abort(void)
 
 	/* For allocating request */
 	STAILQ_INIT(&admin_qpair.free_req);
+	admin_qpair.active_free_req = &admin_qpair.free_req;
 	STAILQ_INSERT_HEAD(&admin_qpair.free_req, &req, stailq);
 	ctrlr.adminq = &admin_qpair;
 	admin_qpair.id = 0;

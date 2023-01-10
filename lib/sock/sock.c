@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -476,6 +476,38 @@ spdk_sock_readv(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 }
 
 ssize_t
+spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf)
+{
+	if (sock == NULL || sock->flags.closed) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->recv_zcopy) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->recv_zcopy(sock, len, sock_buf);
+}
+
+int
+spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf)
+{
+	if (sock == NULL) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->free_bufs) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->free_bufs(sock, sock_buf);
+}
+
+ssize_t
 spdk_sock_writev(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 {
 	if (sock == NULL || sock->flags.closed) {
@@ -897,6 +929,14 @@ spdk_sock_write_config_json(struct spdk_json_write_ctx *w)
 			spdk_json_write_named_uint32(w, "zerocopy_threshold", opts.zerocopy_threshold);
 			spdk_json_write_named_uint32(w, "tls_version", opts.tls_version);
 			spdk_json_write_named_bool(w, "enable_ktls", opts.enable_ktls);
+			spdk_json_write_named_uint32(w, "flush_batch_timeout", opts.flush_batch_timeout);
+			spdk_json_write_named_int32(w, "flush_batch_iovcnt_threshold", opts.flush_batch_iovcnt_threshold);
+			spdk_json_write_named_uint32(w, "flush_batch_bytes_threshold", opts.flush_batch_bytes_threshold);
+			spdk_json_write_named_bool(w, "enable_zerocopy_recv", opts.enable_zerocopy_recv);
+			spdk_json_write_named_bool(w, "enable_tcp_nodelay", opts.enable_tcp_nodelay);
+			spdk_json_write_named_uint32(w, "buffers_pool_size", opts.buffers_pool_size);
+			spdk_json_write_named_uint32(w, "packets_pool_size", opts.packets_pool_size);
+			spdk_json_write_named_bool(w, "enable_early_init", opts.enable_early_init);
 			spdk_json_write_object_end(w);
 			spdk_json_write_object_end(w);
 		} else {
@@ -975,6 +1015,37 @@ spdk_sock_get_default_impl(void)
 	}
 
 	return NULL;
+}
+
+int
+spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
+{
+	assert(sock);
+	assert(caps);
+
+	if (sock->net_impl->get_caps) {
+		return sock->net_impl->get_caps(sock, caps);
+	}
+
+	return -ENOTSUP;
+}
+
+void
+spdk_sock_initialize(void)
+{
+	struct spdk_net_impl *impl;
+	int rc;
+
+	STAILQ_FOREACH(impl, &g_net_impls, link) {
+		if (!impl->init) {
+			continue;
+		}
+
+		rc = impl->init();
+		if (rc) {
+			SPDK_ERRLOG("Failed to initalize sock impl %s, rc %d\n", impl->name, rc);
+		}
+	}
 }
 
 SPDK_LOG_REGISTER_COMPONENT(sock)

@@ -13,13 +13,13 @@
 	spdk_rdma_qp_disconnect;
 	spdk_rdma_qp_queue_send_wrs;
 	spdk_rdma_qp_flush_send_wrs;
-	spdk_rdma_create_mem_map;
-	spdk_rdma_free_mem_map;
-	spdk_rdma_get_translation;
 	spdk_rdma_qp_queue_recv_wrs;
 	spdk_rdma_qp_flush_recv_wrs;
-	spdk_rdma_get_pd;
-	spdk_rdma_put_pd;
+	spdk_rdma_get_io_context_size;
+	spdk_rdma_accel_sequence_supported;
+	spdk_rdma_accel_sequence_finish;
+	spdk_rdma_accel_seq_get_translation;
+	spdk_rdma_accel_sequence_release;
 
 	local: *;
 };

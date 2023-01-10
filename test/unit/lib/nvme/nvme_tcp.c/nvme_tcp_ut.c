@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2019 Intel Corporation.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021,2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -48,6 +48,15 @@ DEFINE_STUB_V(spdk_nvme_qpair_print_command, (struct spdk_nvme_qpair *qpair,
 
 DEFINE_STUB_V(spdk_nvme_qpair_print_completion, (struct spdk_nvme_qpair *qpair,
 		struct spdk_nvme_cpl *cpl));
+
+struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
+	.rdma_srq_size = 0,
+	.poll_group_requests = 1024,
+};
+
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
 
 static void
 nvme_transport_ctrlr_disconnect_qpair_done_mocked(struct spdk_nvme_qpair *qpair)
@@ -458,6 +467,9 @@ test_nvme_tcp_req_complete_safe(void)
 	struct nvme_tcp_req	tcp_req = {0};
 	struct nvme_request	req = {{0}};
 	struct nvme_tcp_qpair	tqpair = {{0}};
+
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 
 	tcp_req.req = &req;
 	tcp_req.req->qpair = &tqpair.qpair;
@@ -895,6 +907,8 @@ test_nvme_tcp_pdu_ch_handle(void)
 	struct spdk_nvme_tcp_stat stats = {};
 	struct nvme_tcp_pdu send_pdu = {}, recv_pdu = {};
 
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.send_pdu = &send_pdu;
 	tqpair.recv_pdu = &recv_pdu;
 	tqpair.stats = &stats;
@@ -1040,6 +1054,8 @@ test_nvme_tcp_qpair_connect_sock(void)
 	struct nvme_tcp_qpair tqpair = {};
 	int rc;
 
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.qpair.trtype = SPDK_NVME_TRANSPORT_TCP;
 	tqpair.qpair.id = 1;
 	tqpair.qpair.poll_group = (void *)0xDEADBEEF;
@@ -1085,6 +1101,8 @@ test_nvme_tcp_qpair_icreq_send(void)
 	struct spdk_nvme_tcp_ic_req *ic_req = NULL;
 	int rc;
 
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.send_pdu = &pdu;
 	tqpair.qpair.ctrlr = &ctrlr;
 	tqpair.qpair.poll_group = &poll_group.group;
@@ -1133,6 +1151,8 @@ test_nvme_tcp_c2h_payload_handle(void)
 					SPDK_NVME_TCP_C2H_DATA_FLAGS_LAST_PDU;
 	pdu.data_len = 1024;
 
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.qpair.id = 1;
 	tqpair.recv_pdu = &recv_pdu;
 
@@ -1210,6 +1230,8 @@ test_nvme_tcp_icresp_handle(void)
 	struct nvme_tcp_pdu send_pdu = {};
 	struct nvme_tcp_pdu recv_pdu = {};
 
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.send_pdu = &send_pdu;
 	tqpair.recv_pdu = &recv_pdu;
 	tqpair.stats = &stats;
@@ -1285,6 +1307,8 @@ test_nvme_tcp_pdu_payload_handle(void)
 
 	tqpair.recv_state = NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD;
 	tqpair.qpair.id = 1;
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	recv_pdu.ddgst_enable = false;
 	recv_pdu.req = &tcp_req;
 	recv_pdu.hdr.c2h_data.common.flags = SPDK_NVME_TCP_C2H_DATA_FLAGS_SUCCESS |
@@ -1339,6 +1363,8 @@ test_nvme_tcp_capsule_resp_hdr_handle(void)
 	/* Initialize requests and pdus */
 	tqpair.num_entries = 1;
 	tqpair.stats = &stats;
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	req.qpair = &tqpair.qpair;
 	req.qpair->ctrlr = &ctrlr;
 	req.payload = NVME_PAYLOAD_CONTIG(NULL, NULL);
@@ -1410,6 +1436,9 @@ test_nvme_tcp_ctrlr_connect_qpair(void)
 	tqpair->qpair.ctrlr->opts.header_digest = true;
 	tqpair->qpair.ctrlr->opts.data_digest = true;
 	TAILQ_INIT(&tqpair->send_queue);
+	STAILQ_INIT(&tqpair->qpair.free_req);
+	tqpair->qpair.active_free_req = &tqpair->qpair.free_req;
+
 
 	rc = nvme_tcp_ctrlr_connect_qpair(&ctrlr, qpair);
 	CU_ASSERT(rc == 0);
@@ -1482,6 +1511,8 @@ test_nvme_tcp_ctrlr_disconnect_qpair(void)
 	TAILQ_INIT(&tqpair.send_queue);
 	TAILQ_INIT(&tqpair.free_reqs);
 	TAILQ_INIT(&tqpair.outstanding_reqs);
+	STAILQ_INIT(&tqpair.qpair.free_req);
+	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	TAILQ_INSERT_TAIL(&tgroup.needs_poll, &tqpair, link);
 	TAILQ_INSERT_TAIL(&tqpair.send_queue, &pdu, tailq);
 
@@ -1675,6 +1706,8 @@ test_nvme_tcp_ctrlr_delete_io_qpair(void)
 	tqpair->send_pdus = calloc(1, sizeof(struct nvme_tcp_pdu));
 	tqpair->qpair.trtype = SPDK_NVME_TRANSPORT_TCP;
 	qpair = &tqpair->qpair;
+	STAILQ_INIT(&qpair->free_req);
+	qpair->active_free_req = &qpair->free_req;
 	qpair->ctrlr = &ctrlr;
 	tcp_req.req = &req;
 	tcp_req.req->qpair = &tqpair->qpair;

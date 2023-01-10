@@ -573,7 +573,11 @@ if __name__ == "__main__":
                                        rdma_srq_size=args.rdma_srq_size,
                                        io_path_stat=args.io_path_stat,
                                        allow_accel_sequence=args.allow_accel_sequence,
-                                       rdma_max_cq_size=args.rdma_max_cq_size)
+                                       rdma_max_cq_size=args.rdma_max_cq_size,
+                                       poll_group_requests=args.poll_group_requests,
+                                       small_cache_size=args.small_cache_size,
+                                       large_cache_size=args.large_cache_size,
+                                       rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -656,6 +660,12 @@ if __name__ == "__main__":
                    controller also supports them.''', action='store_true')
     p.add_argument('--rdma-max-cq-size',
                    help='The maximum size of a rdma completion queue. Default: 0 (unlimited)', type=int)
+    p.add_argument('--poll-group-requests',
+                   help='The number of requests allocated for each NVMe poll group. Default: 0', type=int)
+    p.add_argument('--small-cache-size', help='The number of small iobuf elements in cache. Default: 128', type=int)
+    p.add_argument('--large-cache-size', help='The number of large iobuf elements in cache. Default: 128', type=int)
+    p.add_argument('--rdma-cm-event-timeout-ms',
+                   help='Time to wait for RDMA CM event. Only applicable for RDMA transports.', type=int)
 
     p.set_defaults(func=bdev_nvme_set_options)
 
@@ -3139,12 +3149,40 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def mlx5_scan_accel_module(args):
         rpc.mlx5.mlx5_scan_accel_module(args.client,
                                         qp_size=args.qp_size,
-                                        num_requests=args.num_requests)
+                                        cq_size=args.cq_size,
+                                        num_requests=args.num_requests,
+                                        split_mb_blocks=args.split_mb_blocks,
+                                        allowed_devs=args.allowed_devs,
+                                        siglast=args.siglast,
+                                        merge=args.merge,
+                                        qp_per_domain=args.qp_per_domain,
+                                        enable_driver=args.enable_driver)
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
+    p.add_argument('-c', '--cq-size', type=int, help='CQ size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
+    p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR. Requires crypto-mb")
+    p.add_argument('-d', '--allowed-devs', help="Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1")
+    p.add_argument('--allowed-crypto-devs', dest='allowed_devs', help="[DEPRECATED] Comma separated list of allowed crypto device names")
+    p.add_argument('-l', '--siglast', dest='siglast', action='store_true',
+                   help="Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB")
+    p.add_argument('-m', '--merge', dest='merge', action='store_true', help="Merge tasks in the sequence when possible")
+    p.add_argument('-f', '--qp-per-domain', dest='qp_per_domain', action='store_true',
+                   help="Use dedicated qpair per memory domain")
+    p.add_argument('-e', '--enable-driver', dest='enable_driver', action='store_true',
+                  help="Enable accel mlx5 platform driver")
     p.set_defaults(func=mlx5_scan_accel_module)
+
+
+    def accel_mlx5_dump_stats(args):
+        print_dict(rpc.mlx5.accel_mlx5_dump_stats(args.client,
+                                       level=args.level))
+
+    p = subparsers.add_parser('accel_mlx5_dump_stats', help='Dump accel mlx5 module statistics.')
+    p.add_argument('-l', '--level', type=str, help='Verbose level, one of \"total\", \"channel\" or \"device\"')
+    p.set_defaults(func=accel_mlx5_dump_stats)
+
 
     # accel_error
     def accel_error_inject_error(args):
@@ -3401,7 +3439,15 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                        enable_zerocopy_send_client=args.enable_zerocopy_send_client,
                                        zerocopy_threshold=args.zerocopy_threshold,
                                        tls_version=args.tls_version,
-                                       enable_ktls=args.enable_ktls)
+                                       enable_ktls=args.enable_ktls,
+                                       flush_batch_timeout=args.flush_batch_timeout,
+                                       flush_batch_iovcnt_threshold=args.flush_batch_iovcnt_threshold,
+                                       flush_batch_bytes_threshold=args.flush_batch_bytes_threshold,
+                                       enable_zerocopy_recv=args.enable_zerocopy_recv,
+                                       enable_tcp_nodelay=args.enable_tcp_nodelay,
+                                       buffers_pool_size=args.buffers_pool_size,
+                                       packets_pool_size=args.packets_pool_size,
+                                       enable_early_init=args.enable_early_init)
 
     p = subparsers.add_parser('sock_impl_set_options', help="""Set options of socket layer implementation""")
     p.add_argument('-i', '--impl', help='Socket implementation name, e.g. posix', required=True)
@@ -3433,6 +3479,30 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
                    enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
                    zerocopy_threshold=None, tls_version=None, enable_ktls=None)
+    p.add_argument('--flush-batch-timeout', help='Set flush_batch_timeout (microseconds) for queuing more requests in a batch', type=int)
+    p.add_argument('--flush-batch-iovcnt-threshold', help='Set flush_batch_iovcnt_threshold for flushing requests', type=int)
+    p.add_argument('--flush-batch-bytes-threshold', help='Set flush_batch_bytes_threshold for flushing requests', type=int)
+    p.add_argument('--enable-zerocopy-recv', help='Enable zerocopy on receive',
+                   action='store_true', dest='enable_zerocopy_recv')
+    p.add_argument('--disable-zerocopy-recv', help='Disable zerocopy on receive',
+                   action='store_false', dest='enable_zerocopy_recv')
+    p.add_argument('--enable-tcp-nodelay', help='Enable TCP_NODELAY option',
+                   action='store_true', dest='enable_tcp_nodelay')
+    p.add_argument('--disable-tcp-nodelay', help='Disable TCP_NODELAY',
+                   action='store_false', dest='enable_tcp_nodelay')
+    p.add_argument('--buffers-pool-size', help='Set per poll group socket buffers pool size', type=int)
+    p.add_argument('--packets-pool-size', help='Set per poll group packets pool size', type=int)
+    p.add_argument('--enable-early-init', help='Enable early initialization',
+                   action='store_true', dest='enable_early_init')
+    p.add_argument('--disable-early-init', help='Disable early initialization',
+                   action='store_false', dest='enable_early_init')
+    p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
+                   enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
+                   flush_batch_timeout=None, flush_batch_iovcnt_threshold=None, flush_batch_bytes_threshold=None,
+                   zerocopy_threshold=None, tls_version=None, enable_ktls=None, psk_key=None, psk_identity=None,
+                   enable_zerocopy_recv=None, enable_tcp_nodelay=None, buffers_pool_size=None, packets_pool_size=None,
+                   enable_early_init=None)
+
 
     def sock_set_default_impl(args):
         print_json(rpc.sock.sock_set_default_impl(args.client,
@@ -3589,6 +3659,69 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
         if name in deprecated_aliases:
             print("{} is deprecated, use {} instead.".format(name, deprecated_aliases[name]), file=sys.stderr)
 
+    def bdev_group_create(args):
+        print_json(rpc.bdev.bdev_group_create(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_create', help='Create a bdev group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.set_defaults(func=bdev_group_create)
+
+    def bdev_group_add_bdev(args):
+        print_json(rpc.bdev.bdev_group_add_bdev(args.client, name=args.name, bdev=args.bdev))
+
+    p = subparsers.add_parser('bdev_group_add_bdev', help='Add a bdev to a group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.add_argument('bdev', help="Name of the bdev")
+    p.set_defaults(func=bdev_group_add_bdev)
+
+    def bdev_group_set_qos_limit(args):
+        rpc.bdev.bdev_group_set_qos_limit(args.client,
+                                          name=args.name,
+                                          rw_ios_per_sec=args.rw_ios_per_sec,
+                                          rw_mbytes_per_sec=args.rw_mbytes_per_sec,
+                                          r_mbytes_per_sec=args.r_mbytes_per_sec,
+                                          w_mbytes_per_sec=args.w_mbytes_per_sec)
+
+    p = subparsers.add_parser('bdev_group_set_qos_limit',
+                              help='Set QoS rate limit on a bdev group')
+    p.add_argument('name', help='bdev group name to set QoS. Example: group0')
+    p.add_argument('--rw-ios-per-sec',
+                   help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
+                   type=int, required=False)
+    p.add_argument('--rw-mbytes-per-sec',
+                   help="R/W megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.add_argument('--r-mbytes-per-sec',
+                   help="Read megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.add_argument('--w-mbytes-per-sec',
+                   help="Write megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.set_defaults(func=bdev_group_set_qos_limit)
+
+    def bdev_group_remove_bdev(args):
+        print_json(rpc.bdev.bdev_group_remove_bdev(args.client, name=args.name, bdev=args.bdev))
+
+    p = subparsers.add_parser('bdev_group_remove_bdev', help='Remove a bdev from a group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.add_argument('bdev', help="Name of the bdev")
+    p.set_defaults(func=bdev_group_remove_bdev)
+
+    def bdev_group_delete(args):
+        print_json(rpc.bdev.bdev_group_delete(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_delete', help='Delete a bdev group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.set_defaults(func=bdev_group_delete)
+
+    def bdev_groups_get(args):
+        print_json(rpc.bdev.bdev_groups_get(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_groups_get', help='Get bdev groups info')
+    p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
+    p.set_defaults(func=bdev_groups_get)
+
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))
@@ -3631,6 +3764,9 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
 
         if rpc_module in plugins:
             return
+
+        if rpc_module is None:
+            rpc_module = os.environ.get('SPDK_RPC_PLUGIN')
 
         if rpc_module is not None:
             try:

@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -164,6 +165,8 @@ prepare_for_test(struct spdk_nvme_ns *ns, struct spdk_nvme_ctrlr *ctrlr,
 	qpair->ctrlr = ctrlr;
 	qpair->req_buf = calloc(num_requests, sizeof(struct nvme_request));
 	SPDK_CU_ASSERT_FATAL(qpair->req_buf != NULL);
+	STAILQ_INIT(&qpair->free_req);
+	qpair->active_free_req = &qpair->free_req;
 
 	for (i = 0; i < num_requests; i++) {
 		struct nvme_request *req = qpair->req_buf + i * sizeof(struct nvme_request);

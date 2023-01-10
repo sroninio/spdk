@@ -110,6 +110,7 @@
 	spdk_bdev_for_each_channel_continue;
 	spdk_bdev_get_max_copy;
 	spdk_bdev_copy_blocks;
+	spdk_bdev_wait_for_ready;
 
 	# Public functions in bdev_module.h
 	spdk_bdev_register;
@@ -173,6 +174,7 @@
 	spdk_bdev_unquiesce;
 	spdk_bdev_quiesce_range;
 	spdk_bdev_unquiesce_range;
+	spdk_bdev_update_connected;
 
 	# Public functions in bdev_zone.h
 	spdk_bdev_get_zone_size;
@@ -189,6 +191,26 @@
 	spdk_bdev_zone_append_with_md;
 	spdk_bdev_zone_appendv_with_md;
 	spdk_bdev_io_get_append_location;
+
+	# Public functions in bdev_reservations.h
+	spdk_bdev_reservation_register;
+	spdk_bdev_reservation_acquire;
+	spdk_bdev_reservation_release;
+	spdk_bdev_reservation_report;
+	spdk_bdev_get_reservation_caps;
+
+	# Public functions in bdev_group.h
+	spdk_bdev_group_create;
+	spdk_bdev_group_add_bdev;
+	spdk_bdev_group_remove_bdev;
+	spdk_bdev_group_for_each_bdev;
+	spdk_bdev_group_get_name;
+	spdk_bdev_group_get_qos_rate_limits;
+	spdk_bdev_group_set_qos_rate_limits;
+	spdk_bdev_group_destroy;
+	spdk_bdev_group_get_by_name;
+	spdk_for_each_bdev_group;
+	spdk_bdev_group_subsystem_config_json;
 
 	# Everything else
 	local: *;

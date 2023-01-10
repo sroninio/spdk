@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "nvme_internal.h"
@@ -798,7 +798,9 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 	qpair->in_completion_context = 1;
 	ret = nvme_transport_qpair_process_completions(qpair, max_completions);
 	if (ret < 0) {
-		if (ret == -ENXIO && nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
+		if (ret == -ENXIO &&
+		    (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING ||
+		     nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED)) {
 			ret = 0;
 		} else {
 			SPDK_ERRLOG("CQ transport error %d (%s) on qpair id %hu\n",
@@ -880,10 +882,11 @@ nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 	TAILQ_INIT(&qpair->err_cmd_head);
 	STAILQ_INIT(&qpair->err_req_head);
 
-	req_size_padded = (sizeof(struct nvme_request) + 63) & ~(size_t)63;
+	if (qpair->qprio != 0) {
+		return 0;
+	}
 
-	/* Add one for the reserved_req */
-	num_requests++;
+	req_size_padded = (sizeof(struct nvme_request) + 63) & ~(size_t)63;
 
 	qpair->req_buf = spdk_zmalloc(req_size_padded * num_requests, 64, NULL,
 				      SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
@@ -893,16 +896,23 @@ nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 		return -ENOMEM;
 	}
 
+	qpair->reserved_req = spdk_zmalloc(req_size_padded, 64, NULL,
+					   SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
+	if (qpair->reserved_req == NULL) {
+		spdk_free(qpair->req_buf);
+		return -ENOMEM;
+	}
+
+	qpair->reserved_req->qpair = qpair;
+
 	for (i = 0; i < num_requests; i++) {
 		req = (void *)((uintptr_t)qpair->req_buf + i * req_size_padded);
 
 		req->qpair = qpair;
-		if (i == 0) {
-			qpair->reserved_req = req;
-		} else {
-			STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
-		}
+		STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
 	}
+
+	qpair->active_free_req = &qpair->free_req;
 
 	return 0;
 }
@@ -936,6 +946,7 @@ nvme_qpair_deinit(struct spdk_nvme_qpair *qpair)
 	}
 
 	spdk_free(qpair->req_buf);
+	spdk_free(qpair->reserved_req);
 }
 
 static inline int
@@ -1009,6 +1020,7 @@ _nvme_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *r
 				req->submit_tick = spdk_get_ticks();
 				req->cpl.status.sct = cmd->status.sct;
 				req->cpl.status.sc = cmd->status.sc;
+				req->queued = true;
 				STAILQ_INSERT_TAIL(&qpair->err_req_head, req, stailq);
 				cmd->err_count--;
 				return 0;

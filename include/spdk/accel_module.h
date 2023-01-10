@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
- *   Copyright (c) 2022, 2023 NVIDIA CORPORATION & AFFILIATES
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES
  *   All rights reserved.
  */
 
@@ -142,9 +142,11 @@ struct spdk_accel_task {
 	};
 	union {
 		uint32_t		*crc_dst;
+		uint32_t		*crc;
 		uint32_t		*output_size;
 		uint32_t		block_size; /* for crypto op */
 	};
+	uint32_t                        *cached_lkey;
 	uint64_t			iv; /* Initialization vector (tweak) for crypto op */
 	struct spdk_accel_task_aux_data	*aux;
 };
@@ -315,6 +317,25 @@ struct spdk_accel_driver {
 void spdk_accel_sequence_continue(struct spdk_accel_sequence *seq);
 
 void spdk_accel_driver_register(struct spdk_accel_driver *driver);
+
+/**
+ * Set a driver-specific context for accel sequence. This context is completely opaque to the Accel framework,
+ * it is meant to be used by the driver.
+ *
+ * \param seq Accel sequence
+ * \param ctx Driver context
+ */
+void spdk_accel_sequence_set_driver_ctx(struct spdk_accel_sequence *seq, void *ctx);
+
+/**
+ * Get an optional driver-specific context of the accel sequence. May return NULL
+ *
+ * \param seq Accel sequence
+ * \return Opaque context attached by \ref spdk_accel_sequence_set_driver_ctx or NULL
+ */
+void *spdk_accel_sequence_get_driver_ctx(struct spdk_accel_sequence *seq);
+
+const char *spdk_accel_driver_get_name(void);
 
 #define SPDK_ACCEL_DRIVER_REGISTER(name, driver) \
 static void __attribute__((constructor)) _spdk_accel_driver_register_##name(void) \

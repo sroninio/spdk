@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -17,6 +18,7 @@ DEFINE_STUB(spdk_nvme_ctrlr_get_first_active_ns, uint32_t,
 	struct nvme_request	req;		\
 						\
 	STAILQ_INIT(&adminq.free_req);		\
+	adminq.active_free_req = &adminq.free_req;		\
 	STAILQ_INSERT_HEAD(&adminq.free_req, &req, stailq);	\
 	ctrlr.adminq = &adminq;	\
 	CU_ASSERT(pthread_mutex_init(&ctrlr.ctrlr_lock, NULL) == 0);

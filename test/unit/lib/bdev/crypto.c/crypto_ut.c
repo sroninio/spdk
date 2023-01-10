@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
- *   Copyright (c) 2023, NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -61,14 +61,14 @@ DEFINE_STUB(spdk_accel_append_decrypt, int,
 	     uint32_t dst_iovcnt, struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 	     struct iovec *src_iovs, uint32_t src_iovcnt, struct spdk_memory_domain *src_domain,
 	     void *src_domain_ctx, uint64_t iv, uint32_t block_size, int flags,
-	     spdk_accel_step_cb cb_fn, void *cb_arg), 0);
+	     spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey), 0);
 DEFINE_STUB(spdk_accel_append_encrypt, int,
 	    (struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
 	     struct spdk_accel_crypto_key *key, struct iovec *dst_iovs,
 	     uint32_t dst_iovcnt, struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 	     struct iovec *src_iovs, uint32_t src_iovcnt, struct spdk_memory_domain *src_domain,
 	     void *src_domain_ctx, uint64_t iv, uint32_t block_size, int flags,
-	     spdk_accel_step_cb cb_fn, void *cb_arg), 0);
+	     spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey), 0);
 DEFINE_STUB_V(spdk_accel_sequence_abort, (struct spdk_accel_sequence *seq));
 DEFINE_STUB_V(spdk_accel_put_buf, (struct spdk_io_channel *ch, void *buf,
 				   struct spdk_memory_domain *domain, void *domain_ctx));
@@ -77,6 +77,48 @@ DEFINE_STUB(spdk_bdev_get_memory_domains, int,
 DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), (void *)0xdeadbeef);
 DEFINE_STUB(spdk_accel_get_buf_align, uint8_t,
 	    (enum spdk_accel_opcode opcode, const struct spdk_accel_operation_exec_ctx *ctx), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_register, int, (struct spdk_bdev_desc *desc,
+		struct spdk_io_channel *ch,
+		uint64_t crkey,
+		uint64_t nrkey,
+		bool ignore_key,
+		enum spdk_bdev_reservation_register_action action,
+		enum spdk_bdev_reservation_register_cptpl cptpl,
+		spdk_bdev_io_completion_cb cb,
+		void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_acquire, int, (struct spdk_bdev_desc *desc,
+		struct spdk_io_channel *ch,
+		uint64_t crkey,
+		uint64_t prkey,
+		bool ignore_key,
+		enum spdk_bdev_reservation_acquire_action action,
+		enum spdk_bdev_reservation_type type,
+		spdk_bdev_io_completion_cb cb,
+		void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_release, int, (struct spdk_bdev_desc *desc,
+		struct spdk_io_channel *ch,
+		uint64_t crkey, bool ignore_key,
+		enum spdk_bdev_reservation_release_action action,
+		enum spdk_bdev_reservation_type type,
+		spdk_bdev_io_completion_cb cb,
+		void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_report, int, (struct spdk_bdev_desc *desc,
+		struct spdk_io_channel *ch,
+		struct spdk_bdev_reservation_status_data *status_data,
+		uint32_t len,
+		spdk_bdev_io_completion_cb cb,
+		void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_wait_for_ready, int, (struct spdk_bdev_desc *desc, int64_t timeout_in_msec,
+		spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg), 0);
+
+DEFINE_STUB(spdk_accel_get_opc_memory_domain, int, (enum spdk_accel_opcode opcode,
+		struct spdk_memory_domain **domains,
+		int array_size), 0);
 
 /* global vars and setup/cleanup functions used for all test functions */
 struct spdk_bdev_io *g_bdev_io;

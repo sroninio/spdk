@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -717,5 +718,25 @@ SPDK_STATIC_ASSERT(offsetof(struct spdk_nvme_tcp_r2t_hdr, r2to) == 12, "Incorrec
 SPDK_STATIC_ASSERT(offsetof(struct spdk_nvme_tcp_r2t_hdr, r2tl) == 16, "Incorrect offset");
 
 #pragma pack(pop)
+
+/**
+ * Extract the Data Transfer bits from an NVMf command.
+ *
+ * This determines whether a command requires a data buffer and
+ * which direction (host to controller or controller to host) it is
+ * transferred.
+ */
+static inline enum spdk_nvme_data_transfer
+spdk_nvmf_cmd_get_data_transfer(struct spdk_nvme_cmd *cmd) {
+	if (cmd->opc == SPDK_NVME_OPC_FABRIC)
+	{
+		struct spdk_nvmf_capsule_cmd *nvmf_cmd = (struct spdk_nvmf_capsule_cmd *)cmd;
+
+		return spdk_nvme_opc_get_data_transfer(nvmf_cmd->fctype);
+	} else
+	{
+		return spdk_nvme_opc_get_data_transfer(cmd->opc);
+	}
+}
 
 #endif /* __NVMF_SPEC_H__ */

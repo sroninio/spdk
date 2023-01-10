@@ -1,15 +1,19 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/dma.h"
 #include "spdk/log.h"
 #include "spdk/util.h"
 #include "spdk/likely.h"
+#include "spdk/thread.h"
 
-pthread_mutex_t g_dma_mutex = PTHREAD_MUTEX_INITIALIZER;
-TAILQ_HEAD(, spdk_memory_domain) g_dma_memory_domains = TAILQ_HEAD_INITIALIZER(
-			g_dma_memory_domains);
+struct memory_domain_subscriber {
+	void *user_ctx;
+	spdk_memory_domain_update_notification_cb user_cb;
+	struct spdk_thread *orig_thread;
+	TAILQ_ENTRY(memory_domain_subscriber) link;
+};
 
 struct spdk_memory_domain {
 	enum spdk_dma_device_type type;
@@ -21,6 +25,21 @@ struct spdk_memory_domain {
 	struct spdk_memory_domain_ctx *ctx;
 	char *id;
 };
+
+struct memory_domain_update_msg {
+	struct spdk_memory_domain_update_notification_ctx ctx;
+	void *user_ctx;
+	spdk_memory_domain_update_notification_cb user_cb;
+};
+
+pthread_mutex_t g_dma_mutex = PTHREAD_MUTEX_INITIALIZER;
+TAILQ_HEAD(, spdk_memory_domain) g_dma_memory_domains = TAILQ_HEAD_INITIALIZER(
+			g_dma_memory_domains);
+TAILQ_HEAD(, memory_domain_subscriber) g_subscribers_list = TAILQ_HEAD_INITIALIZER(
+			g_subscribers_list);
+
+static void memory_domain_notify(struct spdk_memory_domain *domain,
+				 enum spdk_memory_domain_update_notification_type type);
 
 int
 spdk_memory_domain_create(struct spdk_memory_domain **_domain, enum spdk_dma_device_type type,
@@ -71,6 +90,7 @@ spdk_memory_domain_create(struct spdk_memory_domain **_domain, enum spdk_dma_dev
 
 	pthread_mutex_lock(&g_dma_mutex);
 	TAILQ_INSERT_TAIL(&g_dma_memory_domains, domain, link);
+	memory_domain_notify(domain, SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_CREATED);
 	pthread_mutex_unlock(&g_dma_mutex);
 
 	*_domain = domain;
@@ -157,6 +177,7 @@ spdk_memory_domain_destroy(struct spdk_memory_domain *domain)
 	}
 
 	pthread_mutex_lock(&g_dma_mutex);
+	memory_domain_notify(domain, SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_DELETED);
 	TAILQ_REMOVE(&g_dma_memory_domains, domain, link);
 	pthread_mutex_unlock(&g_dma_mutex);
 
@@ -281,4 +302,110 @@ spdk_memory_domain_get_next(struct spdk_memory_domain *prev, const char *id)
 	pthread_mutex_unlock(&g_dma_mutex);
 
 	return domain;
+}
+
+int
+spdk_memory_domain_update_notification_subscribe(void *user_ctx,
+		spdk_memory_domain_update_notification_cb user_cb)
+{
+	struct memory_domain_subscriber *subscriber;
+	int rc = 0;
+
+	if (!user_ctx || !user_cb) {
+		return -EINVAL;
+	}
+
+	pthread_mutex_lock(&g_dma_mutex);
+
+	TAILQ_FOREACH(subscriber, &g_subscribers_list, link) {
+		if (subscriber->user_ctx == user_ctx) {
+			rc = -EEXIST;
+			break;
+		}
+	}
+	if (rc) {
+		goto out;
+	}
+
+	subscriber = calloc(1, sizeof(*subscriber));
+	if (!subscriber) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	subscriber->user_ctx = user_ctx;
+	subscriber->user_cb = user_cb;
+	subscriber->orig_thread = spdk_get_thread();
+	TAILQ_INSERT_TAIL(&g_subscribers_list, subscriber, link);
+
+out:
+	pthread_mutex_unlock(&g_dma_mutex);
+	return rc;
+}
+
+int
+spdk_memory_domain_update_notification_unsubscribe(void *user_ctx)
+{
+	struct memory_domain_subscriber *subscriber;
+	int rc = 0;
+
+	if (!user_ctx) {
+		return -EINVAL;
+	}
+
+	pthread_mutex_lock(&g_dma_mutex);
+
+	TAILQ_FOREACH(subscriber, &g_subscribers_list, link) {
+		if (subscriber->user_ctx == user_ctx) {
+			break;
+		}
+	}
+
+	if (!subscriber) {
+		rc = -ENOENT;
+		goto out;
+	}
+
+	TAILQ_REMOVE(&g_subscribers_list, subscriber, link);
+	free(subscriber);
+
+out:
+	pthread_mutex_unlock(&g_dma_mutex);
+	return rc;
+}
+
+static void
+memory_domain_notify_msg(void *ctx)
+{
+	struct memory_domain_update_msg *msg = ctx;
+
+	assert(msg);
+	assert(msg->user_cb);
+
+	msg->user_cb(msg->user_ctx, &msg->ctx);
+	free(msg);
+}
+
+static void
+memory_domain_notify(struct spdk_memory_domain *domain,
+		     enum spdk_memory_domain_update_notification_type type)
+{
+	struct memory_domain_subscriber *subscriber;
+	struct memory_domain_update_msg *msg;
+
+	TAILQ_FOREACH(subscriber, &g_subscribers_list, link) {
+		msg = calloc(1, sizeof(*msg));
+		if (!msg) {
+			/* Treat this case as non-fatal */
+			SPDK_WARNLOG("Failed to deliver notification of type %d, domain %p, subscriber %p\n", type,
+				     domain, subscriber);
+			return;
+		}
+		msg->ctx.size = sizeof(msg->ctx);
+		msg->ctx.domain = domain;
+		msg->ctx.type = type;
+		msg->user_cb = subscriber->user_cb;
+		msg->user_ctx = subscriber->user_ctx;
+		spdk_thread_send_msg(subscriber->orig_thread, memory_domain_notify_msg, msg);
+	}
 }

@@ -1,8 +1,8 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2021 Mellanox Technologies LTD.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /*
@@ -28,6 +28,8 @@ int g_current_transport_index = 0;
 struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
 	.rdma_srq_size = 0,
 	.rdma_max_cq_size = 0,
+	.poll_group_requests = 1024,
+	.rdma_cm_event_timeout_ms = 1000
 };
 
 const struct spdk_nvme_transport *
@@ -111,6 +113,15 @@ struct spdk_nvme_ctrlr *nvme_transport_ctrlr_construct(const struct spdk_nvme_tr
 
 	ctrlr = transport->ops.ctrlr_construct(trid, opts, devhandle);
 
+	if (ctrlr && (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED)) {
+		int rc;
+		rc = spdk_nvme_init_zcopy_resource();
+		if (rc) {
+			nvme_transport_ctrlr_destruct(ctrlr);
+			ctrlr = NULL;
+		}
+	}
+
 	return ctrlr;
 }
 
@@ -134,6 +145,11 @@ nvme_transport_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
 	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
 
 	assert(transport != NULL);
+
+	if (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED) {
+		spdk_nvme_free_zcopy_resource();
+	}
+
 	return transport->ops.ctrlr_destruct(ctrlr);
 }
 
@@ -601,6 +617,17 @@ nvme_transport_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_r
 	return transport->ops.qpair_submit_request(qpair, req);
 }
 
+int
+nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	assert(qpair->transport != NULL);
+	if (qpair->transport->ops.qpair_free_request) {
+		return qpair->transport->ops.qpair_free_request(qpair, req);
+	}
+
+	return -ENOTSUP;
+}
+
 int32_t
 nvme_transport_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
 {
@@ -638,6 +665,46 @@ nvme_transport_admin_qpair_abort_aers(struct spdk_nvme_qpair *qpair)
 
 	assert(transport != NULL);
 	transport->ops.admin_qpair_abort_aers(qpair);
+}
+
+int
+nvme_transport_poll_group_init(struct spdk_nvme_transport_poll_group *group,
+			       uint32_t num_requests)
+{
+	size_t req_size_padded;
+	uint32_t i;
+
+	STAILQ_INIT(&group->connected_qpairs);
+	STAILQ_INIT(&group->disconnected_qpairs);
+	STAILQ_INIT(&group->free_req);
+	group->num_connected_qpairs = 0;
+
+	if (num_requests == 0) {
+		return 0;
+	}
+
+	req_size_padded = SPDK_ALIGN_CEIL(sizeof(struct nvme_request), 64);
+	group->req_buf = spdk_zmalloc(req_size_padded * num_requests, 64, NULL,
+				      SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
+	if (group->req_buf == NULL) {
+		SPDK_ERRLOG("Failed to allocate nvme requests pool\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < num_requests; i++) {
+		struct nvme_request *req = group->req_buf + i * req_size_padded;
+
+		STAILQ_INSERT_TAIL(&group->free_req, req, stailq);
+	}
+
+	return 0;
+}
+
+void
+nvme_transport_poll_group_deinit(struct spdk_nvme_transport_poll_group *group)
+{
+	spdk_free(group->req_buf);
+	group->req_buf = NULL;
 }
 
 struct spdk_nvme_transport_poll_group *
@@ -679,6 +746,10 @@ nvme_transport_poll_group_add(struct spdk_nvme_transport_poll_group *tgroup,
 		assert(nvme_qpair_get_state(qpair) < NVME_QPAIR_CONNECTED);
 		qpair->poll_group_tailq_head = &tgroup->disconnected_qpairs;
 		STAILQ_INSERT_TAIL(&tgroup->disconnected_qpairs, qpair, poll_group_stailq);
+
+		if (tgroup->req_buf != NULL) {
+			qpair->active_free_req = &tgroup->free_req;
+		}
 	}
 
 	return rc;
@@ -713,6 +784,14 @@ nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_gr
 {
 	return tgroup->transport->ops.poll_group_process_completions(tgroup, completions_per_qpair,
 			disconnected_qpair_cb);
+}
+
+void
+nvme_transport_poll_group_process_events(struct spdk_nvme_transport_poll_group *tgroup)
+{
+	if (tgroup->transport->ops.poll_group_process_events != NULL) {
+		tgroup->transport->ops.poll_group_process_events(tgroup);
+	}
 }
 
 int
@@ -824,10 +903,13 @@ spdk_nvme_transport_get_opts(struct spdk_nvme_transport_opts *opts, size_t opts_
 
 	SET_FIELD(rdma_srq_size);
 	SET_FIELD(rdma_max_cq_size);
+	SET_FIELD(poll_group_requests);
+	SET_FIELD(use_poll_group_process_events);
+	SET_FIELD(rdma_cm_event_timeout_ms);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 24, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 32, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -852,6 +934,9 @@ spdk_nvme_transport_set_opts(const struct spdk_nvme_transport_opts *opts, size_t
 
 	SET_FIELD(rdma_srq_size);
 	SET_FIELD(rdma_max_cq_size);
+	SET_FIELD(poll_group_requests);
+	SET_FIELD(use_poll_group_process_events);
+	SET_FIELD(rdma_cm_event_timeout_ms);
 
 	g_spdk_nvme_transport_opts.opts_size = opts->opts_size;
 
@@ -875,4 +960,10 @@ spdk_nvme_ctrlr_get_registers(struct spdk_nvme_ctrlr *ctrlr)
 	}
 
 	return NULL;
+}
+
+const char *
+nvme_transport_get_trname(const struct spdk_nvme_transport *transport)
+{
+	return transport->ops.name;
 }

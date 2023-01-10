@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -54,7 +55,7 @@ struct spdk_trace_object {
 	char	id_prefix;
 };
 
-#define SPDK_TRACE_MAX_GROUP_ID  16
+#define SPDK_TRACE_MAX_GROUP_ID  32
 #define SPDK_TRACE_MAX_TPOINT_ID (SPDK_TRACE_MAX_GROUP_ID * 64)
 #define SPDK_TPOINT_ID(group, tpoint)	((group * 64) + tpoint)
 

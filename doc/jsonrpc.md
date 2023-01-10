@@ -3921,6 +3921,7 @@ rdma_srq_size              | Optional | number      | Set the size of a shared r
 io_path_stat               | Optional | boolean     | Enable collecting I/O stat of each nvme bdev io path. Default: `false`.
 allow_accel_sequence       | Optional | boolean     | Allow NVMe bdevs to advertise support for accel sequences if the controller also supports them.  Default: `false`.
 rdma_max_cq_size           | Optional | number      | Set the maximum size of a rdma completion queue. Default: 0 (unlimited)
+poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
 
 #### Example
 
@@ -4186,6 +4187,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -4221,6 +4223,8 @@ The `name` parameter is an NVMe bdev controller name and the `cntlid` parameter 
 an NVMe controller in the NVMe bdev controller. Enable only one NVMe-oF controller if the `cntlid`
 parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
 
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
 Returns true if the controller enablement was successful or a controller was already enabled, false otherwise.
 
 #### Parameters
@@ -4229,6 +4233,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -4264,6 +4269,8 @@ The `name` parameter is an NVMe bdev controller name and the `cntlid` parameter 
 an NVMe controller in the NVMe bdev controller. Disable only one NVMe-oF controller if the `cntlid`
 parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
 
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
 Returns true if the controller disablement was successful or a controller was already disabled, false otherwise.
 
 #### Parameters
@@ -4272,6 +4279,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -11847,6 +11855,10 @@ zerocopy_threshold          | Optional | number      | Set zerocopy_threshold in
 --                          | --       | --          | that fall below this threshold may be sent without zerocopy flag set
 tls_version                 | Optional | number      | TLS protocol version, e.g. 13 for v1.3 (only applies when impl_name == ssl)
 enable_ktls                 | Optional | boolean     | Enable or disable Kernel TLS (only applies when impl_name == ssl)
+enable_zerocopy_recv        | Optional | boolean     | Enable or disable zero copy on receive
+enable_tcp_nodelay          | Optional | boolean     | Enable or disable TCP_NODELAY socket option
+buffers_pool_size           | Optional | number      | Set per poll group socket buffers pool size
+packets_pool_size           | Optional | number      | Set per poll group packets pool size
 
 #### Response
 

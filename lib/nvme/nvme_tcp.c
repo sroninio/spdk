@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /*
@@ -750,25 +750,35 @@ static int
 nvme_tcp_build_sgl_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 {
 	int rc;
-	uint32_t length, remaining_size, iovcnt = 0, max_num_sgl;
+	uint32_t length, remaining_size;
+	int iovcnt = 0, max_num_sgl;
 	struct nvme_request *req = tcp_req->req;
+	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
 	SPDK_DEBUGLOG(nvme, "enter\n");
 
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	assert(req->payload.reset_sgl_fn != NULL);
-	assert(req->payload.next_sge_fn != NULL);
-	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+	if (!use_iovs) {
+		assert(req->payload.reset_sgl_fn != NULL);
+		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+	}
 
 	max_num_sgl = spdk_min(req->qpair->ctrlr->max_sges, NVME_TCP_MAX_SGL_DESCRIPTORS);
 	remaining_size = req->payload_size;
 
 	do {
-		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &tcp_req->iov[iovcnt].iov_base,
-					      &length);
-		if (rc) {
-			return -1;
+		if (!use_iovs) {
+			assert(req->payload.next_sge_fn != NULL);
+			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &tcp_req->iov[iovcnt].iov_base,
+						      &length);
+			if (rc) {
+				return -1;
+			}
+		} else {
+			assert(iovcnt < req->payload.opts->iovcnt);
+			tcp_req->iov[iovcnt].iov_base = req->payload.opts->iov[iovcnt].iov_base;
+			length = req->payload.opts->iov[iovcnt].iov_len;
 		}
 
 		length = spdk_min(length, remaining_size);
@@ -2667,9 +2677,17 @@ static struct spdk_nvme_transport_poll_group *
 nvme_tcp_poll_group_create(void)
 {
 	struct nvme_tcp_poll_group *group = calloc(1, sizeof(*group));
+	int rc;
 
 	if (group == NULL) {
 		SPDK_ERRLOG("Unable to allocate poll group.\n");
+		return NULL;
+	}
+
+	rc = nvme_transport_poll_group_init(&group->group,
+					    g_spdk_nvme_transport_opts.poll_group_requests);
+	if (rc != 0) {
+		free(group);
 		return NULL;
 	}
 
@@ -2677,6 +2695,7 @@ nvme_tcp_poll_group_create(void)
 
 	group->sock_group = spdk_sock_group_create(group);
 	if (group->sock_group == NULL) {
+		nvme_transport_poll_group_deinit(&group->group);
 		free(group);
 		SPDK_ERRLOG("Unable to allocate sock group.\n");
 		return NULL;
@@ -2826,6 +2845,8 @@ nvme_tcp_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 	if (!STAILQ_EMPTY(&tgroup->connected_qpairs) || !STAILQ_EMPTY(&tgroup->disconnected_qpairs)) {
 		return -EBUSY;
 	}
+
+	nvme_transport_poll_group_deinit(tgroup);
 
 	rc = spdk_sock_group_close(&group->sock_group);
 	if (rc != 0) {

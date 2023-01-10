@@ -1,7 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
-
 
 /** \file
  * SPDK DMA device framework
@@ -36,6 +35,7 @@ enum spdk_dma_device_type {
 	 * Start of the range of vendor-specific DMA device types
 	 */
 	SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START = 1000,
+	SPDK_DMA_DEVICE_TYPE_RDMA_TCP = SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START,
 	/**
 	 * End of the range of vendor-specific DMA device types
 	 */
@@ -353,6 +353,38 @@ struct spdk_memory_domain *spdk_memory_domain_get_first(const char *id);
 struct spdk_memory_domain *spdk_memory_domain_get_next(struct spdk_memory_domain *prev,
 		const char *id);
 
+enum spdk_memory_domain_update_notification_type {
+	SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_CREATED,
+	SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_DELETED
+};
+
+struct spdk_memory_domain_update_notification_ctx {
+	size_t size;
+	enum spdk_memory_domain_update_notification_type type;
+	/* Memory domain which triggered the update notification */
+	struct spdk_memory_domain *domain;
+};
+
+typedef void (*spdk_memory_domain_update_notification_cb)(void *user_ctx,
+		struct spdk_memory_domain_update_notification_ctx *);
+
+/**
+ * Subscribe for updates in the global list of memory domains
+ *
+ * \param user_ctx User context when will be passed to \b user_cb
+ * \param user_cb Function to be called on the update
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_memory_domain_update_notification_subscribe(void *user_ctx,
+		spdk_memory_domain_update_notification_cb user_cb);
+
+/**
+ * Revoke subscription for memory domain updates
+ *
+ * \param user_ctx User context used to subscribe for updates
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_memory_domain_update_notification_unsubscribe(void *user_ctx);
 
 #ifdef __cplusplus
 }

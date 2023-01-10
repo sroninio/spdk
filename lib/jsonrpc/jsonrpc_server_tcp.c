@@ -1,11 +1,14 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
 #include "jsonrpc_internal.h"
 #include "spdk/string.h"
 #include "spdk/util.h"
+
+static void jsonrpc_server_conn_remove(struct spdk_jsonrpc_server_conn *conn);
 
 struct spdk_jsonrpc_server *
 spdk_jsonrpc_server_listen(int domain, int protocol,
@@ -83,8 +86,10 @@ jsonrpc_server_free_conn_request(struct spdk_jsonrpc_server_conn *conn)
 {
 	struct spdk_jsonrpc_request *request;
 
-	jsonrpc_free_request(conn->send_request);
-	conn->send_request = NULL ;
+	if (conn->send_request) {
+		jsonrpc_free_request(conn->send_request);
+		conn->send_request = NULL;
+	}
 
 	pthread_spin_lock(&conn->queue_lock);
 	/* There might still be some requests being processed.
@@ -102,7 +107,14 @@ jsonrpc_server_free_conn_request(struct spdk_jsonrpc_server_conn *conn)
 static void
 jsonrpc_server_conn_close(struct spdk_jsonrpc_server_conn *conn)
 {
+	/**
+	 * In principle bool is atomic but let's protect
+	 * it here for consistency with protected check
+	 * in jsonrpc_server_send_response()
+	 */
+	pthread_spin_lock(&conn->queue_lock);
 	conn->closed = true;
+	pthread_spin_unlock(&conn->queue_lock);
 
 	if (conn->sockfd >= 0) {
 		jsonrpc_server_free_conn_request(conn);
@@ -119,11 +131,13 @@ void
 spdk_jsonrpc_server_shutdown(struct spdk_jsonrpc_server *server)
 {
 	struct spdk_jsonrpc_server_conn *conn;
+	struct spdk_jsonrpc_server_conn *conn_tmp;
 
 	close(server->sockfd);
 
-	TAILQ_FOREACH(conn, &server->conns, link) {
+	TAILQ_FOREACH_SAFE(conn, &server->conns, link, conn_tmp) {
 		jsonrpc_server_conn_close(conn);
+		jsonrpc_server_conn_remove(conn);
 	}
 
 	free(server);
@@ -328,7 +342,11 @@ jsonrpc_server_send_response(struct spdk_jsonrpc_request *request)
 	/* Queue the response to be sent */
 	pthread_spin_lock(&conn->queue_lock);
 	STAILQ_REMOVE(&conn->outstanding_queue, request, spdk_jsonrpc_request, link);
-	STAILQ_INSERT_TAIL(&conn->send_queue, request, link);
+	if (!conn->closed) {
+		STAILQ_INSERT_TAIL(&conn->send_queue, request, link);
+	} else {
+		SPDK_ERRLOG("attempt to send response on closed connection\n");
+	}
 	pthread_spin_unlock(&conn->queue_lock);
 }
 

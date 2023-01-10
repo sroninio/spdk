@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019-2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -237,6 +237,8 @@ spdk_nvme_ctrlr_get_default_ctrlr_opts(struct spdk_nvme_ctrlr_opts *opts, size_t
 	if (FIELD_OK(psk)) {
 		memset(opts->psk, 0, sizeof(opts->psk));
 	}
+
+	SET_FIELD(disable_io_split, false);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -5330,4 +5332,10 @@ spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				   struct spdk_memory_domain **domains, int array_size)
 {
 	return nvme_transport_ctrlr_get_memory_domains(ctrlr, domains, array_size);
+}
+
+uint16_t
+spdk_nvme_ctrlr_get_max_sges(struct spdk_nvme_ctrlr *ctrlr)
+{
+	return ctrlr->max_sges;
 }

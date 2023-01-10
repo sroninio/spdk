@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -678,6 +678,7 @@ spdk_pci_device_detach(struct spdk_pci_device *device)
 	struct nvme_request	req;		\
 						\
 	STAILQ_INIT(&adminq.free_req);		\
+	adminq.active_free_req = &adminq.free_req;		\
 	STAILQ_INSERT_HEAD(&adminq.free_req, &req, stailq);	\
 	ctrlr.adminq = &adminq;					\
 	ctrlr.trid.trtype = SPDK_NVME_TRANSPORT_CUSTOM;

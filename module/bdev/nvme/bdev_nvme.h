@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
@@ -233,6 +233,7 @@ struct nvme_poll_group {
 	struct spdk_nvme_poll_group		*group;
 	struct spdk_io_channel			*accel_channel;
 	struct spdk_poller			*poller;
+	struct spdk_iobuf_channel		iobuf;
 	bool					collect_spin_stat;
 	uint64_t				spin_ticks;
 	uint64_t				start_ticks;
@@ -298,6 +299,10 @@ struct spdk_bdev_nvme_opts {
 	bool io_path_stat;
 	bool allow_accel_sequence;
 	uint32_t rdma_max_cq_size;
+	uint32_t poll_group_requests;
+	uint32_t small_cache_size;
+	uint32_t large_cache_size;
+	uint16_t rdma_cm_event_timeout_ms;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);

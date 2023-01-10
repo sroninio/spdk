@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation. All rights reserved.
  *   Copyright (c) Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include <rdma/rdma_cma.h>
@@ -161,4 +162,35 @@ spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_w
 	spdk_rdma_qp->stats->send.doorbell_updates++;
 
 	return rc;
+}
+
+size_t
+spdk_rdma_get_io_context_size(void)
+{
+	return 0;
+}
+
+bool
+spdk_rdma_accel_sequence_supported(struct spdk_rdma_qp *qp)
+{
+	return false;
+}
+
+int
+spdk_rdma_accel_sequence_finish(struct spdk_rdma_qp *qp, void *rdma_io_ctx,
+				struct spdk_accel_sequence *seq, spdk_rdma_accel_seq_cb cb_fn, void *cb_ctx)
+{
+	return -ENOTSUP;
+}
+
+int
+spdk_rdma_accel_seq_get_translation(void *rdma_io_ctx,
+				    struct  spdk_rdma_memory_translation_ctx *translation)
+{
+	return -ENOTSUP;
+}
+
+int
+spdk_rdma_accel_sequence_release(struct spdk_rdma_qp *qp, void *_rdma_io_ctx)
+{
 }

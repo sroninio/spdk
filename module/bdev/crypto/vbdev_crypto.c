@@ -1,7 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
- *   All rights reserved.
- *   Copyright (c) 2022, 2023 NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -11,6 +10,7 @@
 #include "spdk/thread.h"
 #include "spdk/bdev_module.h"
 #include "spdk/likely.h"
+#include "spdk/bdev_reservations.h"
 
 /* This namespace UUID was generated using uuid_generate() method. */
 #define BDEV_CRYPTO_NAMESPACE_UUID "078e3cf7-f4b4-4545-b2c3-d40045a64ae2"
@@ -77,6 +77,8 @@ static void _complete_internal_io(struct spdk_bdev_io *bdev_io, bool success, vo
 static void vbdev_crypto_examine(struct spdk_bdev *bdev);
 static int vbdev_crypto_claim(const char *bdev_name);
 static void vbdev_crypto_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io);
+static int vbdev_crypto_wait_for_ready(void *ctxt, int64_t timeout_msec,
+				       spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg);
 
 static void
 crypto_io_fail(struct crypto_bdev_io *crypto_io)
@@ -156,7 +158,7 @@ crypto_encrypt(struct crypto_io_channel *crypto_ch, struct spdk_bdev_io *bdev_io
 				       bdev_io->u.bdev.memory_domain,
 				       bdev_io->u.bdev.memory_domain_ctx,
 				       bdev_io->u.bdev.offset_blocks, crypto_len, 0,
-				       NULL, NULL);
+				       NULL, NULL, NULL);
 	if (spdk_unlikely(rc != 0)) {
 		spdk_accel_put_buf(crypto_ch->accel_channel, crypto_io->aux_buf_raw,
 				   crypto_io->aux_domain, crypto_io->aux_domain_ctx);
@@ -286,7 +288,7 @@ crypto_read_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io,
 				       bdev_io->u.bdev.memory_domain,
 				       bdev_io->u.bdev.memory_domain_ctx,
 				       bdev_io->u.bdev.offset_blocks, blocklen, 0,
-				       NULL, NULL);
+				       NULL, NULL, NULL);
 	if (rc != 0) {
 		if (rc == -ENOMEM) {
 			SPDK_DEBUGLOG(vbdev_crypto, "No memory, queue the IO.\n");
@@ -357,6 +359,38 @@ vbdev_crypto_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bde
 		rc = spdk_bdev_reset(crypto_bdev->base_desc, crypto_ch->base_ch,
 				     _complete_internal_io, bdev_io);
 		break;
+	case SPDK_BDEV_IO_TYPE_RESERVATION_REGISTER:
+		rc = spdk_bdev_reservation_register(crypto_bdev->base_desc, crypto_ch->base_ch,
+						    bdev_io->u.reservation_register.crkey,
+						    bdev_io->u.reservation_register.nrkey,
+						    bdev_io->u.reservation_register.ignore_key,
+						    bdev_io->u.reservation_register.action,
+						    bdev_io->u.reservation_register.cptpl,
+						    _complete_internal_io, bdev_io);
+		break;
+	case SPDK_BDEV_IO_TYPE_RESERVATION_ACQUIRE:
+		rc = spdk_bdev_reservation_acquire(crypto_bdev->base_desc, crypto_ch->base_ch,
+						   bdev_io->u.reservation_acquire.crkey,
+						   bdev_io->u.reservation_acquire.prkey,
+						   bdev_io->u.reservation_acquire.ignore_key,
+						   bdev_io->u.reservation_acquire.action,
+						   bdev_io->u.reservation_acquire.type,
+						   _complete_internal_io, bdev_io);
+		break;
+	case SPDK_BDEV_IO_TYPE_RESERVATION_RELEASE:
+		rc = spdk_bdev_reservation_release(crypto_bdev->base_desc, crypto_ch->base_ch,
+						   bdev_io->u.reservation_release.crkey,
+						   bdev_io->u.reservation_release.ignore_key,
+						   bdev_io->u.reservation_release.action,
+						   bdev_io->u.reservation_release.type,
+						   _complete_internal_io, bdev_io);
+		break;
+	case SPDK_BDEV_IO_TYPE_RESERVATION_REPORT:
+		rc = spdk_bdev_reservation_report(crypto_bdev->base_desc, crypto_ch->base_ch,
+						  bdev_io->u.reservation_report.status_data,
+						  bdev_io->u.reservation_report.len,
+						  _complete_internal_io, bdev_io);
+		break;
 	case SPDK_BDEV_IO_TYPE_WRITE_ZEROES:
 	default:
 		SPDK_ERRLOG("crypto: unknown I/O type %d\n", bdev_io->type);
@@ -390,6 +424,10 @@ vbdev_crypto_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	case SPDK_BDEV_IO_TYPE_RESET:
 	case SPDK_BDEV_IO_TYPE_READ:
 	case SPDK_BDEV_IO_TYPE_FLUSH:
+	case SPDK_BDEV_IO_TYPE_RESERVATION_REGISTER:
+	case SPDK_BDEV_IO_TYPE_RESERVATION_ACQUIRE:
+	case SPDK_BDEV_IO_TYPE_RESERVATION_RELEASE:
+	case SPDK_BDEV_IO_TYPE_RESERVATION_REPORT:
 		return spdk_bdev_io_type_supported(crypto_bdev->base_bdev, io_type);
 	case SPDK_BDEV_IO_TYPE_WRITE_ZEROES:
 	/* Force the bdev layer to issue actual writes of zeroes so we can
@@ -398,6 +436,21 @@ vbdev_crypto_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	default:
 		return false;
 	}
+}
+
+static int
+vbdev_crypto_wait_for_ready(void *ctxt,  int64_t timeout_msec,
+			    spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg)
+{
+	struct vbdev_crypto *crypto_bdev = ctxt;
+	int rc;
+
+	rc = spdk_bdev_wait_for_ready(crypto_bdev->base_desc, timeout_msec, cb_fn, cb_arg);
+	if (rc != 0) {
+		cb_fn(cb_arg, rc);
+	}
+
+	return 0;
 }
 
 /* Callback for unregistering the IO device. */
@@ -693,7 +746,8 @@ static int
 vbdev_crypto_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
 {
 	struct vbdev_crypto *crypto_bdev = ctx;
-	int num_domains;
+	struct spdk_memory_domain **accel_domains = NULL;
+	int num_domains, accel_rc, accel_array_size = 0;
 
 	/* Report base bdev's memory domains plus accel memory domain */
 	num_domains = spdk_bdev_get_memory_domains(crypto_bdev->base_bdev, domains, array_size);
@@ -701,7 +755,20 @@ vbdev_crypto_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, 
 		domains[num_domains] = spdk_accel_get_memory_domain();
 	}
 
-	return num_domains + 1;
+	num_domains++;
+	if (domains) {
+		if (num_domains < array_size) {
+			accel_domains = domains + num_domains;
+			accel_array_size = array_size - num_domains;
+		}
+	}
+	accel_rc = spdk_accel_get_opc_memory_domain(SPDK_ACCEL_OPC_ENCRYPT, accel_domains,
+			accel_array_size);
+	if (accel_rc > 0) {
+		num_domains += accel_rc;
+	}
+
+	return num_domains;
 }
 
 static bool
@@ -725,6 +792,7 @@ static const struct spdk_bdev_fn_table vbdev_crypto_fn_table = {
 	.dump_info_json			= vbdev_crypto_dump_info_json,
 	.get_memory_domains		= vbdev_crypto_get_memory_domains,
 	.accel_sequence_supported	= vbdev_crypto_sequence_supported,
+	.wait_for_ready			= vbdev_crypto_wait_for_ready,
 };
 
 static struct spdk_bdev_module crypto_if = {
@@ -839,6 +907,10 @@ vbdev_crypto_claim(const char *bdev_name)
 			goto error_claim;
 		}
 
+		/* Copy the reservation capabilities from the base bdev
+		 * to crypto bdev */
+		vbdev->crypto_bdev.reservation_caps = vbdev->base_bdev->reservation_caps;
+
 		rc = spdk_bdev_register(&vbdev->crypto_bdev);
 		if (rc < 0) {
 			SPDK_ERRLOG("Failed to register vbdev: error %d\n", rc);
@@ -922,12 +994,27 @@ delete_crypto_disk(const char *bdev_name, spdk_delete_crypto_complete cb_fn,
 	ctx->cb_fn = cb_fn;
 	/* Some cleanup happens in the destruct callback. */
 	rc = spdk_bdev_unregister_by_name(bdev_name, &crypto_if, delete_crypto_disk_bdev_name, ctx);
-	if (rc != 0) {
-		SPDK_ERRLOG("Encountered an error during bdev unregistration\n");
-		cb_fn(cb_arg, rc);
-		free(ctx->bdev_name);
-		free(ctx);
+	if (rc == 0) {
+		return;
 	}
+
+	if (rc == -ENODEV) {
+		struct bdev_names *name;
+
+		/* Try to find a name of a disk which is not created yet
+		 * e.g. it is waiting for base bdev to be created */
+		TAILQ_FOREACH(name, &g_bdev_names, link) {
+			if (strcmp(name->opts->vbdev_name, ctx->bdev_name) == 0) {
+				vbdev_crypto_delete_name(name);
+				rc = 0;
+				break;
+			}
+		}
+	}
+
+	cb_fn(cb_arg, rc);
+	free(ctx->bdev_name);
+	free(ctx);
 }
 
 /* Because we specified this function in our crypto bdev function table when we

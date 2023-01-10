@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include <rdma/rdma_cma.h>
@@ -9,7 +10,9 @@
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
 #include "spdk/likely.h"
+#include "spdk/accel_module.h"
 
+#include "spdk_internal/mlx5.h"
 #include "spdk_internal/rdma.h"
 #include "spdk/log.h"
 #include "spdk/util.h"
@@ -17,6 +20,12 @@
 struct spdk_rdma_mlx5_dv_qp {
 	struct spdk_rdma_qp common;
 	struct ibv_qp_ex *qpex;
+	void *mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_COUNT + 1];
+	bool supports_accel;
+};
+
+struct rdma_mlx5_dv_accel_seq_context {
+	struct spdk_mlx5_driver_io_context mlx5;
 };
 
 static int
@@ -84,6 +93,7 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 		.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
 		.pd = qp_attr->pd ? qp_attr->pd : cm_id->pd
 	};
+	const char *accel_driver;
 
 	assert(dv_qp_attr.pd);
 
@@ -123,6 +133,25 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 	}
 
 	qp_attr->cap = dv_qp_attr.cap;
+
+	accel_driver = spdk_accel_driver_get_name();
+	if (accel_driver != NULL &&
+	    strncmp(accel_driver, SPDK_MLX5_DRIVER_NAME, sizeof(SPDK_MLX5_DRIVER_NAME)) == 0) {
+		mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = spdk_mlx5_mkey_pool_get_channel(
+					qp_attr->pd, SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO);
+		mlx5_qp->supports_accel = mlx5_qp->supports_accel ||
+					  mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] != NULL;
+		mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = spdk_mlx5_mkey_pool_get_channel(
+					qp_attr->pd, SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
+		mlx5_qp->supports_accel = mlx5_qp->supports_accel ||
+					  mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] != NULL;
+		mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] =
+			spdk_mlx5_mkey_pool_get_channel(qp_attr->pd,
+							SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
+		mlx5_qp->supports_accel = mlx5_qp->supports_accel ||
+					  mlx5_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] != NULL;
+		SPDK_DEBUGLOG(rdma_prov, "mlx5 driver enabled, accel support %d\n", mlx5_qp->supports_accel);
+	}
 
 	return &mlx5_qp->common;
 }
@@ -176,6 +205,7 @@ void
 spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp)
 {
 	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
+	uint32_t i;
 	int rc;
 
 	assert(spdk_rdma_qp != NULL);
@@ -188,6 +218,13 @@ spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp)
 
 	if (!mlx5_qp->common.shared_stats) {
 		free(mlx5_qp->common.stats);
+	}
+
+	for (i = 0; i < SPDK_COUNTOF(mlx5_qp->mkey_pool_ch); i++) {
+		if (mlx5_qp->mkey_pool_ch[i]) {
+			spdk_mlx5_mkey_pool_put_channel(mlx5_qp->mkey_pool_ch[i]);
+			mlx5_qp->mkey_pool_ch[i] = NULL;
+		}
 	}
 
 	if (mlx5_qp->common.qp) {
@@ -304,4 +341,91 @@ spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_w
 	spdk_rdma_qp->stats->send.doorbell_updates++;
 
 	return rc;
+}
+
+size_t
+spdk_rdma_get_io_context_size(void)
+{
+	return sizeof(struct rdma_mlx5_dv_accel_seq_context);
+}
+
+bool
+spdk_rdma_accel_sequence_supported(struct spdk_rdma_qp *qp)
+{
+	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
+
+	mlx5_qp = SPDK_CONTAINEROF(qp, struct spdk_rdma_mlx5_dv_qp, common);
+	return mlx5_qp->supports_accel;
+}
+
+int
+spdk_rdma_accel_sequence_finish(struct spdk_rdma_qp *qp, void *_rdma_io_ctx,
+				struct spdk_accel_sequence *seq, spdk_rdma_accel_seq_cb cb_fn, void *cb_ctx)
+{
+	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
+	struct rdma_mlx5_dv_accel_seq_context *rdma_io_ctx = _rdma_io_ctx;
+
+	mlx5_qp = SPDK_CONTAINEROF(qp, struct spdk_rdma_mlx5_dv_qp, common);
+
+	if (spdk_unlikely(!mlx5_qp->supports_accel)) {
+		return -ENOTSUP;
+	}
+	rdma_io_ctx->mlx5.qp = mlx5_qp->common.qp;
+	assert(rdma_io_ctx->mlx5.mkey == NULL);
+	spdk_accel_sequence_set_driver_ctx(seq, &rdma_io_ctx->mlx5);
+
+	SPDK_DEBUGLOG(rdma_prov, "accel seq %p, driver ctx %p\n", seq, &rdma_io_ctx->mlx5);
+	spdk_accel_sequence_finish(seq, (spdk_accel_completion_cb)cb_fn, cb_ctx);
+	qp->stats->accel_sequences_executed++;
+
+	return 0;
+}
+
+int
+spdk_rdma_accel_seq_get_translation(void *_rdma_io_ctx,
+				    struct  spdk_rdma_memory_translation_ctx *translation)
+{
+	struct rdma_mlx5_dv_accel_seq_context *rdma_io_ctx = _rdma_io_ctx;
+
+	if (spdk_unlikely(!rdma_io_ctx->mlx5.mkey)) {
+		return -EINVAL;
+	}
+
+	/* When UMR is registered, address becomes and offset in the UMR address space */
+	translation->addr = NULL;
+	translation->lkey = rdma_io_ctx->mlx5.mkey->mkey;
+	translation->rkey = rdma_io_ctx->mlx5.mkey->mkey;
+
+	SPDK_DEBUGLOG(rdma_prov, "driver ctx %p, mkey %u\n", &rdma_io_ctx->mlx5,
+		      rdma_io_ctx->mlx5.mkey->mkey);
+
+	return 0;
+}
+
+int
+spdk_rdma_accel_sequence_release(struct spdk_rdma_qp *qp, void *_rdma_io_ctx)
+{
+	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
+	struct rdma_mlx5_dv_accel_seq_context *rdma_io_ctx = _rdma_io_ctx;
+
+	mlx5_qp = SPDK_CONTAINEROF(qp, struct spdk_rdma_mlx5_dv_qp, common);
+	if (spdk_unlikely(rdma_io_ctx->mlx5.mkey == NULL)) {
+		/* This function might be called in error path when accel_sequence_finish failed
+		 * and cb_fn of the sequence is called */
+		return 0;
+	}
+	assert(rdma_io_ctx->mlx5.mkey->pool_flag < SPDK_MLX5_MKEY_POOL_FLAG_COUNT + 1);
+
+	if (spdk_unlikely(mlx5_qp->mkey_pool_ch[rdma_io_ctx->mlx5.mkey->pool_flag] == NULL)) {
+		SPDK_ERRLOG("Can't find chanel for mkey pool %x\n", rdma_io_ctx->mlx5.mkey->pool_flag);
+		/* Should never happen */
+		assert(0);
+		return -EINVAL;
+	}
+
+	spdk_mlx5_mkey_pool_put_bulk(mlx5_qp->mkey_pool_ch[rdma_io_ctx->mlx5.mkey->pool_flag],
+				     &rdma_io_ctx->mlx5.mkey, 1);
+	rdma_io_ctx->mlx5.mkey = NULL;
+
+	return 0;
 }

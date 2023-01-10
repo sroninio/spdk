@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -243,6 +243,14 @@ DEFINE_STUB_V(spdk_accel_sequence_finish,
 	      (struct spdk_accel_sequence *seq, spdk_accel_completion_cb cb_fn, void *cb_arg));
 DEFINE_STUB_V(spdk_accel_sequence_abort, (struct spdk_accel_sequence *seq));
 DEFINE_STUB_V(spdk_accel_sequence_reverse, (struct spdk_accel_sequence *seq));
+
+DEFINE_STUB_V(spdk_nvme_ctrlr_prepare_for_reset, (struct spdk_nvme_ctrlr *ctrlr));
+
+DEFINE_STUB_V(spdk_nvme_zcopy_io_get_iovec, (struct spdk_nvme_zcopy_io *zcopy_io,
+		struct iovec **iovs, int *iovcnt));
+
+DEFINE_STUB(spdk_nvme_ns_cmd_zcopy_end, int, (spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+		bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io), 0);
 
 struct ut_nvme_req {
 	uint16_t			opc;
@@ -1010,6 +1018,16 @@ spdk_nvme_ns_get_csi(const struct spdk_nvme_ns *ns) {
 }
 
 int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_READ, NULL, cb_arg);
+}
+
+int
 spdk_nvme_ns_cmd_read_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer,
 			      void *metadata, uint64_t lba, uint32_t lba_count,
 			      spdk_nvme_cmd_cb cb_fn, void *cb_arg,
@@ -1110,6 +1128,51 @@ spdk_nvme_ns_cmd_copy(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
 {
 	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_COPY, cb_fn, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_reservation_register(struct spdk_nvme_ns *ns,
+				      struct spdk_nvme_qpair *qpair,
+				      struct spdk_nvme_reservation_register_data *payload,
+				      bool ignore_key,
+				      enum spdk_nvme_reservation_register_action action,
+				      enum spdk_nvme_reservation_register_cptpl cptpl,
+				      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_RESERVATION_REGISTER, cb_fn, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_reservation_acquire(struct spdk_nvme_ns *ns,
+				     struct spdk_nvme_qpair *qpair,
+				     struct spdk_nvme_reservation_acquire_data *payload,
+				     bool ignore_key,
+				     enum spdk_nvme_reservation_acquire_action action,
+				     enum spdk_nvme_reservation_type type,
+				     spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_RESERVATION_ACQUIRE, cb_fn, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_reservation_release(struct spdk_nvme_ns *ns,
+				     struct spdk_nvme_qpair *qpair,
+				     struct spdk_nvme_reservation_key_data *payload,
+				     bool ignore_key,
+				     enum spdk_nvme_reservation_release_action action,
+				     enum spdk_nvme_reservation_type type,
+				     spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_RESERVATION_RELEASE, cb_fn, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_reservation_report(struct spdk_nvme_ns *ns,
+				    struct spdk_nvme_qpair *qpair,
+				    void *payload, uint32_t len,
+				    spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_RESERVATION_REPORT, cb_fn, cb_arg);
 }
 
 struct spdk_nvme_poll_group *
@@ -7232,6 +7295,35 @@ test_delete_ctrlr_done(void)
 	CU_ASSERT(nvme_ctrlr_get_by_name("nvme0") == NULL);
 }
 
+static int
+test_setup(void)
+{
+	spdk_iobuf_initialize();
+
+	return 0;
+}
+
+static void
+iobuf_cb(void *cb_arg)
+{
+	bool *done = cb_arg;
+
+	*done = true;
+}
+
+static int
+test_cleanup(void)
+{
+	bool done = false;
+
+	spdk_iobuf_finish(iobuf_cb, &done);
+	while (!done) {
+		poll_threads();
+	}
+
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -7240,7 +7332,7 @@ main(int argc, char **argv)
 
 	CU_initialize_registry();
 
-	suite = CU_add_suite("nvme", NULL, NULL);
+	suite = CU_add_suite("nvme", test_setup, test_cleanup);
 
 	CU_ADD_TEST(suite, test_create_ctrlr);
 	CU_ADD_TEST(suite, test_reset_ctrlr);

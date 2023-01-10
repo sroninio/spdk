@@ -1,0 +1,15 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "accel",
+      "config": [
+        {
+          "method": "mlx5_scan_accel_module",
+          "params": {
+            "allowed_devs": "mlx5_0"
+          }
+        }
+      ]
+    }
+  ]
+}

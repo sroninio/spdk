@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -112,7 +113,13 @@ struct spdk_net_impl {
 	int (*get_opts)(struct spdk_sock_impl_opts *opts, size_t *len);
 	int (*set_opts)(const struct spdk_sock_impl_opts *opts, size_t len);
 
+	int (*get_caps)(struct spdk_sock *sock, struct spdk_sock_caps *caps);
+
 	STAILQ_ENTRY(spdk_net_impl) link;
+
+	ssize_t (*recv_zcopy)(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
+	int (*free_bufs)(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+	int (*init)(void);
 };
 
 void spdk_net_impl_register(struct spdk_net_impl *impl, int priority);
@@ -149,14 +156,20 @@ spdk_sock_request_pend(struct spdk_sock *sock, struct spdk_sock_request *req)
 #endif
 }
 
+static inline void
+spdk_sock_req_reset(struct spdk_sock_request *req)
+{
+	req->internal.offset = 0;
+	req->internal.is_zcopy = false;
+}
+
 static inline int
 spdk_sock_request_complete(struct spdk_sock *sock, struct spdk_sock_request *req, int err)
 {
 	bool closed;
 	int rc = 0;
 
-	req->internal.offset = 0;
-	req->internal.is_zcopy = 0;
+	spdk_sock_req_reset(req);
 
 	closed = sock->flags.closed;
 	sock->cb_cnt++;
@@ -202,6 +215,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 		req->internal.curr_list = NULL;
 #endif
 
+		spdk_sock_req_reset(req);
 		req->cb_fn(req->cb_arg, -ECANCELED);
 
 		req = TAILQ_FIRST(&sock->pending_reqs);
@@ -218,6 +232,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 		assert(sock->queued_iovcnt >= req->iovcnt);
 		sock->queued_iovcnt -= req->iovcnt;
 
+		spdk_sock_req_reset(req);
 		req->cb_fn(req->cb_arg, -ECANCELED);
 
 		req = TAILQ_FIRST(&sock->queued_reqs);
@@ -225,6 +240,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 
 	req = sock->read_req;
 	if (req != NULL) {
+		spdk_sock_req_reset(req);
 		sock->read_req = NULL;
 		req->cb_fn(req->cb_arg, -ECANCELED);
 	}

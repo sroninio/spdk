@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /*
@@ -43,7 +43,8 @@ static bool
 nvmf_discovery_compare_trtype(const struct spdk_nvme_transport_id *trid1,
 			      const struct spdk_nvme_transport_id *trid2)
 {
-	if (trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM) {
+	if (trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+	    trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) {
 		return strcasecmp(trid1->trstring, trid2->trstring) == 0;
 	} else {
 		return trid1->trtype == trid2->trtype;

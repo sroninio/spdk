@@ -1,14 +1,15 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2008-2012 Daisuke Aoyama <aoyama@peach.ne.jp>.
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
 #include "spdk/stdinc.h"
-#include "iscsi/md5.h"
+#include "spdk_internal/md5.h"
 
 int
-md5init(struct spdk_md5ctx *md5ctx)
+spdk_md5init(struct spdk_md5ctx *md5ctx)
 {
 	int rc;
 
@@ -31,7 +32,7 @@ md5init(struct spdk_md5ctx *md5ctx)
 }
 
 int
-md5final(void *md5, struct spdk_md5ctx *md5ctx)
+spdk_md5final(void *md5, struct spdk_md5ctx *md5ctx)
 {
 	int rc;
 
@@ -45,7 +46,7 @@ md5final(void *md5, struct spdk_md5ctx *md5ctx)
 }
 
 int
-md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len)
+spdk_md5update(struct spdk_md5ctx *md5ctx, const void *data, size_t len)
 {
 	int rc;
 

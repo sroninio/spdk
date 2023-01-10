@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021, 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
@@ -33,6 +33,8 @@
 
 #define SPDK_BDEV_NVME_DEFAULT_DELAY_CMD_SUBMIT true
 #define SPDK_BDEV_NVME_DEFAULT_KEEP_ALIVE_TIMEOUT_IN_MS	(10000)
+#define BDEV_NVME_IOBUF_SMALL_CACHE_SIZE		128
+#define BDEV_NVME_IOBUF_LARGE_CACHE_SIZE		64
 
 #define NSID_STR_LEN 10
 
@@ -94,6 +96,9 @@ struct nvme_bdev_io {
 
 	/* Current tsc at submit time. */
 	uint64_t submit_tsc;
+
+	/** Context for zcopy IO operation */
+	struct spdk_nvme_zcopy_io *zcopy_io;
 };
 
 struct nvme_probe_skip_entry {
@@ -129,6 +134,9 @@ static struct spdk_bdev_nvme_opts g_opts = {
 	.nvme_error_stat = false,
 	.io_path_stat = false,
 	.allow_accel_sequence = false,
+	.poll_group_requests = 0,
+	.small_cache_size = BDEV_NVME_IOBUF_SMALL_CACHE_SIZE,
+	.large_cache_size = BDEV_NVME_IOBUF_LARGE_CACHE_SIZE,
 };
 
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
@@ -165,6 +173,8 @@ static int bdev_nvme_writev(struct nvme_bdev_io *bio, struct iovec *iov, int iov
 static int bdev_nvme_zone_appendv(struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 				  void *md, uint64_t lba_count,
 				  uint64_t zslba, uint32_t flags);
+static int bdev_nvme_readv_zcopy_start(struct nvme_bdev_io *bio);
+static int bdev_nvme_readv_zcopy_end(struct nvme_bdev_io *bio);
 static int bdev_nvme_comparev(struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 			      void *md, uint64_t lba_count, uint64_t lba,
 			      uint32_t flags);
@@ -839,6 +849,11 @@ nvme_qpair_is_connected(struct nvme_qpair *nvme_qpair)
 	}
 
 	if (spdk_unlikely(nvme_qpair->ctrlr_ch->reset_iter != NULL)) {
+		return false;
+	}
+
+	if (spdk_nvme_ctrlr_get_admin_qp_failure_reason(nvme_qpair->ctrlr->ctrlr) !=
+	    SPDK_NVME_QPAIR_FAILURE_NONE) {
 		return false;
 	}
 
@@ -3044,6 +3059,13 @@ _bdev_nvme_submit_request(struct nvme_bdev_channel *nbdev_ch, struct spdk_bdev_i
 					       bdev_io->u.nvme_passthru.md_buf,
 					       bdev_io->u.nvme_passthru.md_len);
 		break;
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		if (bdev_io->u.bdev.zcopy.start) {
+			rc = bdev_nvme_readv_zcopy_start(nbdev_io);
+		} else {
+			rc = bdev_nvme_readv_zcopy_end(nbdev_io);
+		}
+		break;
 	case SPDK_BDEV_IO_TYPE_ABORT:
 		nbdev_io->io_path = NULL;
 		nbdev_io_to_abort = (struct nvme_bdev_io *)bdev_io->u.abort.bio_to_abort->driver_ctx;
@@ -3084,16 +3106,19 @@ bdev_nvme_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 	}
 
 	spdk_trace_record(TRACE_BDEV_NVME_IO_START, 0, 0, (uintptr_t)nbdev_io, (uintptr_t)bdev_io);
-	nbdev_io->io_path = bdev_nvme_find_io_path(nbdev_ch);
-	if (spdk_unlikely(!nbdev_io->io_path)) {
-		if (!bdev_nvme_io_type_is_admin(bdev_io->type)) {
-			bdev_nvme_io_complete(nbdev_io, -ENXIO);
-			return;
-		}
+	/* zcopy end must use existing path for decreasing outstanding_zcopy_reqs */
+	if (bdev_io->type != SPDK_BDEV_IO_TYPE_ZCOPY || bdev_io->u.bdev.zcopy.start) {
+		nbdev_io->io_path = bdev_nvme_find_io_path(nbdev_ch);
+		if (spdk_unlikely(!nbdev_io->io_path)) {
+			if (!bdev_nvme_io_type_is_admin(bdev_io->type)) {
+				bdev_nvme_io_complete(nbdev_io, -ENXIO);
+				return;
+			}
 
-		/* Admin commands do not use the optimal I/O path.
-		 * Simply fall through even if it is not found.
-		 */
+			/* Admin commands do not use the optimal I/O path.
+			 * Simply fall through even if it is not found.
+			 */
+		}
 	}
 
 	_bdev_nvme_submit_request(nbdev_ch, bdev_io);
@@ -3122,6 +3147,10 @@ bdev_nvme_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	case SPDK_BDEV_IO_TYPE_NVME_IO:
 	case SPDK_BDEV_IO_TYPE_ABORT:
 		return true;
+
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		/* @todo: with multipath all controllers must be checked */
+		return spdk_nvme_ctrlr_get_flags(ctrlr) & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED;
 
 	case SPDK_BDEV_IO_TYPE_COMPARE:
 		return spdk_nvme_ns_supports_compare(ns);
@@ -3295,15 +3324,6 @@ bdev_nvme_destroy_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 static inline struct spdk_io_channel *
 bdev_nvme_get_accel_channel(struct nvme_poll_group *group)
 {
-	if (spdk_unlikely(!group->accel_channel)) {
-		group->accel_channel = spdk_accel_get_io_channel();
-		if (!group->accel_channel) {
-			SPDK_ERRLOG("Cannot get the accel_channel for bdev nvme polling group=%p\n",
-				    group);
-			return NULL;
-		}
-	}
-
 	return group->accel_channel;
 }
 
@@ -3332,6 +3352,22 @@ bdev_nvme_submit_accel_crc32c(void *ctx, uint32_t *dst, struct iovec *iov,
 		}
 		SPDK_ERRLOG("Cannot complete the accelerated crc32c operation with iov=%p\n", iov);
 	}
+}
+
+static inline struct spdk_io_channel *
+_bdev_nvme_get_accel_channel(void *ctx)
+{
+	struct nvme_poll_group *group = ctx;
+
+	return bdev_nvme_get_accel_channel(group);
+}
+
+static struct spdk_iobuf_channel *
+bdev_nvme_get_iobuf_ch(void *ctx)
+{
+	struct nvme_poll_group *group = ctx;
+
+	return &group->iobuf;
 }
 
 static void
@@ -3372,6 +3408,8 @@ bdev_nvme_append_crc32c(void *ctx, void **seq, uint32_t *dst, struct iovec *iovs
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
+	.get_accel_channel	= _bdev_nvme_get_accel_channel,
+	.get_iobuf_channel	= bdev_nvme_get_iobuf_ch,
 	.append_crc32c		= bdev_nvme_append_crc32c,
 	.finish_sequence	= bdev_nvme_finish_sequence,
 	.reverse_sequence	= bdev_nvme_reverse_sequence,
@@ -3382,6 +3420,7 @@ static int
 bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 {
 	struct nvme_poll_group *group = ctx_buf;
+	int rc;
 
 	TAILQ_INIT(&group->qpair_list);
 
@@ -3390,9 +3429,28 @@ bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 		return -1;
 	}
 
+	rc = spdk_iobuf_channel_init(&group->iobuf, "nvme", g_opts.small_cache_size,
+				     g_opts.large_cache_size);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init iobuf\n");
+		spdk_nvme_poll_group_destroy(group->group);
+		return -1;
+	}
+
+	group->accel_channel = spdk_accel_get_io_channel();
+	if (!group->accel_channel) {
+		spdk_nvme_poll_group_destroy(group->group);
+		spdk_iobuf_channel_fini(&group->iobuf);
+		SPDK_ERRLOG("Cannot get the accel_channel for bdev nvme polling group=%p\n",
+			    group);
+		return -1;
+	}
+
 	group->poller = SPDK_POLLER_REGISTER(bdev_nvme_poll, group, g_opts.nvme_ioq_poll_period_us);
 
 	if (group->poller == NULL) {
+		spdk_put_io_channel(group->accel_channel);
+		spdk_iobuf_channel_fini(&group->iobuf);
 		spdk_nvme_poll_group_destroy(group->group);
 		return -1;
 	}
@@ -3410,6 +3468,8 @@ bdev_nvme_destroy_poll_group_cb(void *io_device, void *ctx_buf)
 	if (group->accel_channel) {
 		spdk_put_io_channel(group->accel_channel);
 	}
+
+	spdk_iobuf_channel_fini(&group->iobuf);
 
 	spdk_poller_unregister(&group->poller);
 	if (spdk_nvme_poll_group_destroy(group->group)) {
@@ -4034,6 +4094,7 @@ nvme_disk_create(struct spdk_bdev *disk, const char *base_name,
 	disk->blocklen = spdk_nvme_ns_get_extended_sector_size(ns);
 	disk->blockcnt = spdk_nvme_ns_get_num_sectors(ns);
 	disk->max_segment_size = spdk_nvme_ctrlr_get_max_xfer_size(ctrlr);
+	disk->max_rw_size = (disk->max_segment_size / disk->blocklen);
 	/* NVMe driver will split one request into multiple requests
 	 * based on MDTS and stripe boundary, the bdev layer will use
 	 * max_segment_size and max_num_segments to split one big IO
@@ -4588,6 +4649,11 @@ nvme_ctrlr_populate_namespaces(struct nvme_ctrlr *nvme_ctrlr,
 		if (spdk_nvme_ctrlr_is_active_ns(ctrlr, nvme_ns->id)) {
 			/* NS is still there but attributes may have changed */
 			ns = spdk_nvme_ctrlr_get_ns(ctrlr, nvme_ns->id);
+			if (nvme_ns->ns != ns) {
+				SPDK_NOTICELOG("NSID %u was reconstructed while reconnect\n", nvme_ns->id);
+				nvme_ns->ns = ns;
+			}
+
 			num_sectors = spdk_nvme_ns_get_num_sectors(ns);
 			bdev = nvme_ns->bdev;
 			assert(bdev != NULL);
@@ -5528,6 +5594,7 @@ bdev_nvme_validate_opts(const struct spdk_bdev_nvme_opts *opts)
 int
 bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts)
 {
+	struct spdk_nvme_transport_opts drv_opts;
 	int ret;
 
 	ret = bdev_nvme_validate_opts(opts);
@@ -5542,23 +5609,27 @@ bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts)
 		}
 	}
 
-	if (opts->rdma_srq_size != 0 ||
-	    opts->rdma_max_cq_size != 0) {
-		struct spdk_nvme_transport_opts drv_opts;
+	spdk_nvme_transport_get_opts(&drv_opts, sizeof(drv_opts));
+	if (opts->rdma_srq_size != 0) {
+		drv_opts.rdma_srq_size = opts->rdma_srq_size;
+	}
 
-		spdk_nvme_transport_get_opts(&drv_opts, sizeof(drv_opts));
-		if (opts->rdma_srq_size != 0) {
-			drv_opts.rdma_srq_size = opts->rdma_srq_size;
-		}
-		if (opts->rdma_max_cq_size != 0) {
-			drv_opts.rdma_max_cq_size = opts->rdma_max_cq_size;
-		}
+	if (opts->rdma_max_cq_size != 0) {
+		drv_opts.rdma_max_cq_size = opts->rdma_max_cq_size;
+	}
 
-		ret = spdk_nvme_transport_set_opts(&drv_opts, sizeof(drv_opts));
-		if (ret) {
-			SPDK_ERRLOG("Failed to set NVMe transport opts.\n");
-			return ret;
-		}
+	if (opts->poll_group_requests != 0) {
+		drv_opts.poll_group_requests = opts->poll_group_requests;
+	}
+
+	if (opts->rdma_cm_event_timeout_ms != 0) {
+		drv_opts.rdma_cm_event_timeout_ms = opts->rdma_cm_event_timeout_ms;
+	}
+
+	ret = spdk_nvme_transport_set_opts(&drv_opts, sizeof(drv_opts));
+	if (ret) {
+		SPDK_ERRLOG("Failed to set NVMe transport opts.\n");
+		return ret;
 	}
 
 	g_opts = *opts;
@@ -6932,6 +7003,7 @@ bdev_nvme_library_init(void)
 {
 	g_bdev_nvme_init_thread = spdk_get_thread();
 
+	spdk_iobuf_register_module("nvme");
 	spdk_io_device_register(&g_nvme_bdev_ctrlrs, bdev_nvme_create_poll_group_cb,
 				bdev_nvme_destroy_poll_group_cb,
 				sizeof(struct nvme_poll_group),  "nvme_poll_groups");
@@ -7062,6 +7134,50 @@ bdev_nvme_no_pi_readv_done(void *ref, const struct spdk_nvme_cpl *cpl)
 
 	/* Return original completion status */
 	bdev_nvme_io_complete_nvme_status(bio, &bio->cpl);
+}
+
+static void
+bdev_nvme_readv_zcopy_start_done(void *ref,
+				 const struct spdk_nvme_cpl *cpl,
+				 struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	struct nvme_bdev_io *bio = ref;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	struct iovec *iovs;
+	int iovcnt;
+
+	/* @todo: in other IO types completion we handle path errors and do path switch.
+	 * Should we do something similar here?
+	 */
+	if (spdk_unlikely(spdk_nvme_cpl_is_pi_error(cpl))) {
+		/* TODO: handle error case */
+		SPDK_ERRLOG("readv completed with PI error (sct=%d, sc=%d)\n",
+			    cpl->status.sct, cpl->status.sc);
+		spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+		return;
+	}
+
+	spdk_nvme_zcopy_io_get_iovec(zcopy_io, &iovs, &iovcnt);
+
+	assert(bdev_io->u.bdev.iovs == NULL);
+	assert(bdev_io->u.bdev.iovcnt == 0);
+
+	bdev_io->u.bdev.iovs = iovs;
+	bdev_io->u.bdev.iovcnt = iovcnt;
+	bio->zcopy_io = zcopy_io;
+
+	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+}
+
+static void
+bdev_nvme_readv_zcopy_end_done(void *ref,
+			       const struct spdk_nvme_cpl *cpl,
+			       struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	struct nvme_bdev_io *bio = ref;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+
+	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
 }
 
 static void
@@ -7472,6 +7588,48 @@ bdev_nvme_no_pi_readv(struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt,
 
 	if (rc != 0 && rc != -ENOMEM) {
 		SPDK_ERRLOG("no_pi_readv failed: rc = %d\n", rc);
+	}
+	return rc;
+}
+
+static int
+bdev_nvme_readv_zcopy_end(struct nvme_bdev_io *bio)
+{
+	int rc;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	bool commit = bdev_io->u.bdev.zcopy.commit;
+
+	rc = spdk_nvme_ns_cmd_zcopy_end(bdev_nvme_readv_zcopy_end_done,
+					bio, commit, bio->zcopy_io);
+
+	if (rc != 0) {
+		SPDK_ERRLOG("readv zcopy end failed: rc = %d\n", rc);
+	}
+	return rc;
+}
+
+static int
+bdev_nvme_readv_zcopy_start(struct nvme_bdev_io *bio)
+{
+	int rc;
+	struct spdk_nvme_ns *ns = bio->io_path->nvme_ns->ns;
+	struct spdk_nvme_qpair *qpair = bio->io_path->qpair->qpair;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	uint64_t lba_count = bdev_io->u.bdev.num_blocks;
+	uint64_t lba = bdev_io->u.bdev.offset_blocks;
+	uint32_t flags = bdev_io->bdev->dif_check_flags;
+
+	SPDK_DEBUGLOG(bdev_nvme, "zcopy read %" PRIu64 " blocks with offset %#" PRIx64 "\n",
+		      lba_count, lba);
+
+	/* TODO: md_buf will be handled later */
+	rc = spdk_nvme_ns_cmd_zcopy_start(ns, qpair, lba, lba_count,
+					  bdev_nvme_readv_zcopy_start_done, bio,
+					  flags, bdev_io->u.bdev.zcopy.populate,
+					  0, 0);
+
+	if (rc != 0 && rc != -ENOMEM) {
+		SPDK_ERRLOG("readv zcopy start failed: rc = %d\n", rc);
 	}
 	return rc;
 }
@@ -8036,10 +8194,17 @@ bdev_nvme_opts_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_int32(w, "ctrlr_loss_timeout_sec", g_opts.ctrlr_loss_timeout_sec);
 	spdk_json_write_named_uint32(w, "reconnect_delay_sec", g_opts.reconnect_delay_sec);
 	spdk_json_write_named_uint32(w, "fast_io_fail_timeout_sec", g_opts.fast_io_fail_timeout_sec);
+	spdk_json_write_named_bool(w, "disable_auto_failback", g_opts.disable_auto_failback);
 	spdk_json_write_named_bool(w, "generate_uuids", g_opts.generate_uuids);
 	spdk_json_write_named_uint8(w, "transport_tos", g_opts.transport_tos);
+	spdk_json_write_named_bool(w, "nvme_error_stat", g_opts.nvme_error_stat);
 	spdk_json_write_named_bool(w, "io_path_stat", g_opts.io_path_stat);
 	spdk_json_write_named_bool(w, "allow_accel_sequence", g_opts.allow_accel_sequence);
+	spdk_json_write_named_uint32(w, "poll_group_requests", g_opts.poll_group_requests);
+	spdk_json_write_named_uint32(w, "small_cache_size", g_opts.small_cache_size);
+	spdk_json_write_named_uint32(w, "large_cache_size", g_opts.large_cache_size);
+	spdk_json_write_named_uint32(w, "rdma_srq_size", g_opts.rdma_srq_size);
+	spdk_json_write_named_uint16(w, "rdma_cm_event_timeout_ms", g_opts.rdma_cm_event_timeout_ms);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);

@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation. All rights reserved.
  *   Copyright (c) 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /*
@@ -1383,15 +1383,19 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	uint32_t remaining_transfer_len, remaining_user_sge_len, length;
 	struct spdk_nvme_sgl_descriptor *sgl;
 	uint32_t nseg = 0;
+	int iov_idx = 0;
+	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
 	/*
 	 * Build scattered payloads.
 	 */
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	assert(req->payload.reset_sgl_fn != NULL);
-	assert(req->payload.next_sge_fn != NULL);
-	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+	if (!use_iovs) {
+		assert(req->payload.reset_sgl_fn != NULL);
+		assert(req->payload.next_sge_fn != NULL);
+		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+	}
 
 	sgl = tr->u.sgl;
 	req->cmd.psdt = SPDK_NVME_PSDT_SGL_MPTR_CONTIG;
@@ -1400,11 +1404,17 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	remaining_transfer_len = req->payload_size;
 
 	while (remaining_transfer_len > 0) {
-		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg,
-					      &virt_addr, &remaining_user_sge_len);
-		if (rc) {
-			nvme_pcie_fail_request_bad_vtophys(qpair, tr);
-			return -EFAULT;
+		if (!use_iovs) {
+			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg,
+						      &virt_addr, &remaining_user_sge_len);
+			if (rc) {
+				nvme_pcie_fail_request_bad_vtophys(qpair, tr);
+				return -EFAULT;
+			}
+		} else {
+			assert(iov_idx < req->payload.opts->iovcnt);
+			virt_addr = req->payload.opts->iov[iov_idx].iov_base;
+			remaining_user_sge_len = req->payload.opts->iov[iov_idx++].iov_len;
 		}
 
 		/* Bit Bucket SGL descriptor */
@@ -1515,22 +1525,33 @@ nvme_pcie_qpair_build_prps_sgl_request(struct spdk_nvme_qpair *qpair, struct nvm
 	void *virt_addr;
 	uint32_t remaining_transfer_len, length;
 	uint32_t prp_index = 0;
+	int iov_idx = 0;
 	uint32_t page_size = qpair->ctrlr->page_size;
+	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
 	/*
 	 * Build scattered payloads.
 	 */
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	assert(req->payload.reset_sgl_fn != NULL);
-	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+
+	if (!use_iovs) {
+		assert(req->payload.reset_sgl_fn != NULL);
+		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+	}
 
 	remaining_transfer_len = req->payload_size;
 	while (remaining_transfer_len > 0) {
-		assert(req->payload.next_sge_fn != NULL);
-		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &virt_addr, &length);
-		if (rc) {
-			nvme_pcie_fail_request_bad_vtophys(qpair, tr);
-			return -EFAULT;
+		if (!use_iovs) {
+			assert(req->payload.next_sge_fn != NULL);
+			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &virt_addr, &length);
+			if (rc) {
+				nvme_pcie_fail_request_bad_vtophys(qpair, tr);
+				return -EFAULT;
+			}
+		} else {
+			assert(iov_idx < req->payload.opts->iovcnt);
+			virt_addr = req->payload.opts->iov[iov_idx].iov_base;
+			length = req->payload.opts->iov[iov_idx++].iov_len;
 		}
 
 		length = spdk_min(remaining_transfer_len, length);
@@ -1705,9 +1726,17 @@ struct spdk_nvme_transport_poll_group *
 nvme_pcie_poll_group_create(void)
 {
 	struct nvme_pcie_poll_group *group = calloc(1, sizeof(*group));
+	int rc;
 
 	if (group == NULL) {
 		SPDK_ERRLOG("Unable to allocate poll group.\n");
+		return NULL;
+	}
+
+	rc = nvme_transport_poll_group_init(&group->group,
+					    g_spdk_nvme_transport_opts.poll_group_requests);
+	if (rc != 0) {
+		free(group);
 		return NULL;
 	}
 
@@ -1775,6 +1804,7 @@ nvme_pcie_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 		return -EBUSY;
 	}
 
+	nvme_transport_poll_group_deinit(tgroup);
 	free(tgroup);
 
 	return 0;
