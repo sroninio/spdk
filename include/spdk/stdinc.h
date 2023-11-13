@@ -77,8 +77,8 @@ extern "C" {
 #include <sched.h>
 #endif
 
-/* FreeBSD */
-#ifdef __FreeBSD__
+/* FreeBSD or Linux */
+#if defined(__FreeBSD__) || defined(__linux__)
 #include <aio.h>
 #endif
 
