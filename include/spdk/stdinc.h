@@ -66,6 +66,7 @@ extern "C" {
 #include <regex.h>
 #include <dlfcn.h>
 #include <execinfo.h>
+#include <sys/statvfs.h>
 
 /* GNU extension */
 #include <getopt.h>
