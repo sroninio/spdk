@@ -45,6 +45,19 @@ DPDK_OPTS += -Db_lto=true
 endif
 endif
 
+ifeq ($(CONFIG_PGO_CAPTURE),y)
+DPDK_OPTS += -Db_pgo=generate
+endif
+
+ifeq ($(CONFIG_PGO_USE),y)
+DPDK_OPTS += -Db_pgo=use
+endif
+
+ifneq ($(CONFIG_PGO_DIR),)
+DPDK_CFLAGS += -fprofile-dir=$(CONFIG_PGO_DIR)
+DPDK_LDFLAGS += -fprofile-dir=$(CONFIG_PGO_DIR)
+endif
+
 # the drivers we use
 DPDK_DRIVERS = bus bus/pci bus/vdev mempool/ring
 
@@ -204,7 +217,7 @@ MAKE_NUMJOBS := $(shell ps T | sed -nE 's/[[:space:]]*$(MAKE_PID)[[:space:]].* (
 
 all: $(SPDK_ROOT_DIR)/dpdk/build-tmp
 	$(Q)# DPDK doesn't handle nested make calls, so unset MAKEFLAGS
-	$(Q)env -u MAKEFLAGS meson compile -C $(SPDK_ROOT_DIR)/dpdk/build-tmp $(MAKE_NUMJOBS)
+	$(Q)env -u MAKEFLAGS meson compile -C $(SPDK_ROOT_DIR)/dpdk/build-tmp
 	$(Q) \
 	# Meson on FreeBSD sometimes appends --prefix value to the default DESTDIR (which is e.g. \
 	# /usr/local) instead of replacing it. --prefix needs to be an absolute path, so we set \
