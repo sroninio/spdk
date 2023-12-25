@@ -48,9 +48,11 @@
 #endif
 
 #define NVME_TCP_MAX_R2T_DEFAULT		1
+#define DEFAULT_ZCOPY_THRESHOLD			512
 
 struct xlio_sock_packet {
-	struct xlio_socketxtreme_packet_desc_t xlio_packet;
+	struct xlio_buf *xlio_buf;
+	struct iovec iov;
 	int refs;
 	bool from_malloc;
 	STAILQ_ENTRY(xlio_sock_packet) link;
@@ -61,35 +63,21 @@ struct xlio_sock_buf {
 	struct xlio_sock_packet *packet;
 };
 
-struct spdk_xlio_ring_fd {
-	int			ring_fd;
-	int			refs;
-	TAILQ_ENTRY(spdk_xlio_ring_fd)	link;
-};
-
 struct spdk_xlio_sock {
-	/* TODO: do we need both link and link_send entries? */
 	TAILQ_ENTRY(spdk_xlio_sock)	link;
-	TAILQ_ENTRY(spdk_xlio_sock)	link_send;
-	TAILQ_HEAD(, nvme_tcp_pdu)	queued_pdus;
-	TAILQ_HEAD(, nvme_tcp_pdu)	pending_pdus;
 	STAILQ_HEAD(, xlio_sock_packet)	received_packets;
 
 	struct xlio_packets_pool	*xlio_packets_pool;
-	struct xlio_buff_t		*cur_xlio_buf;
 	struct spdk_xlio_sock_group_impl *group_impl;
 	struct ibv_pd			*pd;
 
-	int				fd;
-	uint32_t			sendmsg_idx;
+	xlio_socket_t			xlio_sock;
 	uint16_t			consumed_packets;
-	uint16_t			cur_offset;
+	size_t				cur_offset;
 	union {
 		struct {
 			uint8_t pending_recv: 1;
 			uint8_t pending_send: 1;
-			uint8_t zcopy: 1;
-			uint8_t recv_zcopy: 1;
 			uint8_t disconnected: 1;
 			uint8_t closed: 1;
 			uint8_t connect_notified: 1;
@@ -97,27 +85,22 @@ struct spdk_xlio_sock {
 		} flags;
 		uint8_t flags_raw;
 	};
-	uint8_t			queued_iovcnt;
 
 	/* "Cold" data starts here */
-	uint64_t			batch_start_tsc;
-	struct spdk_xlio_ring_fd	*ring_fd;
-	int				batch_nr;
 };
 
-SPDK_STATIC_ASSERT(SPDK_SIZEOF_MEMBER(struct xlio_buff_t,
-				      len) <= SPDK_SIZEOF_MEMBER(struct spdk_xlio_sock, cur_offset),
-		   "type of xlio_buff_t::len changed, update sock::cur_offset");
-
-SPDK_STATIC_ASSERT(IOV_BATCH_SIZE <= UINT8_MAX,
-		   "Type of spdk_xlio_sock::queued_iovcnt must be extended");
-
 struct spdk_xlio_sock_group_impl {
-	TAILQ_HEAD(, spdk_xlio_ring_fd)	ring_fd;
+	xlio_poll_group_t		group;
 	TAILQ_HEAD(pending_recv_head, spdk_xlio_sock)	pending_recv;
-	TAILQ_HEAD(, spdk_xlio_sock)	pending_send;
 	struct xlio_packets_pool	*xlio_packets_pool;
 	struct spdk_sock_impl_opts	impl_opts;
+	union {
+		struct {
+			uint8_t		pp_handler_registered: 1;
+			uint8_t		reserved: 7;
+		} flags;
+		uint8_t			raw;
+	};
 };
 
 /* xlio packets pool for each core */
@@ -257,6 +240,24 @@ struct nvme_tcp_req {
 	struct iovec				iovs[NVME_TCP_MAX_SGL_DESCRIPTORS];
 };
 
+struct nvme_tcp_poll_group {
+	struct spdk_nvme_transport_poll_group group;
+	struct spdk_xlio_sock_group_impl xlio_group;
+	uint32_t completions_per_qpair;
+	int64_t num_completions;
+
+	void *tcp_reqs;
+	TAILQ_HEAD(, nvme_tcp_pdu) free_pdus;
+	void *recv_pdus;
+	TAILQ_HEAD(, nvme_tcp_qpair) needs_poll;
+	struct spdk_nvme_tcp_stat stats;
+};
+
+struct xlio_shared_group {
+	xlio_poll_group_t xlio_group;
+	int refs;
+};
+
 SPDK_STATIC_ASSERT(NVME_TCP_MAX_R2T_DEFAULT <= UINT8_MAX,
 		   "type of active_r2ts needs to be extended");
 
@@ -264,14 +265,16 @@ static pthread_mutex_t g_xlio_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 static STAILQ_HEAD(, xlio_packets_pool) g_xlio_packets_pools = STAILQ_HEAD_INITIALIZER(
 			g_xlio_packets_pools);
 static struct spdk_mempool *g_xlio_buffers_pool;
+static pthread_mutex_t g_xlio_admin_group_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct xlio_shared_group g_xlio_admin_group;
 
-static int xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll);
-static inline int xlio_sock_flush_ext(struct spdk_xlio_sock *vsock);
-static void xlio_sock_close(struct spdk_xlio_sock *sock);
+static int xlio_sock_close(struct spdk_xlio_sock *sock);
 static void _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err);
 static inline int nvme_tcp_fill_data_mkeys(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_req *tcp_req, struct nvme_tcp_pdu *pdu);
 static void nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair);
+static void nvme_tcp_qpair_connect_sock_done(struct spdk_xlio_sock *vsock, int err);
+static int xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags);
 
 static void
 xlio_sock_free_pools(void)
@@ -284,35 +287,6 @@ xlio_sock_free_pools(void)
 	}
 
 	spdk_mempool_free(g_xlio_buffers_pool);
-}
-
-static int
-get_addr_str(struct sockaddr *sa, char *host, size_t hlen)
-{
-	const char *result = NULL;
-
-	if (sa == NULL || host == NULL) {
-		return -1;
-	}
-
-	switch (sa->sa_family) {
-	case AF_INET:
-		result = inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr),
-				   host, hlen);
-		break;
-	case AF_INET6:
-		result = inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr),
-				   host, hlen);
-		break;
-	default:
-		break;
-	}
-
-	if (result != NULL) {
-		return 0;
-	} else {
-		return -1;
-	}
 }
 
 static int
@@ -337,134 +311,12 @@ xlio_sock_set_recvbuf(struct spdk_xlio_sock *sock, int sz)
 		sz = min_size;
 	}
 
-	rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
+	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc < 0) {
 		return rc;
 	}
 
 	return 0;
-}
-
-static inline struct ibv_pd *
-xlio_get_pd(int fd)
-{
-	struct xlio_pd_attr pd_attr_ptr = {};
-	socklen_t len = sizeof(pd_attr_ptr);
-
-	int err = xlio_getsockopt(fd, SOL_SOCKET, SO_XLIO_PD, &pd_attr_ptr, &len);
-	if (err < 0) {
-		return NULL;
-	}
-	return pd_attr_ptr.ib_pd;
-}
-
-static inline void
-xlio_sock_req_reset(struct nvme_tcp_pdu *pdu)
-{
-	pdu->rw_offset = 0;
-	pdu->is_zcopy = false;
-}
-
-static inline void
-xlio_sock_request_complete(struct spdk_xlio_sock *sock, struct nvme_tcp_pdu *pdu, int err)
-{
-	struct nvme_tcp_qpair *tqpair;
-	bool in_complete_cb;
-
-	tqpair = SPDK_CONTAINEROF(sock, struct nvme_tcp_qpair, sock);
-
-	xlio_sock_req_reset(pdu);
-
-	in_complete_cb = sock->flags.in_complete_cb;
-	sock->flags.in_complete_cb = 1;
-	_pdu_write_done(tqpair, pdu, err);
-	assert(sock->flags.in_complete_cb == 1);
-	sock->flags.in_complete_cb = in_complete_cb;
-}
-
-
-static inline void
-xlio_sock_request_put(struct spdk_xlio_sock *sock, struct nvme_tcp_pdu *pdu, int err)
-{
-	assert(pdu->curr_list == &sock->pending_pdus);
-	TAILQ_REMOVE(&sock->pending_pdus, pdu, link);
-#ifdef DEBUG
-	pdu->curr_list = NULL;
-#endif
-	xlio_sock_request_complete(sock, pdu, err);
-}
-
-static inline void
-xlio_sock_abort_requests(struct spdk_xlio_sock *sock)
-{
-	struct nvme_tcp_pdu *pdu;
-	struct nvme_tcp_qpair *tqpair;
-	bool in_complete_cb;
-
-	in_complete_cb = sock->flags.in_complete_cb;
-	sock->flags.in_complete_cb = 1;
-	tqpair = SPDK_CONTAINEROF(sock, struct nvme_tcp_qpair, sock);
-
-	pdu = TAILQ_FIRST(&sock->pending_pdus);
-	while (pdu) {
-		assert(pdu->curr_list == &sock->pending_pdus);
-		TAILQ_REMOVE(&sock->pending_pdus, pdu, link);
-#ifdef DEBUG
-		pdu->curr_list = NULL;
-#endif
-
-		xlio_sock_req_reset(pdu);
-		_pdu_write_done(tqpair, pdu, -ECANCELED);
-		pdu = TAILQ_FIRST(&sock->pending_pdus);
-	}
-
-	pdu = TAILQ_FIRST(&sock->queued_pdus);
-	while (pdu) {
-		assert(pdu->curr_list == &sock->queued_pdus);
-		TAILQ_REMOVE(&sock->queued_pdus, pdu, link);
-#ifdef DEBUG
-		pdu->curr_list = NULL;
-#endif
-
-		assert(sock->queued_iovcnt >= pdu->iovcnt);
-		sock->queued_iovcnt -= pdu->iovcnt;
-
-		xlio_sock_req_reset(pdu);
-		_pdu_write_done(tqpair, pdu, -ECANCELED);
-		pdu = TAILQ_FIRST(&sock->queued_pdus);
-	}
-
-	assert(sock->flags.in_complete_cb == 1);
-	sock->flags.in_complete_cb = in_complete_cb;
-
-	assert(TAILQ_EMPTY(&sock->queued_pdus));
-	assert(TAILQ_EMPTY(&sock->pending_pdus));
-}
-
-static inline void
-xlio_sock_request_pend(struct spdk_xlio_sock *sock, struct nvme_tcp_pdu *pdu)
-{
-	assert(pdu->curr_list == &sock->queued_pdus);
-	TAILQ_REMOVE(&sock->queued_pdus, pdu, link);
-	assert(sock->queued_iovcnt >= pdu->iovcnt);
-	sock->queued_iovcnt -= pdu->iovcnt;
-	TAILQ_INSERT_TAIL(&sock->pending_pdus, pdu, link);
-#ifdef DEBUG
-	pdu->curr_list = &sock->pending_pdus;
-#endif
-}
-
-
-static inline void
-xlio_sock_request_queue(struct spdk_xlio_sock *sock, struct nvme_tcp_pdu *pdu)
-{
-	assert(pdu->curr_list == NULL);
-	TAILQ_INSERT_TAIL(&sock->queued_pdus, pdu, link);
-#ifdef DEBUG
-	pdu->curr_list = &sock->queued_pdus;
-#endif
-	SPDK_DEBUGLOG(nvme_xlio, "sock %p, pdu %p, iovs %u\n", sock, pdu, pdu->iovcnt);
-	sock->queued_iovcnt += pdu->iovcnt;
 }
 
 static int
@@ -540,25 +392,12 @@ fail:
 }
 
 static int
-xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
-		struct spdk_sock_impl_opts *xlio_opts)
+xlio_sock_alloc(struct spdk_xlio_sock *sock, struct spdk_sock_impl_opts *xlio_opts)
 {
 	int flag = 1;
 	int rc;
 
-	sock->fd = fd;
-
-	if (enable_zero_copy) {
-		/* Try to turn on zero copy sends */
-		rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
-		if (rc == 0) {
-			sock->flags.zcopy = true;
-		} else {
-			SPDK_WARNLOG("Zcopy send is not supported\n");
-		}
-	}
-
-	sock->pd = xlio_get_pd(fd);
+	sock->pd = xlio_socket_get_pd(sock->xlio_sock);
 	if (!sock->pd) {
 		SPDK_ERRLOG("Failed to get pd\n");
 		return -ENODEV;
@@ -566,124 +405,41 @@ xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
 
 	sock->xlio_packets_pool = xlio_sock_get_packets_pool(xlio_opts->packets_pool_size);
 	if (!sock->xlio_packets_pool) {
-		SPDK_ERRLOG("Failed to allocated packets pool for socket %d\n", fd);
+		SPDK_ERRLOG("Failed to allocated packets pool for socket %p\n", sock);
 		return -ENOMEM;
 	}
 
-	if (xlio_opts->enable_zerocopy_recv) {
-		uint64_t user_data = (uintptr_t)sock;
+	STAILQ_INIT(&sock->received_packets);
 
-		sock->flags.recv_zcopy = true;
-		STAILQ_INIT(&sock->received_packets);
-
-		if (xlio_sock_alloc_buffers_pool(xlio_opts->buffers_pool_size)) {
-			return -ENOMEM;
-		}
-
-		rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_XLIO_USER_DATA,
-				     &user_data, sizeof(user_data));
-		if (rc != 0) {
-			SPDK_ERRLOG("Failed to set socket user data for sock %p: rc %d, errno %d\n",
-				    sock, rc, errno);
-			return rc;
-		}
+	if (xlio_sock_alloc_buffers_pool(xlio_opts->buffers_pool_size)) {
+		return -ENOMEM;
 	}
 
 #if defined(__linux__)
 	flag = 1;
 
 	if (xlio_opts->enable_quickack) {
-		rc = xlio_setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
+		rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
 	}
 #endif
 
-	TAILQ_INIT(&sock->queued_pdus);
-	TAILQ_INIT(&sock->pending_pdus);
-
-	return 0;
-}
-
-static bool
-sock_is_loopback(int fd)
-{
-	struct ifaddrs *addrs, *tmp;
-	struct sockaddr_storage sa = {};
-	socklen_t salen;
-	struct ifreq ifr = {};
-	char ip_addr[256], ip_addr_tmp[256];
-	int rc;
-	bool is_loopback = false;
-
-	salen = sizeof(sa);
-	rc = xlio_getsockname(fd, (struct sockaddr *)&sa, &salen);
-	if (rc != 0) {
-		return is_loopback;
-	}
-
-	memset(ip_addr, 0, sizeof(ip_addr));
-	rc = get_addr_str((struct sockaddr *)&sa, ip_addr, sizeof(ip_addr));
-	if (rc != 0) {
-		return is_loopback;
-	}
-
-	getifaddrs(&addrs);
-	for (tmp = addrs; tmp != NULL; tmp = tmp->ifa_next) {
-		if (tmp->ifa_addr && (tmp->ifa_flags & IFF_UP) &&
-		    (tmp->ifa_addr->sa_family == sa.ss_family)) {
-			memset(ip_addr_tmp, 0, sizeof(ip_addr_tmp));
-			rc = get_addr_str(tmp->ifa_addr, ip_addr_tmp, sizeof(ip_addr_tmp));
-			if (rc != 0) {
-				continue;
-			}
-
-			if (strncmp(ip_addr, ip_addr_tmp, sizeof(ip_addr)) == 0) {
-				memcpy(ifr.ifr_name, tmp->ifa_name, sizeof(ifr.ifr_name));
-				xlio_ioctl(fd, SIOCGIFFLAGS, &ifr);
-				if (ifr.ifr_flags & IFF_LOOPBACK) {
-					is_loopback = true;
-				}
-				goto end;
-			}
-		}
-	}
-
-end:
-	freeifaddrs(addrs);
-	return is_loopback;
-}
-
-static int
-xlio_sock_set_nonblock(int fd)
-{
-	int flag;
-
-	flag = xlio_fcntl(fd, F_GETFL);
-	if (xlio_fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
-		SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n",
-			    fd, errno);
-		return -1;
-	}
-
 	return 0;
 }
 
 static int
 xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spdk_sock_opts *opts,
-	       bool isolate, int vlan_tag)
+	       xlio_poll_group_t group, int vlan_tag)
 {
 	struct spdk_sock_impl_opts *xlio_opts;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
 	char *p;
 	struct addrinfo hints, *res, *res0;
-	int fd;
 	int val = 1;
 	int rc, sz;
-	bool enable_zcopy_user_opts = true;
-	bool enable_zcopy_impl_opts = true;
 
 	if (!opts && !opts->impl_opts) {
 		return -EINVAL;
@@ -716,66 +472,65 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 	}
 
 	/* try listen */
-	fd = -1;
 	for (res = res0; res != NULL; res = res->ai_next) {
-		fd = xlio_socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-		if (fd < 0) {
+		struct xlio_socket_attr sattr = {
+			.domain = res->ai_family,
+			.group = group,
+			.userdata_sq = (uintptr_t)sock,
+		};
+
+		rc = xlio_socket_create(&sattr, &sock->xlio_sock);
+		if (rc != 0) {
 			/* error */
 			continue;
 		}
 
-		if (isolate) {
-			sz = SO_XLIO_ISOLATE_SAFE;
-			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_ISOLATE, &sz, sizeof(sz));
-			if (rc) {
-				SPDK_WARNLOG("Fail to set isolation: sock %p rc %d errno %d\n", sock, rc, errno);
-			}
-		}
-
 		sz = xlio_opts->recv_buf_size;
-		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
-		if (rc) {
-			/* Not fatal */
-		}
+		xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 
 		sz = xlio_opts->send_buf_size;
-		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
-		if (rc) {
-			/* Not fatal */
-		}
+		xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 
-		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+		rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 		if (rc != 0) {
-			xlio_close(fd);
 			/* error */
+			if (!xlio_socket_destroy(sock->xlio_sock)) {
+				assert(false);
+			}
 			continue;
 		}
 
 		if (xlio_opts->enable_tcp_nodelay) {
-			rc = xlio_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+			rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
 			if (rc != 0) {
-				xlio_close(fd);
 				/* error */
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
 		}
 
 #if defined(SO_PRIORITY)
 		if (opts->priority) {
-			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
+			rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
 			if (rc != 0) {
-				xlio_close(fd);
 				/* error */
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
 		}
 #endif
 
 		if (res->ai_family == AF_INET6) {
-			rc = xlio_setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+			rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 			if (rc != 0) {
-				xlio_close(fd);
 				/* error */
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
 		}
@@ -785,10 +540,12 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 			int to;
 
 			to = opts->ack_timeout;
-			rc = xlio_setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &to, sizeof(to));
+			rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_USER_TIMEOUT, &to, sizeof(to));
 			if (rc != 0) {
-				xlio_close(fd);
 				/* error */
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
 #else
@@ -796,69 +553,54 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 #endif
 		}
 
-		uint64_t user_data = (uintptr_t)NULL;
-		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_USER_DATA,
-				     &user_data, sizeof(user_data));
-		if (rc != 0) {
-			SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
-				    fd, rc, errno);
-			xlio_close(fd);
-			fd = -1;
-			break;
-		}
-
 		if (vlan_tag != 0) {
-			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_EXT_VLAN_TAG, &vlan_tag,
-					     sizeof vlan_tag);
+			rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_XLIO_EXT_VLAN_TAG, &vlan_tag,
+						    sizeof vlan_tag);
 			if (rc != 0) {
-				xlio_close(fd);
 				/* error */
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
 		}
 
-		if (xlio_sock_set_nonblock(fd)) {
-			xlio_close(fd);
-			fd = -1;
-			break;
-		}
-
-		rc = xlio_connect(fd, res->ai_addr, res->ai_addrlen);
+		rc = xlio_socket_connect(sock->xlio_sock, res->ai_addr, res->ai_addrlen);
 		if (rc != 0) {
 			if (rc != EAGAIN && rc != EWOULDBLOCK && errno != EINPROGRESS) {
 				SPDK_ERRLOG("connect() failed, rc %d, errno = %d\n", rc, errno);
 				/* try next family */
-				xlio_close(fd);
-				fd = -1;
+				if (!xlio_socket_destroy(sock->xlio_sock)) {
+					assert(false);
+				}
 				continue;
 			}
+			rc = 0;
 		}
-
-		enable_zcopy_impl_opts = xlio_opts->enable_zerocopy_send_client;
 
 		break;
 	}
 	xlio_freeaddrinfo(res0);
 
-	if (fd < 0) {
+	if (rc) {
 		return -EINVAL;
 	}
 
-	/* Only enable zero copy for non-loopback sockets. */
-	enable_zcopy_user_opts = opts->zcopy && !sock_is_loopback(fd);
-
-	rc = xlio_sock_alloc(sock, fd, enable_zcopy_user_opts && enable_zcopy_impl_opts, xlio_opts);
+	rc = xlio_sock_alloc(sock, xlio_opts);
 	if (rc) {
 		SPDK_ERRLOG("sock allocation failed\n");
-		xlio_close(fd);
+		if (!xlio_socket_destroy(sock->xlio_sock)) {
+			assert(false);
+		}
 		return rc;
 	}
 
-	SPDK_NOTICELOG("sock %p %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u isolate %d\n",
-		       sock, fd, sock->flags.zcopy, sock->flags.recv_zcopy, sock->pd,
+	sock->flags.closed = 0;
+	SPDK_NOTICELOG("sock %p xlio_sock %lx: pd %p, context %p, dev %s, handle %u\n",
+		       sock, sock->xlio_sock, sock->pd,
 		       sock->pd ? sock->pd->context : NULL,
 		       sock->pd ? sock->pd->context->device->name : "unknown",
-		       sock->pd ? sock->pd->handle : 0, isolate);
+		       sock->pd ? sock->pd->handle : 0);
 
 	return 0;
 }
@@ -876,146 +618,65 @@ xlio_sock_release_packets(struct spdk_xlio_sock *sock)
 		if (--packet->refs == 0) {
 			xlio_sock_free_packet(sock, packet);
 		} else {
-			SPDK_ERRLOG("Socket close: received packet with non zero refs %u, fd %d\n",
-				    packet->refs, sock->fd);
+			SPDK_ERRLOG("Socket close: received packet with non zero refs %u, socket %p\n",
+				    packet->refs, sock);
 		}
 	}
 }
 
+static xlio_poll_group_t
+xlio_sock_get_admin_group(void)
+{
+	pthread_mutex_lock(&g_xlio_admin_group_mutex);
+	if (!g_xlio_admin_group.refs) {
+		int rc = xlio_sock_group_create(&g_xlio_admin_group.xlio_group,
+						XLIO_GROUP_FLAG_SAFE);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to create admin group, rc %d errno %d: %s\n",
+				    rc, errno, spdk_strerror(errno));
+			pthread_mutex_unlock(&g_xlio_admin_group_mutex);
+			return 0;
+		}
+	}
+	g_xlio_admin_group.refs++;
+	pthread_mutex_unlock(&g_xlio_admin_group_mutex);
+
+	return g_xlio_admin_group.xlio_group;
+}
+
 static void
+xlio_sock_put_admin_group(void)
+{
+	pthread_mutex_lock(&g_xlio_admin_group_mutex);
+	if (--g_xlio_admin_group.refs == 0) {
+		xlio_poll_group_destroy(g_xlio_admin_group.xlio_group);
+	}
+	pthread_mutex_unlock(&g_xlio_admin_group_mutex);
+}
+
+static int
 xlio_sock_close(struct spdk_xlio_sock *sock)
 {
-	assert(TAILQ_EMPTY(&sock->pending_pdus));
+	int rc;
 	assert(sock->consumed_packets == 0);
 	assert(!sock->flags.pending_recv);
 	assert(!sock->flags.pending_send);
 
-	/* If the socket fails to close, the best choice is to
-	 * leak the fd but continue to free the rest of the sock
-	 * memory. */
-	xlio_close(sock->fd);
-
-	if (sock->ring_fd && --sock->ring_fd->refs == 0) {
-		free(sock->ring_fd);
+	rc = xlio_socket_destroy(sock->xlio_sock);
+	if (rc) {
+		SPDK_WARNLOG("Fail to destroy socket %p, rc %d\n", sock, rc);
+		return rc;
 	}
+	SPDK_INFOLOG(nvme_xlio, "socket %p is destroyed\n", sock);
 
-	sock->ring_fd = NULL;
-	sock->fd = 0;
+	/* TODO: Try to destroy admin group after combine sock and tqpair */
+
 	sock->flags_raw = 0;
 	sock->flags.closed = 1;
-}
-
-static int
-_sock_check_zcopy(struct spdk_xlio_sock *vsock)
-{
-	struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
-	struct msghdr msgh = {};
-	uint8_t buf[sizeof(struct cmsghdr) + sizeof(struct sock_extended_err)];
-	ssize_t rc;
-	struct sock_extended_err *serr;
-	struct cmsghdr *cm;
-	uint32_t idx;
-	struct nvme_tcp_pdu *pdu, *treq;
-	bool found;
-
-	msgh.msg_control = buf;
-	msgh.msg_controllen = sizeof(buf);
-
-	while (true) {
-		rc = xlio_recvmsg(vsock->fd, &msgh, MSG_ERRQUEUE);
-
-		if (rc < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN) {
-				return 0;
-			}
-
-			if (!TAILQ_EMPTY(&vsock->pending_pdus)) {
-				SPDK_ERRLOG("Attempting to receive from ERRQUEUE yielded error, but pending list still has orphaned entries\n");
-			} else {
-				SPDK_WARNLOG("Recvmsg yielded an error!\n");
-			}
-			return 0;
-		}
-
-		cm = CMSG_FIRSTHDR(&msgh);
-		if (!cm || cm->cmsg_level != SOL_IP || cm->cmsg_type != IP_RECVERR) {
-			SPDK_WARNLOG("Unexpected cmsg level or type!\n");
-			return 0;
-		}
-
-		serr = (struct sock_extended_err *)CMSG_DATA(cm);
-		if (serr->ee_errno != 0 || serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY) {
-			SPDK_WARNLOG("Unexpected extended error origin\n");
-			return 0;
-		}
-
-		/* Most of the time, the pending_reqs array is in the exact
-		 * order we need such that all of the requests to complete are
-		 * in order, in the front. It is guaranteed that all requests
-		 * belonging to the same sendmsg call are sequential, so once
-		 * we encounter one match we can stop looping as soon as a
-		 * non-match is found.
-		 */
-		for (idx = serr->ee_info; idx <= serr->ee_data; idx++) {
-			found = false;
-
-			TAILQ_FOREACH_SAFE(pdu, &vsock->pending_pdus, link, treq) {
-				if (!pdu->is_zcopy) {
-					/* This wasn't a zcopy request. It was just waiting in line to complete */
-					xlio_sock_request_put(vsock, pdu, 0);
-				} else if (pdu->rw_offset == idx) {
-					found = true;
-
-					xlio_sock_request_put(vsock, pdu, 0);
-				} else if (found) {
-					break;
-				}
-			}
-
-			/* If we reaped buffer reclaim notification and sock is not in pending_recv list yet,
-			 * add it now. It allows to call socket callback and process completions */
-			if (found && !vsock->flags.pending_recv && group) {
-				assert(vsock->ring_fd);
-				vsock->flags.pending_recv = true;
-				TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
-			}
-		}
-	}
+	sock->xlio_sock = 0;
 
 	return 0;
 }
-
-static int
-xlio_sock_flush(struct spdk_xlio_sock *sock)
-{
-	if (sock->flags.zcopy && !TAILQ_EMPTY(&sock->pending_pdus)) {
-		_sock_check_zcopy(sock);
-	}
-
-	return xlio_sock_flush_ext(sock);
-}
-
-#ifdef DEBUG
-static void
-dump_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet)
-{
-	size_t i;
-	struct xlio_buff_t *xlio_buf;
-
-	SPDK_DEBUGLOG(nvme_xlio, "sock %p packet %p: num_bufs %lu, total_len %u, first buf %p\n",
-		      sock,
-		      packet, packet->xlio_packet.num_bufs,
-		      packet->xlio_packet.total_len,
-		      packet->xlio_packet.buff_lst);
-
-	for (i = 0, xlio_buf = packet->xlio_packet.buff_lst;
-	     xlio_buf;
-	     ++i, xlio_buf = xlio_buf->next) {
-		SPDK_DEBUGLOG(nvme_xlio, "Packet %p[%lu]: payload %p, len %u\n",
-			      packet, i, xlio_buf->payload, xlio_buf->len);
-	}
-}
-#endif
 
 static struct xlio_sock_packet *
 xlio_sock_get_packet(struct spdk_xlio_sock *sock)
@@ -1042,17 +703,9 @@ xlio_sock_get_packet(struct spdk_xlio_sock *sock)
 static void
 xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet)
 {
-	int ret;
-
-	SPDK_DEBUGLOG(nvme_xlio, "sock %p: free xlio packet, first buf %p\n",
-		      sock, packet->xlio_packet.buff_lst);
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: free xlio buf %p\n", sock, packet->xlio_buf);
 	assert(packet->refs == 0);
-	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
-	ret = xlio_socketxtreme_free_packets(&packet->xlio_packet, 1);
-	if (ret < 0) {
-		SPDK_ERRLOG("Free xlio packets failed, ret %d, errno %d\n",
-			    ret, errno);
-	}
+	xlio_socket_buf_free(sock->xlio_sock, packet->xlio_buf);
 
 	if (spdk_likely(!packet->from_malloc)) {
 		STAILQ_INSERT_HEAD(&sock->xlio_packets_pool->free_packets, packet, link);
@@ -1072,32 +725,19 @@ packets_advance(struct spdk_xlio_sock *sock, size_t len)
 		struct xlio_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
 		/* We don't allow to advance by more than we have data in packets */
 		assert(cur_packet != NULL);
-		struct xlio_buff_t *cur_xlio_buf = sock->cur_xlio_buf;
-		assert(cur_xlio_buf != NULL);
-		/* both  xlio_buff_t::len and sock::cur_offset are uint16_t,
-		 * here we can't get value bigger than UINT16_MAX */
-		size_t remaining_buf_len = cur_xlio_buf->len - sock->cur_offset;
-		assert(remaining_buf_len <= UINT16_MAX);
+		size_t remaining_buf_len = cur_packet->iov.iov_len - sock->cur_offset;
 
 		if (len < remaining_buf_len) {
-			assert(sock->cur_offset + len <= UINT16_MAX);
 			sock->cur_offset += len;
 			len = 0;
 		} else {
 			len -= remaining_buf_len;
 
-			/* Next iov */
+			/* Next packet */
 			sock->cur_offset = 0;
-			sock->cur_xlio_buf = cur_xlio_buf->next;
-			if (!sock->cur_xlio_buf) {
-				/* Next packet */
-				STAILQ_REMOVE_HEAD(&sock->received_packets, link);
-				if (--cur_packet->refs == 0) {
-					xlio_sock_free_packet(sock, cur_packet);
-				}
-
-				cur_packet = STAILQ_FIRST(&sock->received_packets);
-				sock->cur_xlio_buf = cur_packet ? cur_packet->xlio_packet.buff_lst : NULL;
+			STAILQ_REMOVE_HEAD(&sock->received_packets, link);
+			if (--cur_packet->refs == 0) {
+				xlio_sock_free_packet(sock, cur_packet);
 			}
 		}
 	}
@@ -1113,33 +753,13 @@ packets_next_chunk(struct spdk_xlio_sock *sock,
 {
 	struct xlio_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
 
-	if (!sock->cur_xlio_buf && cur_packet) {
-		sock->cur_xlio_buf = cur_packet->xlio_packet.buff_lst;
-	}
-
 	while (cur_packet) {
-		struct xlio_buff_t *cur_xlio_buf = sock->cur_xlio_buf;
-		assert(cur_xlio_buf);
-		size_t len = cur_xlio_buf->len - sock->cur_offset;
-
-		if (len == 0) {
-			/* xlio may return zero length iov. Skip to next in this case */
-			SPDK_DEBUGLOG(nvme_xlio, "Zero length buffer: len %d, offset %u\n",
-				      cur_xlio_buf->len, sock->cur_offset);
-			sock->cur_offset = 0;
-			sock->cur_xlio_buf = cur_xlio_buf->next;
-			if (!sock->cur_xlio_buf) {
-				/* Next packet */
-				cur_packet = STAILQ_NEXT(cur_packet, link);
-				sock->cur_xlio_buf = cur_packet ? cur_packet->xlio_packet.buff_lst : NULL;
-			}
-			continue;
-		}
+		size_t len = cur_packet->iov.iov_len - sock->cur_offset;
 
 		assert(max_len > 0);
 		assert(len > 0);
 		len = spdk_min(len, max_len);
-		*buf = (uint8_t *)cur_xlio_buf->payload + sock->cur_offset;
+		*buf = (uint8_t *)cur_packet->iov.iov_base + sock->cur_offset;
 		*packet = cur_packet;
 		return len;
 	}
@@ -1150,39 +770,7 @@ packets_next_chunk(struct spdk_xlio_sock *sock,
 static int
 poll_no_group_socket(struct spdk_xlio_sock *sock)
 {
-	int ret;
-
-	/* For sockets not bound to group we have to poll here.
-	 * Polling may find events for other sockets but not for this one.
-	 * So, we need to check if new packets were added for this socket.
-	 */
-	if (!sock->ring_fd) {
-		int ring_fds[2];
-
-		ret = xlio_get_socket_rings_fds(sock->fd, ring_fds, 2);
-		if (ret < 0) {
-			SPDK_ERRLOG("Failed to get ring FDs for socket %d: rc %d, errno %d\n",
-				    sock->fd, ret, errno);
-			return ret;
-		}
-
-		/* @todo: add support for multiple rings */
-		assert(ret == 1);
-		sock->ring_fd = calloc(1, sizeof(struct spdk_xlio_ring_fd));
-		if (!sock->ring_fd) {
-			SPDK_ERRLOG("Failed to allocate ring_fd\n");
-			return -1;
-		}
-		sock->ring_fd->ring_fd = ring_fds[0];
-		sock->ring_fd->refs = 1;
-		SPDK_DEBUGLOG(nvme, "Discovered ring fd %d for socket %p %d, num_rings %d\n",
-			      sock->ring_fd->ring_fd, sock, sock->fd, ret);
-	}
-
-	ret = xlio_sock_poll_fd(sock->ring_fd->ring_fd, MAX_EVENTS_PER_POLL);
-	if (ret < 0) {
-		return -1;
-	}
+	xlio_poll_group_poll(g_xlio_admin_group.xlio_group);
 
 	if (STAILQ_EMPTY(&sock->received_packets)) {
 		errno = EAGAIN;
@@ -1195,391 +783,247 @@ poll_no_group_socket(struct spdk_xlio_sock *sock)
 static ssize_t
 xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 {
-	int ret;
+	int ret, i;
+	size_t offset = 0;
 
-	if (sock->flags.recv_zcopy) {
-		int i;
-		size_t offset = 0;
-
-		if (STAILQ_EMPTY(&sock->received_packets)) {
-			if (spdk_unlikely(!sock->group_impl)) {
-				ret = poll_no_group_socket(sock);
-				if (ret < 0) {
-					if (sock->flags.disconnected) {
-						return 0;
-					}
-					return ret;
-				}
-			} else {
-				/* @todo: should we try to poll here? */
+	if (STAILQ_EMPTY(&sock->received_packets)) {
+		if (spdk_unlikely(!sock->group_impl)) {
+			ret = poll_no_group_socket(sock);
+			if (ret < 0) {
 				if (sock->flags.disconnected) {
 					return 0;
 				}
-				errno = EAGAIN;
-				return -1;
-			}
-		}
-
-		assert(!STAILQ_EMPTY(&sock->received_packets));
-		ret = 0;
-		i = 0;
-		while (i < iovcnt) {
-			void *buf;
-			size_t len;
-			struct iovec *iov = &iovs[i];
-			size_t iov_len = iov->iov_len - offset;
-			struct xlio_sock_packet *packet;
-
-			len = packets_next_chunk(sock, &buf, &packet, iov_len);
-			if (len == 0) {
-				/* No more data */
-				SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
 				return ret;
 			}
-
-			memcpy((uint8_t *)iov->iov_base + offset, buf, len);
-			packets_advance(sock, len);
-			ret += len;
-			offset += len;
-			assert(offset <= iov->iov_len);
-			if (offset == iov->iov_len) {
-				offset = 0;
-				i++;
+		} else {
+			/* @todo: should we try to poll here? */
+			if (sock->flags.disconnected) {
+				return 0;
 			}
+			errno = EAGAIN;
+			return -1;
+		}
+	}
+
+	assert(!STAILQ_EMPTY(&sock->received_packets));
+	ret = 0;
+	i = 0;
+	while (i < iovcnt) {
+		void *buf;
+		size_t len;
+		struct iovec *iov = &iovs[i];
+		size_t iov_len = iov->iov_len - offset;
+		struct xlio_sock_packet *packet;
+
+		len = packets_next_chunk(sock, &buf, &packet, iov_len);
+		if (len == 0) {
+			/* No more data */
+			SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
+			return ret;
 		}
 
-		SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
-	} else {
-		ret = xlio_readv(sock->fd, iovs, iovcnt);
-		SPDK_DEBUGLOG(nvme_xlio, "Sock %d: readv_wrapper ret %d, errno %d\n", sock->fd, ret, errno);
+		memcpy((uint8_t *)iov->iov_base + offset, buf, len);
+		packets_advance(sock, len);
+		ret += len;
+		offset += len;
+		assert(offset <= iov->iov_len);
+		if (offset == iov->iov_len) {
+			offset = 0;
+			i++;
+		}
 	}
+
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
 
 	return ret;
 
 }
 
-union _mkeys_container {
-	char buf[CMSG_SPACE(sizeof(struct xlio_pd_key) * IOV_BATCH_SIZE)];
-	struct cmsghdr align;
-};
-
-static inline size_t
-xlio_sock_prep_reqs(struct spdk_xlio_sock *vsock, struct iovec *iovs, struct msghdr *msg,
-		    union _mkeys_container *mkeys_container, uint32_t *_total)
+static void
+xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int value)
 {
-	size_t iovcnt = 0;
-	int i;
-	struct nvme_tcp_pdu *pdu;
-	struct nvme_tcp_qpair *tqpair;
-	unsigned int offset;
-	struct cmsghdr *cmsg;
-	struct xlio_pd_key *mkeys = NULL;
-	uint32_t total = 0;
-	uint32_t pdu_data_len_remaining;
-	bool first_req_mkey;
+	struct spdk_xlio_sock *vsock = (struct spdk_xlio_sock *)userdata_sq;
 
-	pdu = TAILQ_FIRST(&vsock->queued_pdus);
-	assert(pdu);
-	first_req_mkey = pdu->has_mkeys;
-
-	msg->msg_control = mkeys_container->buf;
-	msg->msg_controllen = sizeof(mkeys_container->buf);
-	cmsg = CMSG_FIRSTHDR(msg);
-
-	cmsg->cmsg_len = CMSG_LEN(sizeof(struct xlio_pd_key) * IOV_BATCH_SIZE);
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = SCM_XLIO_PD;
-
-	mkeys = (struct xlio_pd_key *)CMSG_DATA(cmsg);
-	tqpair = SPDK_CONTAINEROF(vsock, struct nvme_tcp_qpair, sock);
-
-	while (pdu && iovcnt < IOV_BATCH_SIZE) {
-		offset = pdu->rw_offset;
-
-		if (spdk_unlikely(first_req_mkey != pdu->has_mkeys)) {
-			/* mkey setting or zcopy threshold is different with the first req */
-			break;
+	if (event == XLIO_SOCKET_EVENT_ESTABLISHED) {
+		SPDK_INFOLOG(nvme_xlio, "Connection established (sock=%lx): event=%d value=%d\n",
+			     userdata_sq, event, value);
+		if (!vsock->flags.connect_notified) {
+			nvme_tcp_qpair_connect_sock_done(vsock, 0);
+			vsock->flags.connect_notified = 1;
+		}
+	} else if (event == XLIO_SOCKET_EVENT_CLOSED || event == XLIO_SOCKET_EVENT_TERMINATED) {
+		SPDK_INFOLOG(nvme_xlio, "Connection closed passively (sock=%lx): event=%d value=%d\n",
+			     userdata_sq, event, value);
+		if (!vsock->flags.closed) {
+			vsock->flags.disconnected = true;
 		}
 
-		if (pdu->has_capsule) {
-			iovs[iovcnt].iov_base = pdu->hdr.raw + pdu->capsule_offset;
-			iovs[iovcnt].iov_len = pdu->capsule_len - pdu->capsule_offset;
-			if (spdk_likely(first_req_mkey)) {
-				mkeys[iovcnt].mkey = tqpair->pdus_mkey;
-				mkeys[iovcnt].flags = 0;
-			}
-			total += (uint32_t)iovs[iovcnt].iov_len;
-			SPDK_DEBUGLOG(nvme_xlio, "\tpdu %p, capsule len %zu\n", pdu, iovs[iovcnt].iov_len);
-			iovcnt++;
+		if (!vsock->flags.connect_notified) {
+			nvme_tcp_qpair_connect_sock_done(vsock, -1);
+			vsock->flags.connect_notified = 1;
 		}
-
-		assert(pdu->data_len >= offset);
-		pdu_data_len_remaining = pdu->data_len - offset;
-		for (i = 0; i < pdu->data_iovcnt && iovcnt < IOV_BATCH_SIZE && pdu_data_len_remaining; i++) {
-			/* Consume any offset first */
-			if (offset >= pdu->iovs[i].iov_len) {
-				SPDK_DEBUGLOG(nvme_xlio, "\tpdu %p, skip iov[%u] len %zu\n", pdu, i, iovs[i].iov_len);
-				offset -= pdu->iovs[i].iov_len;
-				continue;
-			}
-			if (spdk_likely(first_req_mkey)) {
-				mkeys[iovcnt].mkey = pdu->mkeys[i];
-				mkeys[iovcnt].flags = 0;
-			}
-			iovs[iovcnt].iov_base = (uint8_t *)pdu->iovs[i].iov_base + offset;
-			iovs[iovcnt].iov_len = pdu->iovs[i].iov_len - offset;
-			iovs[iovcnt].iov_len = spdk_min(pdu_data_len_remaining, iovs[iovcnt].iov_len);
-			pdu_data_len_remaining -= iovs[iovcnt].iov_len;
-			offset = 0;
-			total += (uint32_t)iovs[iovcnt].iov_len;
-			SPDK_DEBUGLOG(nvme_xlio, "\tpdu %p, iovs[%zu].iov_len = %zu\n", pdu, iovcnt, iovs[iovcnt].iov_len);
-			iovcnt++;
-		}
-
-		if (pdu->ddgst_enable && iovcnt < IOV_BATCH_SIZE) {
-			iovs[iovcnt].iov_base = pdu->data_digest;
-			iovs[iovcnt].iov_len = sizeof(pdu->data_digest);
-			if (spdk_likely(first_req_mkey)) {
-				mkeys[iovcnt].mkey = tqpair->pdus_mkey;
-				mkeys[iovcnt].flags = 0;
-			}
-			SPDK_DEBUGLOG(nvme_xlio, "\tpdu %p, dgst len %zu\n", pdu, iovs[iovcnt].iov_len);
-			total += (uint32_t)iovs[iovcnt].iov_len;
-			iovcnt++;
-		}
-
-		pdu = TAILQ_NEXT(pdu, link);
-	}
-
-	if (first_req_mkey) {
-		msg->msg_controllen = CMSG_SPACE(sizeof(struct xlio_pd_key) * iovcnt);
-		cmsg->cmsg_len = CMSG_LEN(sizeof(struct xlio_pd_key) * iovcnt);
 	} else {
-		msg->msg_control = NULL;
-		msg->msg_controllen = 0;
+		SPDK_ERRLOG("Unknown Event callback: event=%d value=%d (sock=%lx).\n",
+			    event, value, userdata_sq);
 	}
-
-	*_total = total;
-
-	return iovcnt;
 }
 
-static inline bool
-xlio_sock_flush_now(struct spdk_xlio_sock *vsock, uint32_t qlen_bytes)
+static void
+xlio_socket_comp_cb(xlio_socket_t sock, uintptr_t userdata_sq, uintptr_t userdata_op)
 {
-	if (vsock->group_impl && vsock->group_impl->impl_opts.flush_batch_timeout) {
-		uint64_t now = spdk_get_ticks();
-		struct spdk_sock_impl_opts *impl_opts = &vsock->group_impl->impl_opts;
+	struct spdk_xlio_sock *vsock = (struct spdk_xlio_sock *)userdata_sq;
+	struct nvme_tcp_pdu *pdu = (struct nvme_tcp_pdu *)userdata_op;
+	struct nvme_tcp_qpair *tqpair = SPDK_CONTAINEROF(vsock, struct nvme_tcp_qpair, sock);
 
-		if (qlen_bytes >= impl_opts->flush_batch_bytes_threshold) {
-			/* Flush now */
-		} else if (vsock->batch_start_tsc &&
-			   (now - vsock->batch_start_tsc) * SPDK_SEC_TO_USEC / spdk_get_ticks_hz() >
-			   impl_opts->flush_batch_timeout) {
-			/* batch timeout */
-			if (vsock->queued_iovcnt < vsock->batch_nr) {
-				vsock->batch_nr = spdk_max(vsock->batch_nr >> 1, 1);
-			}
-		} else if (vsock->queued_iovcnt >= vsock->batch_nr) {
-			/* Try to flush socket before timeout, so could batch more */
-			vsock->batch_nr = spdk_min(vsock->batch_nr + 1,
-						   impl_opts->flush_batch_iovcnt_threshold);
-		} else {
-			/* Not flush socket, try to batch more requests */
-			if (!vsock->batch_start_tsc) {
-				vsock->batch_start_tsc = now;
-			}
-			return false;
-		}
-		vsock->batch_start_tsc = 0;
+	assert(userdata_sq != 0);
+	assert(userdata_op != 0);
+
+	SPDK_DEBUGLOG(nvme_xlio, "Completed zcopy buffer userdata_sq=%lx userdata_op=%lx.\n",
+		      userdata_sq, userdata_op);
+
+	_pdu_write_done(tqpair, pdu, 0);
+}
+
+static void
+xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t len,
+		  struct xlio_buf *buf)
+{
+	struct spdk_xlio_sock *vsock = (struct spdk_xlio_sock *)userdata_sq;
+	struct xlio_sock_packet *packet = xlio_sock_get_packet(vsock);
+
+	SPDK_DEBUGLOG(nvme_xlio, "zcopy buffer userdata_sq=%lx data %p len %lu buf %p\n",
+		      userdata_sq, data, len, buf);
+	packet->xlio_buf = buf;
+	packet->iov.iov_base = data;
+	assert(len != 0);
+	packet->iov.iov_len = len;
+	packet->refs = 1;
+	STAILQ_INSERT_TAIL(&vsock->received_packets, packet, link);
+	vsock->consumed_packets++;
+
+	/* If the socket does not already have recv pending, add it now */
+	if (spdk_likely(vsock->group_impl) && !vsock->flags.pending_recv) {
+		struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
+
+		vsock->flags.pending_recv = true;
+		TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
 	}
+}
 
-	return true;
+static void
+xlio_batch_pp_handler(void *ctx)
+{
+	struct spdk_xlio_sock_group_impl *group = (struct spdk_xlio_sock_group_impl *)ctx;
+
+	xlio_poll_group_flush(group->group);
+
+	group->flags.pp_handler_registered = false;
+}
+
+static inline struct nvme_tcp_poll_group *
+nvme_tcp_poll_group(struct spdk_nvme_transport_poll_group *group)
+{
+	return SPDK_CONTAINEROF(group, struct nvme_tcp_poll_group, group);
 }
 
 static int
-xlio_sock_flush_ext(struct spdk_xlio_sock *vsock)
+nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, bool flush)
 {
-	struct iovec iovs[IOV_BATCH_SIZE];
-	struct msghdr msg = {};
-	union _mkeys_container mkeys_container;
-	size_t iovcnt;
-	struct nvme_tcp_pdu *pdu;
-	ssize_t rc;
-	size_t len;
-	int flags = 0;
-	int i;
-	unsigned int offset;
-	uint32_t total;
-	uint32_t pdu_remaining;
-	bool is_zcopy = false;
+	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tqpair->qpair.poll_group);
+	struct spdk_xlio_sock *vsock = &tqpair->sock;
+	struct xlio_socket_send_attr attr = {};
+	int i, rc;
 
-	/* Can't flush from within a callback or we end up with recursive calls */
-	if (vsock->flags.in_complete_cb != 0) {
-		return 0;
+	if (flush) {
+		attr.flags = XLIO_SOCKET_SEND_FLAG_FLUSH;
 	}
 
-	if (spdk_unlikely(TAILQ_EMPTY(&vsock->queued_pdus))) {
-		return 0;
+	if (pdu->data_len < DEFAULT_ZCOPY_THRESHOLD || !pdu->has_mkeys) {
+		attr.flags |= XLIO_SOCKET_SEND_FLAG_INLINE;
 	}
 
-	iovcnt = xlio_sock_prep_reqs(vsock, iovs, &msg, &mkeys_container, &total);
-	if (spdk_unlikely(iovcnt == 0)) {
-		return 0;
-	}
-
-	assert(!(!vsock->flags.zcopy && msg.msg_controllen > 0));
-	if (!xlio_sock_flush_now(vsock, total)) {
-		return 0;
-	}
-
-	/* Allow zcopy if enabled on socket and the data needs to be sent,
-	 * which is reported by xlio_sock_prep_reqs() with setting msg.msg_controllen */
-	if (vsock->flags.zcopy && msg.msg_controllen) {
-		flags = MSG_ZEROCOPY;
-		is_zcopy = true;
-	}
-	/* Perform the vectored write */
-	msg.msg_iov = iovs;
-	msg.msg_iovlen = iovcnt;
-
-	rc = xlio_sendmsg(vsock->fd, &msg, flags);
-	SPDK_DEBUGLOG(nvme_xlio, "sock %p, iovs %zu, len %u, zcopy %d, rc %zd\n", vsock, iovcnt, total,
-		      is_zcopy, rc);
-	if (rc <= 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && vsock->flags.zcopy)) {
-			return 0;
+	if (pdu->has_capsule) {
+		attr.mkey = tqpair->pdus_mkey;
+		attr.userdata_op = pdu->data_len > 0 ? 0 : (uintptr_t)pdu;
+		rc = xlio_socket_send(vsock->xlio_sock,
+				      pdu->hdr.raw,
+				      pdu->capsule_len,
+				      &attr);
+		if (rc < 0) {
+			SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, vsock->flags.closed);
+			return rc;
 		}
-
-		SPDK_ERRLOG("sendmsg error %zd\n", rc);
-		return rc;
 	}
 
-	if (is_zcopy) {
-		/* Handling overflow case, because we use vsock->sendmsg_idx - 1 for the
-		 * req->internal.offset, so sendmsg_idx should not be zero  */
-		if (spdk_unlikely(vsock->sendmsg_idx == UINT32_MAX)) {
-			vsock->sendmsg_idx = 1;
+	if (pdu->data_len) {
+		if (attr.flags & XLIO_SOCKET_SEND_FLAG_INLINE) {
+			rc = xlio_socket_sendv(vsock->xlio_sock, pdu->iovs, pdu->data_iovcnt, &attr);
+			if (rc < 0) {
+				SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, vsock->flags.closed);
+				return rc;
+			}
 		} else {
-			vsock->sendmsg_idx++;
-		}
-	}
+			/* TODO: If mkeys are same, xlio_socket_sendv can be used */
+			for (i = 0; i < pdu->data_iovcnt; i++) {
+				attr.mkey = pdu->mkeys[i];
+				attr.userdata_op = !pdu->ddgst_enable && (i == pdu->data_iovcnt - 1) ? (uintptr_t)pdu : 0;
 
-	/* Consume the requests that were actually written */
-	pdu = TAILQ_FIRST(&vsock->queued_pdus);
-	while (pdu) {
-		offset = pdu->rw_offset;
-
-		/* req->internal.is_zcopy is true when the whole req or part of it is
-		 * sent with zerocopy */
-		pdu->is_zcopy = is_zcopy;
-		pdu_remaining = ((pdu->capsule_len - pdu->capsule_offset) * pdu->has_capsule) +
-				(pdu->data_len - offset) + ((SPDK_NVME_TCP_DIGEST_LEN - pdu->ddigest_offset) * pdu->ddgst_enable);
-		SPDK_DEBUGLOG(nvme_xlio, "\tsock %p, pdu %p, offset %u, remaining %u\n", vsock, pdu, offset,
-			      pdu_remaining);
-		if (rc >= pdu_remaining) {
-			/* PDU was fully consumed, no need to check each part */
-			pdu->has_capsule = 0;
-			pdu->ddgst_enable = 0;
-			pdu->rw_offset = pdu->data_len;
-			rc -= pdu_remaining;
-			goto full_req;
-		}
-
-		if (pdu->has_capsule) {
-			if (spdk_likely(rc >= pdu->capsule_len - pdu->capsule_offset)) {
-				/* capsule header was fully sent */
-				rc -= pdu->capsule_len - pdu->capsule_offset;
-				pdu->has_capsule = 0;
-			} else {
-				pdu->capsule_offset += rc;
-				/* Only part of capsule was sent */
-				return 0;
+				rc = xlio_socket_send(tqpair->xlio_sock,
+						      pdu->iovs[i].iov_base,
+						      pdu->iovs[i].iov_len,
+						      &attr);
+				if (rc < 0) {
+					SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, tqpair->flags.closed);
+					return rc;
+				}
 			}
-		}
-
-		for (i = 0; i < pdu->data_iovcnt; i++) {
-			/* Advance by the offset first */
-			if (offset >= pdu->iovs[i].iov_len) {
-				offset -= pdu->iovs[i].iov_len;
-				continue;
-			}
-
-			/* Calculate the remaining length of this element */
-			len = pdu->iovs[i].iov_len - offset;
-
-			if (len > (size_t)rc) {
-				/* This element was partially sent. */
-				pdu->rw_offset += rc;
-				return 0;
-			}
-
-			offset = 0;
-			pdu->rw_offset += len;
-			rc -= len;
 		}
 
 		if (pdu->ddgst_enable) {
-			if (spdk_likely(rc >= SPDK_NVME_TCP_DIGEST_LEN - pdu->ddigest_offset)) {
-				rc -= SPDK_NVME_TCP_DIGEST_LEN - pdu->ddigest_offset;
-				pdu->ddgst_enable = 0;
-			} else {
-				pdu->ddigest_offset += rc;
-				/* Only part of data digest was sent */
-				return 0;
+			attr.mkey = tqpair->pdus_mkey;
+			attr.userdata_op = (uintptr_t)pdu;
+			rc = xlio_socket_send(vsock->xlio_sock,
+					      pdu->data_digest,
+					      sizeof(pdu->data_digest),
+					      &attr);
+			if (rc < 0) {
+				SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, vsock->flags.closed);
+				return rc;
 			}
 		}
+	}
 
-full_req:
-		/* Handled a full request. */
-		xlio_sock_request_pend(vsock, pdu);
+	if (attr.flags & XLIO_SOCKET_SEND_FLAG_INLINE) {
+		_pdu_write_done(tqpair, pdu, 0);
+	}
 
-		/* Ordering control. */
-		if (!pdu->is_zcopy && pdu == TAILQ_FIRST(&vsock->pending_pdus)) {
-			/* The sendmsg syscall above isn't currently asynchronous,
-			* so it's already done. */
-			xlio_sock_request_put(vsock, pdu, 0);
-		} else {
-			/* Re-use the offset field to hold the sendmsg call index. The
-			 * index is 0 based, so subtract one here because we've already
-			 * incremented above. */
-			pdu->rw_offset = vsock->sendmsg_idx - 1;
-		}
-
-		if (rc == 0) {
-			break;
-		}
-
-		pdu = TAILQ_FIRST(&vsock->queued_pdus);
+	if (group && !group->xlio_group.flags.pp_handler_registered) {
+		group->xlio_group.flags.pp_handler_registered = spdk_thread_post_poller_handler_register(
+					xlio_batch_pp_handler, group) == 0;
+	} else {
+		vsock->flags.pending_send = true;
 	}
 
 	return 0;
 }
 
-
-static void
-xlio_sock_writev_async(struct spdk_xlio_sock *vsock, struct nvme_tcp_pdu *pdu)
+static int
+xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 {
-	struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
 	int rc;
+	struct xlio_poll_group_attr gattr = {
+		.flags = flags | XLIO_GROUP_FLAG_DIRTY,
+		.socket_event_cb = &xlio_socket_event_cb,
+		.socket_comp_cb = &xlio_socket_comp_cb,
+		.socket_rx_cb = &xlio_socket_rx_cb,
+	};
 
-	xlio_sock_request_queue(vsock, pdu);
-
-	/* If there are a sufficient number queued, just flush them out immediately. */
-	if (vsock->queued_iovcnt >= IOV_BATCH_SIZE) {
-		rc = xlio_sock_flush_ext(vsock);
-		if (spdk_likely(rc == 0)) {
-			if (TAILQ_EMPTY(&vsock->queued_pdus) && vsock->flags.pending_send && vsock->group_impl) {
-				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-				vsock->flags.pending_send = false;
-			}
-		} else {
-			xlio_sock_abort_requests(vsock);
-		}
-	} else if (!vsock->flags.pending_send && vsock->group_impl) {
-		TAILQ_INSERT_TAIL(&group->pending_send, vsock, link_send);
-		vsock->flags.pending_send = true;
+	rc = xlio_poll_group_create(&gattr, group);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create group.\n");
 	}
+
+	return rc;
 }
 
 static int
@@ -1591,6 +1035,11 @@ xlio_sock_group_impl_create(struct spdk_xlio_sock_group_impl *group_impl)
 	int rc;
 
 	assert(group_impl);
+	rc = xlio_sock_group_create(&group_impl->group, 0);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create group.\n");
+		return rc;
+	}
 
 	rc = spdk_sock_impl_get_opts("xlio", &group_impl->impl_opts, &impl_opts_size);
 	if (rc) {
@@ -1599,9 +1048,7 @@ xlio_sock_group_impl_create(struct spdk_xlio_sock_group_impl *group_impl)
 	num_packets = group_impl->impl_opts.packets_pool_size;
 	num_buffers = group_impl->impl_opts.buffers_pool_size;
 
-	TAILQ_INIT(&group_impl->ring_fd);
 	TAILQ_INIT(&group_impl->pending_recv);
-	TAILQ_INIT(&group_impl->pending_send);
 
 	if (num_packets) {
 		group_impl->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
@@ -1618,43 +1065,10 @@ xlio_sock_group_impl_create(struct spdk_xlio_sock_group_impl *group_impl)
 	return 0;
 }
 
-static int
+static inline int
 xlio_sock_group_impl_add_sock(struct spdk_xlio_sock_group_impl *group, struct spdk_xlio_sock *vsock)
 {
-	struct spdk_xlio_ring_fd *ring_fd;
-	int ring_fds[2];
-	int rc;
-
-	rc = xlio_get_socket_rings_fds(vsock->fd, ring_fds, 2);
-	if (rc < 0) {
-		SPDK_ERRLOG("Failed to get ring FDs for socket %d\n", vsock->fd);
-		return rc;
-	}
-
-	/* @todo: add support for multiple rings */
-	assert(rc == 1);
-	SPDK_DEBUGLOG(nvme_xlio, "sock %p ring %d\n", vsock, ring_fds[0]);
 	vsock->group_impl = group;
-
-	TAILQ_FOREACH(ring_fd, &group->ring_fd, link) {
-		if (ring_fd->ring_fd == ring_fds[0]) {
-			vsock->ring_fd = ring_fd;
-			ring_fd->refs++;
-			return 0;
-		}
-	}
-
-	if (!vsock->ring_fd) {
-		vsock->ring_fd = calloc(1, sizeof(struct spdk_xlio_ring_fd));
-		if (!vsock->ring_fd) {
-			SPDK_ERRLOG("Failed to allocate ring_fd\n");
-			return -1;
-		}
-		vsock->ring_fd->ring_fd = ring_fds[0];
-	}
-	vsock->ring_fd->refs = 1;
-	TAILQ_INSERT_TAIL(&group->ring_fd, vsock->ring_fd, link);
-
 	return 0;
 }
 
@@ -1662,154 +1076,21 @@ static int
 xlio_sock_group_impl_remove_sock(struct spdk_xlio_sock_group_impl *group,
 				 struct spdk_xlio_sock *vsock)
 {
-
-	xlio_sock_abort_requests(vsock);
-	if (vsock->flags.pending_send) {
-		TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-		vsock->flags.pending_send = false;
-	}
 	if (vsock->flags.pending_recv) {
 		TAILQ_REMOVE(&group->pending_recv, vsock, link);
 		vsock->flags.pending_recv = false;
 	}
-	if (--vsock->ring_fd->refs == 0) {
-		TAILQ_REMOVE(&group->ring_fd, vsock->ring_fd, link);
-		free(vsock->ring_fd);
-	}
-	vsock->ring_fd = NULL;
 
 	return 0;
-}
-
-static void nvme_tcp_qpair_connect_sock_done(struct spdk_xlio_sock *vsock, int err);
-
-static int
-xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
-{
-	struct spdk_xlio_sock *vsock;
-	int num_events, i, rc;
-	struct xlio_socketxtreme_completion_t comps[MAX_EVENTS_PER_POLL];
-
-	num_events = xlio_socketxtreme_poll(fd, comps, max_events_per_poll, SOCKETXTREME_POLL_TX);
-	if (num_events < 0) {
-		SPDK_ERRLOG("Socket extreme poll failed for fd %d: fd, result %d, errno %d\n", fd, num_events,
-			    errno);
-		return -1;
-	}
-
-	for (i = 0; i < num_events; i++) {
-		struct xlio_socketxtreme_completion_t *comp = &comps[i];
-		struct xlio_sock_packet *packet;
-
-		vsock = (struct spdk_xlio_sock *)comp->user_data;
-		if (!vsock) {
-			continue;
-		}
-
-		SPDK_DEBUGLOG(nvme_xlio, "XLIO completion[%d]: ring fd %d, events %" PRIx64
-			      ", user_data %p, listen_fd %d\n",
-			      i, fd, comp->events, (void *)comp->user_data, comp->listen_fd);
-
-		if (comp->events & EPOLLHUP) {
-			SPDK_ERRLOG("Got EPOLLHUP event on socket %d, events %" PRIx64 "\n",
-				    vsock->fd, comp->events);
-			vsock->flags.disconnected = true;
-			if (!vsock->flags.connect_notified) {
-				nvme_tcp_qpair_connect_sock_done(vsock, ETIMEDOUT);
-				vsock->flags.connect_notified = 1;
-			}
-		}
-
-		if (comp->events & EPOLLOUT && !vsock->flags.connect_notified) {
-			nvme_tcp_qpair_connect_sock_done(vsock, 0);
-			vsock->flags.connect_notified = 1;
-		}
-
-		if (comp->events & EPOLLERR) {
-			rc = _sock_check_zcopy(vsock);
-			/* If the socket was closed or removed from
-			 * the group in response to a send ack, don't
-			 * add it to the array here. */
-			if (rc || vsock->flags.closed) {
-				continue;
-			}
-		}
-		if (comp->events & XLIO_SOCKETXTREME_PACKET) {
-			packet = xlio_sock_get_packet(vsock);
-			packet->xlio_packet = comp->packet;
-			/*
-			 * While the packet is in received list there is data
-			 * to read from it.  To avoid free of packets with
-			 * unread data we intialize reference counter to 1.
-			 */
-			packet->refs = 1;
-			STAILQ_INSERT_TAIL(&vsock->received_packets, packet, link);
-			vsock->consumed_packets++;
-#ifdef DEBUG
-			dump_packet(vsock, packet);
-#endif
-		}
-
-		/* If the socket does not already have recv pending, add it now */
-		if ((comp->events & (XLIO_SOCKETXTREME_PACKET | EPOLLHUP)) &&
-		    spdk_likely(vsock->group_impl) && !vsock->flags.pending_recv) {
-			struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
-
-			assert(vsock->ring_fd);
-			vsock->flags.pending_recv = true;
-			TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
-		}
-	}
-
-	return num_events;
 }
 
 static int
 xlio_sock_group_impl_poll(struct spdk_xlio_sock_group_impl *group, int max_events)
 {
-	int num_events, rc;
+	int num_events;
 	struct spdk_xlio_sock *vsock, *ptmp;
-	struct spdk_xlio_ring_fd *ring_fd;
 
-	/*
-	 * Important to use TAILQ_FOREACH_SAFE() here bacause of the following:
-	 * - spdk_sock_abort_requests() can lead to removing from ->pending_send
-	 *   in xlio_sock_group_impl_remove_sock()
-	 * - we remove from ->pending_send if no more ->queued_reqs left.
-	 */
-	TAILQ_FOREACH_SAFE(vsock, &group->pending_send, link_send, ptmp) {
-		assert(vsock->flags.pending_send);
-
-		rc = xlio_sock_flush_ext(vsock);
-		if (spdk_likely(rc == 0)) {
-			/*
-			 * Removing from pendings only in no-error case because
-			 * spdk_sock_abort_requests() can cause removing from group,
-			 * removing from pendign and kill vsock itself underneath.
-			 * In any case we will crash in that case.
-			 */
-			if (TAILQ_EMPTY(&vsock->queued_pdus)) {
-				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-				vsock->flags.pending_send = false;
-			}
-		} else {
-			/*
-			 * Aborting requests leads to removing from group
-			 * and socket close. Removing from group also
-			 * removes @vsock from all group pending lists
-			 * in xlio_sock_group_impl_remove_sock().
-			 */
-			xlio_sock_abort_requests(vsock);
-		}
-	}
-
-	TAILQ_FOREACH(ring_fd, &group->ring_fd, link) {
-		num_events = xlio_sock_poll_fd(ring_fd->ring_fd, MAX_EVENTS_PER_POLL);
-		if (num_events < 0) {
-			/* @todo: what if we have a problem with just one ring and another one is good? */
-			return -1;
-		}
-	}
+	xlio_poll_group_poll(group->group);
 
 	num_events = 0;
 	ptmp = TAILQ_LAST(&group->pending_recv, pending_recv_head);
@@ -1833,16 +1114,15 @@ xlio_sock_group_impl_poll(struct spdk_xlio_sock_group_impl *group, int max_event
 	return num_events;
 }
 
-static int
+static inline int
 xlio_sock_group_impl_close(struct spdk_xlio_sock_group_impl *group)
 {
-	struct spdk_xlio_ring_fd *ring_fd, *ptmp;
-
-	/* All ring_fds should have already been removed while removing sockets from group */
-	assert(TAILQ_EMPTY(&group->ring_fd));
-	TAILQ_FOREACH_SAFE(ring_fd, &group->ring_fd, link, ptmp) {
-		TAILQ_REMOVE(&group->ring_fd, ring_fd, link);
-		free(ring_fd);
+	int rc = xlio_poll_group_destroy(group->group);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy group: rc %d errno %d (%s)\n",
+			    rc, errno, spdk_strerror(errno));
+		assert(false);
+		return -1;
 	}
 
 	return 0;
@@ -1856,7 +1136,6 @@ xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_
 	int ret;
 
 	SPDK_DEBUGLOG(nvme_xlio, "sock %p: zcopy recv %lu bytes\n", vsock, len);
-	assert(vsock->flags.recv_zcopy);
 	*sock_buf = NULL;
 
 	if (STAILQ_EMPTY(&vsock->received_packets)) {
@@ -1995,19 +1274,6 @@ struct nvme_tcp_ctrlr {
 	struct spdk_nvme_ctrlr			ctrlr;
 };
 
-struct nvme_tcp_poll_group {
-	struct spdk_nvme_transport_poll_group group;
-	struct spdk_xlio_sock_group_impl xlio_group;
-	uint32_t completions_per_qpair;
-	int64_t num_completions;
-
-	void *tcp_reqs;
-	TAILQ_HEAD(, nvme_tcp_pdu) free_pdus;
-	void *recv_pdus;
-	TAILQ_HEAD(, nvme_tcp_qpair) needs_poll;
-	struct spdk_nvme_tcp_stat stats;
-};
-
 static struct spdk_nvme_tcp_stat g_dummy_stats = {};
 
 static void nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req);
@@ -2047,12 +1313,6 @@ nvme_tcp_qpair(struct spdk_nvme_qpair *qpair)
 {
 	assert(qpair->trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS);
 	return SPDK_CONTAINEROF(qpair, struct nvme_tcp_qpair, qpair);
-}
-
-static inline struct nvme_tcp_poll_group *
-nvme_tcp_poll_group(struct spdk_nvme_transport_poll_group *group)
-{
-	return SPDK_CONTAINEROF(group, struct nvme_tcp_poll_group, group);
 }
 
 static inline struct nvme_tcp_ctrlr *
@@ -2327,7 +1587,7 @@ nvme_tcp_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_q
 	}
 	spdk_rdma_utils_free_mem_map(&tqpair->mem_map);
 	spdk_rdma_utils_put_memory_domain(tqpair->memory_domain);
-	free(tqpair);
+	spdk_free(tqpair);
 
 	return 0;
 }
@@ -2444,6 +1704,8 @@ static int
 nvme_tcp_qpair_write_control_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu,
 				 nvme_tcp_qpair_xfer_complete_cb cb_fn)
 {
+	int rc;
+
 	pdu->cb_fn = cb_fn;
 	pdu->iovs = &tqpair->ctrlr_hdr_iov;
 	pdu->iovs[0].iov_base = &tqpair->ctrl_hdr.raw;
@@ -2456,9 +1718,9 @@ nvme_tcp_qpair_write_control_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 	pdu->ddgst_enable = 0;
 	TAILQ_INSERT_TAIL(&tqpair->send_queue, pdu, tailq);
 	tqpair->stats->submitted_requests++;
-	xlio_sock_writev_async(&tqpair->sock, pdu);
+	rc = nvme_tcp_qpair_send_pdu(tqpair, pdu, false);
 
-	return 0;
+	return rc;
 }
 
 /*
@@ -2672,7 +1934,10 @@ _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 	}
 
 	tqpair->stats->submitted_requests++;
-	xlio_sock_writev_async(&tqpair->sock, pdu);
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu, false))) {
+		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		goto fail_req;
+	}
 
 	return;
 
@@ -3038,7 +2303,9 @@ end:
 			 &tcp_req->req != tqpair->qpair.reserved_req && pdu->data_len;
 
 	tqpair->stats->submitted_requests++;
-	xlio_sock_writev_async(&tqpair->sock, pdu);
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu, false))) {
+		return -1;
+	}
 
 	return 0;
 }
@@ -4283,7 +3550,10 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 	}
 	TAILQ_INSERT_TAIL(&tqpair->send_queue, rsp_pdu, tailq);
 	tqpair->stats->submitted_requests++;
-	xlio_sock_writev_async(&tqpair->sock, rsp_pdu);
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu, false))) {
+		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		goto fail_req;
+	}
 
 	return;
 
@@ -4516,7 +3786,9 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	}
 
 	tqpair->stats->submitted_requests++;
-	xlio_sock_writev_async(&tqpair->sock, rsp_pdu);
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu, false))) {
+		goto fail_req;
+	}
 
 	return;
 fail_req:
@@ -5131,10 +4403,9 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 
 	if (spdk_unlikely(qpair->poll_group == NULL &&
 			  tqpair->state >= NVME_TCP_QPAIR_STATE_SOCK_CONNECTED)) {
-		rc = xlio_sock_flush(&tqpair->sock);
-		if (spdk_unlikely(rc < 0)) {
-			SPDK_ERRLOG("Failed to flush tqpair=%p (%d): %s\n", tqpair,
-				    errno, spdk_strerror(errno));
+		if (tqpair->sock.flags.closed) {
+			SPDK_ERRLOG("tqpair=%p sock %p is closed: errno %d(%s)\n",
+				    tqpair, &tqpair->sock, errno, spdk_strerror(errno));
 			if (spdk_unlikely(tqpair->qpair.ctrlr->timeout_enabled)) {
 				nvme_tcp_qpair_check_timeout(qpair);
 			}
@@ -5145,6 +4416,9 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 				return 0;
 			}
 			goto fail;
+		} else if (tqpair->sock.flags.pending_send) {
+			xlio_socket_flush(tqpair->sock.xlio_sock);
+			tqpair->sock.flags.pending_send = false;
 		}
 	}
 
@@ -5360,6 +4634,7 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	struct spdk_sock_impl_opts impl_opts;
 	size_t impl_opts_size = sizeof(impl_opts);
 	struct spdk_sock_opts opts;
+	xlio_poll_group_t xgroup;
 
 	tqpair = nvme_tcp_qpair(qpair);
 
@@ -5418,9 +4693,17 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	}
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
+	if (nvme_qpair_is_admin_queue(qpair)) {
+		xgroup = xlio_sock_get_admin_group();
+	} else {
+		struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
+		assert(group != NULL);
+		xgroup = group->xlio_group.group;
+	}
+	assert(xgroup != 0);
+
 	rc = xlio_sock_init(&tqpair->sock, ctrlr->trid.traddr, port, &opts,
-			    nvme_qpair_is_admin_queue(qpair),
-			    ctrlr->opts.vlan_tag);
+			    xgroup, ctrlr->opts.vlan_tag);
 	if (rc) {
 		SPDK_ERRLOG("sock connection error of tqpair=%p with addr=%s, port=%ld, rc %d\n",
 			    tqpair, ctrlr->trid.traddr, port, rc);
@@ -5537,7 +4820,7 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 
 	tqpair = nvme_tcp_qpair(qpair);
 
-	if (!tqpair->sock.fd) {
+	if (!tqpair->sock.xlio_sock) {
 		rc = nvme_tcp_qpair_connect_sock(ctrlr, qpair);
 		if (rc < 0) {
 			return rc;
@@ -5586,6 +4869,7 @@ nvme_tcp_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 {
 	struct nvme_tcp_qpair *tqpair;
 	struct spdk_nvme_qpair *qpair;
+	size_t tqpair_size_padded;
 	int rc;
 
 	if (qsize < SPDK_NVME_QUEUE_MIN_ENTRIES) {
@@ -5593,12 +4877,14 @@ nvme_tcp_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 			    qsize, SPDK_NVME_QUEUE_MIN_ENTRIES);
 		return NULL;
 	}
-	rc = posix_memalign((void **)&tqpair, 64, sizeof(struct nvme_tcp_qpair));
-	if (rc) {
+
+	tqpair_size_padded = SPDK_ALIGN_CEIL(sizeof(struct nvme_tcp_qpair), 64);
+	tqpair = spdk_zmalloc(tqpair_size_padded, 64, NULL,
+			      SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (!tqpair) {
 		SPDK_ERRLOG("failed to create tqpair\n");
 		return NULL;
 	}
-	memset(tqpair, 0, sizeof(struct nvme_tcp_qpair));
 
 	/* Set num_entries one less than queue size. According to NVMe
 	 * and NVMe-oF specs we can not submit queue size requests,
@@ -5609,7 +4895,7 @@ nvme_tcp_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 
 	rc = nvme_qpair_init(qpair, qid, ctrlr, 1, num_requests, async);
 	if (rc != 0) {
-		free(tqpair);
+		spdk_free(tqpair);
 		return NULL;
 	}
 
@@ -5619,12 +4905,18 @@ nvme_tcp_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 		return NULL;
 	}
 
-	/* spdk_nvme_qpair_get_optimal_poll_group needs socket information.
-	 * So create the socket first when creating a qpair. */
-	rc = nvme_tcp_qpair_connect_sock(ctrlr, qpair);
-	if (rc) {
-		nvme_tcp_ctrlr_delete_io_qpair(ctrlr, qpair);
-		return NULL;
+	/* FIXME: xlio group must be set while creating xlio socket,
+	 *        but group for IO qpair will be created later,
+	 *        so skip connect socket for IO qpair now.
+	 */
+	if (nvme_qpair_is_admin_queue(qpair)) {
+		/* spdk_nvme_qpair_get_optimal_poll_group needs socket information.
+		 * So create the socket first when creating a qpair. */
+		rc = nvme_tcp_qpair_connect_sock(ctrlr, qpair);
+		if (rc) {
+			nvme_tcp_ctrlr_delete_io_qpair(ctrlr, qpair);
+			return NULL;
+		}
 	}
 
 	return qpair;
@@ -5647,7 +4939,6 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 			 void *devhandle)
 {
 	struct nvme_tcp_ctrlr *tctrlr;
-	struct nvme_tcp_qpair *tqpair;
 	int rc;
 
 	tctrlr = calloc(1, sizeof(*tctrlr));
@@ -5680,11 +4971,7 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 		return NULL;
 	}
 
-	tqpair = nvme_tcp_qpair(tctrlr->ctrlr.adminq);
-	if (tqpair->sock.flags.recv_zcopy) {
-		tctrlr->ctrlr.flags |= SPDK_NVME_CTRLR_ZCOPY_SUPPORTED;
-		SPDK_NOTICELOG("Controller supports zero copy API\n");
-	}
+	tctrlr->ctrlr.flags |= SPDK_NVME_CTRLR_ZCOPY_SUPPORTED;
 
 	if (nvme_ctrlr_add_process(&tctrlr->ctrlr, 0) != 0) {
 		SPDK_ERRLOG("nvme_ctrlr_add_process() failed\n");
@@ -5872,14 +5159,6 @@ nvme_tcp_poll_group_add(struct spdk_nvme_transport_poll_group *tgroup,
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tgroup);
-	struct spdk_xlio_sock *vsock = &tqpair->sock;
-
-	/* disconnected qpairs won't have a sock to add. */
-	if (nvme_qpair_get_state(qpair) >= NVME_QPAIR_CONNECTED) {
-		if (xlio_sock_group_impl_add_sock(&group->xlio_group, vsock)) {
-			return -EPROTO;
-		}
-	}
 
 	tqpair->recv_pdu = NULL;
 	tqpair->stats = &group->stats;
@@ -5942,8 +5221,14 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 		}
 
 		if (!tqpair->sock.flags.closed) {
-			xlio_sock_close(&tqpair->sock);
+			int rc = xlio_sock_close(&tqpair->sock);
+			if (rc) {
+				SPDK_DEBUGLOG(nvme, "qpair %p %u: fail to close sock %p\n",
+					      tqpair, qpair->id, &tqpair->sock);
+				continue;
+			}
 		}
+
 		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
 			if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
 				nvme_transport_ctrlr_disconnect_qpair_done(qpair);

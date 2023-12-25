@@ -87,7 +87,6 @@ struct nvme_tcp_pdu {
 			uint8_t ddgst_enable: 1;
 			uint8_t has_mkeys: 1;
 			uint8_t has_capsule: 1;
-			uint8_t is_zcopy: 1;
 			uint8_t ddigest_offset: 3;
 		};
 		uint8_t u_raw;
