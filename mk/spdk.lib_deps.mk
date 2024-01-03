@@ -208,5 +208,5 @@ DEPDIRS-event_fsdev := init fsdev
 # module/vfu_device
 
 ifeq ($(CONFIG_VFIO_USER),y)
-DEPDIRS-vfu_device := $(BDEV_DEPS_THREAD) scsi vfu_tgt
+DEPDIRS-vfu_device := $(BDEV_DEPS_THREAD) scsi vfu_tgt fuse_dispatcher
 endif
