@@ -225,6 +225,7 @@ struct accel_mlx5_io_channel {
 	uint32_t num_devs;
 	/* Index in \b devs to be used for round-robin */
 	uint32_t dev_idx;
+	bool pp_handler_registered;
 };
 
 struct accel_mlx5_psv_pool_iter_cb_args {
@@ -253,6 +254,7 @@ static struct spdk_accel_driver g_accel_mlx5_driver;
 static int accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp);
 static inline int accel_mlx5_execute_sequence(struct spdk_io_channel *ch,
 		struct spdk_accel_sequence *seq);
+static void accel_mlx5_pp_handler(void *ctx);
 
 static int
 accel_mlx5_qpair_compare(struct accel_mlx5_qp *qp1, struct accel_mlx5_qp *qp2)
@@ -3157,6 +3159,10 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return 0;
 	}
 
+	if (!ch->pp_handler_registered) {
+		ch->pp_handler_registered = spdk_thread_post_poller_handler_register(accel_mlx5_pp_handler,
+					    ch) == 0;
+	}
 	rc = g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
 	dev->wrs_in_cq += mlx5_task->num_wrs;
 
@@ -3508,6 +3514,31 @@ accel_mlx5_poller(void *ctx)
 	}
 
 	return !!completions;
+}
+
+static void
+accel_mlx5_pp_handler(void *ctx)
+{
+	struct accel_mlx5_io_channel *ch = ctx;
+	struct accel_mlx5_dev *dev;
+	uint32_t i;
+	int rc;
+
+	for (i = 0; i < ch->num_devs; i++) {
+		dev = &ch->devs[i];
+		rc = 0;
+
+		if (dev->wrs_in_cq) {
+			rc = spdk_mlx5_cq_flush_doorbells(dev->cq);
+		}
+
+		if (spdk_unlikely(rc < 0)) {
+			SPDK_ERRLOG("Error %d on CQ, dev %s\n", rc, dev->pd_ref->context->device->name);
+			continue;
+		}
+	}
+
+	ch->pp_handler_registered = false;
 }
 
 static bool
