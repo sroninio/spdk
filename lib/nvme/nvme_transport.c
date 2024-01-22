@@ -503,6 +503,9 @@ nvme_transport_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nv
 	}
 
 	if (!qpair->async) {
+		/* With lazy fabric connect qpair stays in CONNECTING state up to the
+		 * first get_io_channel() */
+		assert(ctrlr->lazy_fabric_connect == false);
 		/* Busy wait until the qpair exits the connecting state */
 		while (nvme_qpair_get_state(qpair) == NVME_QPAIR_CONNECTING) {
 			if (qpair->poll_group && spdk_nvme_ctrlr_is_fabrics(ctrlr)) {

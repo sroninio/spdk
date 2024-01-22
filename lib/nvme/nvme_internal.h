@@ -1062,6 +1062,10 @@ struct spdk_nvme_ctrlr {
 	nvme_request_stailq_t		queued_aborts;
 	uint32_t			outstanding_aborts;
 
+	/* CB to notify the user when the ctrlr is constructed. */
+	spdk_nvme_construct_cb			construct_cb;
+	bool					lazy_fabric_connect;
+
 	/* CB to notify the user when the ctrlr is removed/failed. */
 	spdk_nvme_remove_cb			remove_cb;
 	void					*cb_ctx;
@@ -1106,6 +1110,12 @@ struct spdk_nvme_ctrlr {
 struct spdk_nvme_probe_ctx {
 	struct spdk_nvme_transport_id		trid;
 	void					*cb_ctx;
+	/* Used for letting know that we have to pause before FABRIC CONNECT
+	 * and ->construct_cb can ba called to notify of the event that ctrlr
+	 * is constructed and pre-connected. */
+	bool					lazy_fabric_connect;
+	spdk_nvme_construct_cb			construct_cb;
+
 	spdk_nvme_probe_cb			probe_cb;
 	spdk_nvme_attach_cb			attach_cb;
 	spdk_nvme_remove_cb			remove_cb;

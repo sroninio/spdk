@@ -870,6 +870,20 @@ typedef void (*spdk_nvme_attach_cb)(void *cb_ctx, const struct spdk_nvme_transpo
 				    const struct spdk_nvme_ctrlr_opts *opts);
 
 /**
+ * Callback for spdk_nvme_connect_lazy() to report a device that has been constructed
+ * and connected adminq socket up to the stage right before FABRIC CONNECT.
+ *
+ * \param cb_ctx Opaque value passed to spdk_nvme_attach_cb().
+ * \param trid NVMe transport identifier.
+ * \param ctrlr Opaque handle to NVMe controller.
+ * \param opts NVMe controller initialization options that were actually used.
+ * Options may differ from the requested options from the attach call depending
+ * on what the controller supports.
+ */
+typedef void (*spdk_nvme_construct_cb)(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+				       struct spdk_nvme_ctrlr *ctrlr,
+				       const struct spdk_nvme_ctrlr_opts *opts);
+/**
  * Callback for spdk_nvme_remove() to report that a device attached to the userspace
  * NVMe driver has been removed from the system.
  *
@@ -998,6 +1012,30 @@ struct spdk_nvme_probe_ctx *spdk_nvme_connect_async(const struct spdk_nvme_trans
 		const struct spdk_nvme_ctrlr_opts *opts,
 		spdk_nvme_attach_cb attach_cb);
 
+/**
+ * Connect the NVMe driver to the device located at the given transport ID.
+ *
+ * The function will return a probe context on success, controller associates with
+ * the context is not ready for use, user must call spdk_nvme_probe_poll_async()
+ * until spdk_nvme_probe_poll_async() returns 0.
+ *
+ * \param trid The transport ID indicating which device to connect. If the trtype
+ * is PCIe, this will connect the local PCIe bus. If the trtype is RDMA, the traddr
+ * and trsvcid must point at the location of an NVMe-oF service.
+ * \param opts NVMe controller initialization options. Default values will be used
+ * if the user does not specify the options. The controller may not support all
+ * requested parameters.
+ * \param construct_cb will be called once the NVMe controller has been constructed
+ * and pre-connected to tge point before FABRIC CONNECT.
+ * \param attach_cb will be called once the NVMe controller has been attached
+ * to the userspace driver.
+ *
+ * \return probe context on success, NULL on failure.
+ *
+ */
+struct spdk_nvme_probe_ctx *spdk_nvme_connect_lazy(const struct spdk_nvme_transport_id *trid,
+		const struct spdk_nvme_ctrlr_opts *opts,
+		spdk_nvme_construct_cb construct_cb, spdk_nvme_attach_cb attach_cb);
 /**
  * Probe and add controllers to the probe context list.
  *
@@ -1224,6 +1262,19 @@ int spdk_nvme_ctrlr_reset_subsystem(struct spdk_nvme_ctrlr *ctrlr);
  * \param ctrlr Opaque handle to an NVMe controller.
  */
 void spdk_nvme_ctrlr_fail(struct spdk_nvme_ctrlr *ctrlr);
+
+/**
+ * Resume the given NVMe controller to proceed with FABRIC CONNECT.
+ *
+ * This functionis is used for resuming connect sequence if it was paused
+ * before FABRIC CONNECT. This behavior is used for lazy fabric connect
+ * feature.
+ *
+ * \param ctrlr Opaque handle to an NVMe controller.
+ *
+ * \return 0 on success, error code on failure.
+ */
+int spdk_nvme_ctrlr_resume_connect(struct spdk_nvme_ctrlr *ctrlr);
 
 /**
  * This function returns the failed status of a given controller.

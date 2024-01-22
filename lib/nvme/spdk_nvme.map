@@ -23,6 +23,7 @@
 	spdk_nvme_probe;
 	spdk_nvme_connect;
 	spdk_nvme_connect_async;
+	spdk_nvme_connect_lazy;
 	spdk_nvme_probe_async;
 	spdk_nvme_probe_poll_async;
 	spdk_nvme_detach;
@@ -43,6 +44,7 @@
 	spdk_nvme_ctrlr_reconnect_async;
 	spdk_nvme_ctrlr_reconnect_poll_async;
 	spdk_nvme_ctrlr_fail;
+	spdk_nvme_ctrlr_resume_connect;
 	spdk_nvme_ctrlr_is_failed;
 	spdk_nvme_ctrlr_get_data;
 	spdk_nvme_ctrlr_get_regs_csts;

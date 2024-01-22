@@ -5737,12 +5737,24 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 		rc = -EAGAIN;
 		break;
 	case NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND:
-		rc = nvme_fabric_qpair_connect_async(&tqpair->qpair, tqpair->num_entries + 1);
-		if (rc < 0) {
-			SPDK_ERRLOG("Failed to send an NVMe-oF Fabric CONNECT command\n");
-			break;
+		if (ctrlr->lazy_fabric_connect) {
+			/*
+			 * Inform the caller that the ctrlr is fully constructed, added
+			 * to the init list and connected up to the stage before FABRIC CONNECT.
+			 */
+			if (ctrlr->construct_cb) {
+				ctrlr->construct_cb(ctrlr->cb_ctx, &ctrlr->trid, ctrlr, &ctrlr->opts);
+				ctrlr->construct_cb = NULL;
+			}
+		} else {
+			/* Proceed with FABRIC CONNECT as usually. */
+			rc = nvme_fabric_qpair_connect_async(&tqpair->qpair, tqpair->num_entries + 1);
+			if (rc < 0) {
+				SPDK_ERRLOG("Failed to send an NVMe-oF Fabric CONNECT command\n");
+				break;
+			}
+			tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL;
 		}
-		tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL;
 		rc = -EAGAIN;
 		break;
 	case NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL:

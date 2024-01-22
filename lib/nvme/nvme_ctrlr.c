@@ -1043,6 +1043,39 @@ spdk_nvme_ctrlr_fail(struct spdk_nvme_ctrlr *ctrlr)
 	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 }
 
+int
+spdk_nvme_ctrlr_resume_connect(struct spdk_nvme_ctrlr *ctrlr)
+{
+	int rc;
+
+	assert(ctrlr != NULL);
+	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+	if (!ctrlr->lazy_fabric_connect) {
+		SPDK_NOTICELOG("Fabric lazy connect is turned off for ctrlr %p. "
+			       "Skipping lazy-fabric-connect resume.\n", ctrlr);
+		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+		return 0;
+	}
+	if (nvme_qpair_get_state(ctrlr->adminq) != NVME_QPAIR_CONNECTING) {
+		SPDK_NOTICELOG("Ctrlr %p admin queue is not in NVME_QPAIR_CONNECTING "
+			       "state (%d). Skipping lazy-fabric-connect resume.\n",
+			       ctrlr, (int)nvme_qpair_get_state(ctrlr->adminq));
+		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+		return -EINVAL;
+	}
+	ctrlr->lazy_fabric_connect = false;
+	rc = spdk_nvme_qpair_process_completions(ctrlr->adminq, 0);
+	if (rc < 0) {
+		NVME_CTRLR_ERRLOG(ctrlr, "Failed to finish lazy FABRIC CONNECT. "
+				  "Error %d. Failing ctrlr %p\n", rc, ctrlr);
+		nvme_ctrlr_fail(ctrlr, false);
+		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+		return rc;
+	}
+	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+	return 0;
+}
+
 static void
 nvme_ctrlr_shutdown_set_cc_done(void *_ctx, uint64_t value, const struct spdk_nvme_cpl *cpl)
 {
