@@ -443,6 +443,21 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 	return n;
 }
 
+int
+spdk_mlx5_cq_flush_doorbells(struct spdk_mlx5_cq *cq)
+{
+	struct spdk_mlx5_qp *qp, *tqp;
+	int i = 0;
+
+	STAILQ_FOREACH_SAFE(qp, &cq->ring_db_qps, db_link, tqp) {
+		STAILQ_REMOVE_HEAD(&cq->ring_db_qps, db_link);
+		mlx5_qp_tx_complete(qp);
+		i++;
+	}
+
+	return i;
+}
+
 #ifdef DEBUG
 void
 mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)

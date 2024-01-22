@@ -299,6 +299,14 @@ int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
 				  struct spdk_mlx5_cq_completion *comp, int max_completions);
 
 /**
+ * Ring doorbells for all qpairs associated with CQ which have outstanding WQEs
+ *
+ * \param cq Completion Queue
+ * \return Number of updated doorbells or negated errno
+ */
+int spdk_mlx5_cq_flush_doorbells(struct spdk_mlx5_cq *cq);
+
+/**
  * Prefetch \b wqe_count building blocks into cache
  *
  * \param qp
