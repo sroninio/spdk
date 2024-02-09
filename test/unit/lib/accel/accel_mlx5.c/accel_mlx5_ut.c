@@ -4,7 +4,7 @@
  *   All rights reserved.
  */
 
-#include "spdk_cunit.h"
+#include "spdk_internal/cunit.h"
 #include "spdk_internal/mock.h"
 #include "common/lib/ut_multithread.c"
 #include "module/accel/mlx5/accel_mlx5.c"

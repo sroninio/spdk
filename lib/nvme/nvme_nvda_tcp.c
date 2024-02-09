@@ -13,7 +13,6 @@
 #include <dlfcn.h>
 
 #include <infiniband/verbs.h>
-#include <mellanox/xlio_extra.h>
 
 #include "spdk/log.h"
 #include "spdk/pipe.h"
@@ -40,24 +39,18 @@
 #include "spdk_internal/trace_defs.h"
 #include "spdk_internal/rdma.h"
 #include "spdk_internal/rdma_utils.h"
+#include "spdk_internal/xlio.h"
 #include "spdk/accel_module.h"
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
 #define XLIO_PACKETS_BUF_SIZE 128
-#define DEFAULT_XLIO_PATH "libxlio.so"
 
 #if !defined(SO_ZEROCOPY) && !defined(MSG_ZEROCOPY)
 #error "XLIO requires zcopy"
 #endif
 
 #define NVME_TCP_MAX_R2T_DEFAULT		1
-
-enum {
-	IOCTL_USER_ALLOC_TX = (1 << 0),
-	IOCTL_USER_ALLOC_RX = (1 << 1),
-	IOCTL_USER_ALLOC_TX_ZC = (1 << 2)
-};
 
 struct xlio_sock_packet {
 	struct xlio_socketxtreme_packet_desc_t xlio_packet;
@@ -276,98 +269,11 @@ static STAILQ_HEAD(, xlio_packets_pool) g_xlio_packets_pools = STAILQ_HEAD_INITI
 static struct spdk_mempool *g_xlio_buffers_pool;
 
 static int xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll);
-
-static struct xlio_api_t *g_xlio_api;
-static void *g_xlio_handle;
-
-static struct {
-	int (*socket)(int domain, int type, int protocol);
-	int (*bind)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-	int (*listen)(int sockfd, int backlog);
-	int (*connect)(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-	int (*accept)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
-	int (*close)(int fd);
-	ssize_t (*readv)(int fd, const struct iovec *iov, int iovcnt);
-	ssize_t (*writev)(int fd, const struct iovec *iov, int iovcnt);
-	ssize_t (*recv)(int sockfd, void *buf, size_t len, int flags);
-	ssize_t (*recvmsg)(int sockfd, struct msghdr *msg, int flags);
-	ssize_t (*sendmsg)(int sockfd, const struct msghdr *msg, int flags);
-	int (*fcntl)(int fd, int cmd, ... /* arg */);
-	int (*ioctl)(int fd, unsigned long request, ...);
-	int (*getsockopt)(int sockfd, int level, int optname, void *restrict optval,
-			  socklen_t *restrict optlen);
-	int (*setsockopt)(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
-	int (*getsockname)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
-	int (*getpeername)(int sockfd, struct sockaddr *restrict addr, socklen_t *restrict addrlen);
-	int (*getaddrinfo)(const char *restrict node,
-			   const char *restrict service,
-			   const struct addrinfo *restrict hints,
-			   struct addrinfo **restrict res);
-	void (*freeaddrinfo)(struct addrinfo *res);
-	const char *(*gai_strerror)(int errcode);
-} g_xlio_ops;
-
 static inline int xlio_sock_flush_ext(struct spdk_xlio_sock *vsock);
 static int xlio_sock_close(struct spdk_xlio_sock *sock);
 static void _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err);
 static inline int nvme_tcp_fill_data_mkeys(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_req *tcp_req, struct nvme_tcp_pdu *pdu);
-
-static int
-xlio_load(void)
-{
-	char *xlio_path;
-
-	xlio_path = getenv("SPDK_XLIO_PATH");
-	if (!xlio_path) {
-		printf("SPDK_XLIO_PATH is not defined. XLIO socket implementation is disabled.\n");
-		return -1;
-	} else if (strnlen(xlio_path, 1) == 0) {
-		xlio_path = NULL;
-		printf("SPDK_XLIO_PATH is defined but empty. Using default: %s\n",
-		       DEFAULT_XLIO_PATH);
-	}
-
-	g_xlio_handle = dlopen(xlio_path ? xlio_path : DEFAULT_XLIO_PATH, RTLD_NOW);
-	if (!g_xlio_handle) {
-		SPDK_ERRLOG("Failed to load XLIO library: path %s, error %s\n",
-			    xlio_path ? xlio_path : DEFAULT_XLIO_PATH, dlerror());
-		return -1;
-	}
-
-#define GET_SYM(sym) \
-	g_xlio_ops.sym = dlsym(g_xlio_handle, #sym); \
-	if (!g_xlio_ops.sym) { \
-		SPDK_ERRLOG("Failed to find symbol '%s'in XLIO library\n", #sym); \
-		dlclose(g_xlio_handle); \
-		g_xlio_handle = NULL; \
-		return -1; \
-	}
-
-	GET_SYM(socket);
-	GET_SYM(bind);
-	GET_SYM(listen);
-	GET_SYM(connect);
-	GET_SYM(accept);
-	GET_SYM(close);
-	GET_SYM(readv);
-	GET_SYM(writev);
-	GET_SYM(recv);
-	GET_SYM(recvmsg);
-	GET_SYM(sendmsg);
-	GET_SYM(fcntl);
-	GET_SYM(ioctl);
-	GET_SYM(getsockopt);
-	GET_SYM(setsockopt);
-	GET_SYM(getsockname);
-	GET_SYM(getpeername);
-	GET_SYM(getaddrinfo);
-	GET_SYM(freeaddrinfo);
-	GET_SYM(gai_strerror);
-#undef GET_SYM
-
-	return 0;
-}
 
 static void
 xlio_sock_free_pools(void)
@@ -380,130 +286,6 @@ xlio_sock_free_pools(void)
 	}
 
 	spdk_mempool_free(g_xlio_buffers_pool);
-}
-
-static void
-xlio_unload(void)
-{
-	int rc;
-
-	if (g_xlio_handle) {
-		int (*xlio_exit)(void) = dlsym(g_xlio_handle, "xlio_exit");
-
-		if (xlio_exit) {
-			xlio_exit();
-		}
-
-		memset(&g_xlio_ops, 0, sizeof(g_xlio_ops));
-		rc = dlclose(g_xlio_handle);
-		if (rc) {
-			SPDK_ERRLOG("Closing libxlio failed: rc %d %s\n",
-				    rc, dlerror());
-		}
-
-		SPDK_NOTICELOG("Unloaded libxlio\n");
-		g_xlio_handle = NULL;
-	}
-
-	xlio_sock_free_pools();
-}
-
-static void *
-spdk_xlio_alloc(size_t size)
-{
-	return spdk_zmalloc(size, 0, NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
-}
-
-static void
-spdk_xlio_free(void *buf)
-{
-	/* For some reason XLIO destructor is not called from dlclose
-	 * but is called later after DPDK cleanup. And this leads to a
-	 * crash since all DPDK structures are already freed.
-	 *
-	 * The check below works this around. If XLIO didn't free the
-	 * memory while in dlcose(), don't try to free it. DPDK will
-	 * do or has already done the cleanup.
-	 */
-	if (g_xlio_handle) {
-		spdk_free(buf);
-	}
-}
-
-static struct xlio_api_t *
-spdk_xlio_get_api(void)
-{
-	struct xlio_api_t *api_ptr = NULL;
-	socklen_t len = sizeof(api_ptr);
-
-	int err = g_xlio_ops.getsockopt(-2, SOL_SOCKET, SO_XLIO_GET_API, &api_ptr, &len);
-	if (err < 0) {
-		return NULL;
-	}
-
-	return api_ptr;
-}
-
-static int
-xlio_init(void)
-{
-	int rc;
-	uint64_t required_caps;
-#pragma pack(push, 1)
-	struct {
-		uint8_t flags;
-		void *(*alloc_func)(size_t);
-		void (*free_func)(void *);
-	} data;
-#pragma pack(pop)
-	struct cmsghdr *cmsg;
-	char cbuf[CMSG_SPACE(sizeof(data))];
-
-	static_assert((sizeof(uint8_t) + sizeof(uintptr_t) +
-		       sizeof(uintptr_t)) == sizeof(data),
-		      "wrong xlio ioctl data size.");
-
-	/* Before init, g_xlio_api must be NULL */
-	assert(g_xlio_api == NULL);
-
-	g_xlio_api = spdk_xlio_get_api();
-	if (!g_xlio_api) {
-		SPDK_ERRLOG("Failed to get XLIO API\n");
-		return -1;
-	}
-	printf("Got XLIO API %p\n", g_xlio_api);
-
-	if (g_xlio_api->magic != XLIO_MAGIC_NUMBER) {
-		SPDK_ERRLOG("Unexpected XLIO API magic number: expected %" PRIx64 ", got %" PRIx64 "\n",
-			    (uint64_t)XLIO_MAGIC_NUMBER, g_xlio_api->magic);
-		return -1;
-	}
-
-	required_caps = XLIO_EXTRA_API_GET_SOCKET_RINGS_FDS |
-			XLIO_EXTRA_API_SOCKETXTREME_POLL |
-			XLIO_EXTRA_API_SOCKETXTREME_FREE_PACKETS |
-			XLIO_EXTRA_API_IOCTL;
-	if ((g_xlio_api->cap_mask & required_caps) != required_caps) {
-		SPDK_ERRLOG("Required XLIO caps are missing: required %" PRIx64 ", got %" PRIx64 "\n",
-			    required_caps, g_xlio_api->cap_mask);
-		return -1;
-	}
-
-	cmsg = (struct cmsghdr *)cbuf;
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = CMSG_XLIO_IOCTL_USER_ALLOC;
-	cmsg->cmsg_len = CMSG_LEN(sizeof(data));
-	data.flags = IOCTL_USER_ALLOC_RX;
-	data.alloc_func = spdk_xlio_alloc;
-	data.free_func = spdk_xlio_free;
-	memcpy(CMSG_DATA(cmsg), &data, sizeof(data));
-
-	rc = g_xlio_api->ioctl(cmsg, cmsg->cmsg_len);
-	if (rc < 0) {
-		SPDK_ERRLOG("xlio_int rc %d (errno=%d)\n", rc, errno);
-	}
-
-	return rc;
 }
 
 static int
@@ -557,7 +339,7 @@ xlio_sock_set_recvbuf(struct spdk_xlio_sock *sock, int sz)
 		sz = min_size;
 	}
 
-	rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
+	rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc < 0) {
 		return rc;
 	}
@@ -571,7 +353,7 @@ xlio_get_pd(int fd)
 	struct xlio_pd_attr pd_attr_ptr = {};
 	socklen_t len = sizeof(pd_attr_ptr);
 
-	int err = g_xlio_ops.getsockopt(fd, SOL_SOCKET, SO_XLIO_PD, &pd_attr_ptr, &len);
+	int err = xlio_getsockopt(fd, SOL_SOCKET, SO_XLIO_PD, &pd_attr_ptr, &len);
 	if (err < 0) {
 		return NULL;
 	}
@@ -795,7 +577,7 @@ xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
 
 	if (enable_zero_copy) {
 		/* Try to turn on zero copy sends */
-		rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
+		rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
 		if (rc == 0) {
 			sock->flags.zcopy = true;
 		} else {
@@ -825,8 +607,8 @@ xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
 			return -ENOMEM;
 		}
 
-		rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_XLIO_USER_DATA,
-					   &user_data, sizeof(user_data));
+		rc = xlio_setsockopt(sock->fd, SOL_SOCKET, SO_XLIO_USER_DATA,
+				     &user_data, sizeof(user_data));
 		if (rc != 0) {
 			SPDK_ERRLOG("Failed to set socket user data for sock %p: rc %d, errno %d\n",
 				    sock, rc, errno);
@@ -838,7 +620,7 @@ xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
 	flag = 1;
 
 	if (xlio_opts->enable_quickack) {
-		rc = g_xlio_ops.setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
+		rc = xlio_setsockopt(sock->fd, IPPROTO_TCP, TCP_QUICKACK, &flag, sizeof(flag));
 		if (rc != 0) {
 			SPDK_ERRLOG("quickack was failed to set\n");
 		}
@@ -863,7 +645,7 @@ sock_is_loopback(int fd)
 	bool is_loopback = false;
 
 	salen = sizeof(sa);
-	rc = g_xlio_ops.getsockname(fd, (struct sockaddr *)&sa, &salen);
+	rc = xlio_getsockname(fd, (struct sockaddr *)&sa, &salen);
 	if (rc != 0) {
 		return is_loopback;
 	}
@@ -886,7 +668,7 @@ sock_is_loopback(int fd)
 
 			if (strncmp(ip_addr, ip_addr_tmp, sizeof(ip_addr)) == 0) {
 				memcpy(ifr.ifr_name, tmp->ifa_name, sizeof(ifr.ifr_name));
-				g_xlio_ops.ioctl(fd, SIOCGIFFLAGS, &ifr);
+				xlio_ioctl(fd, SIOCGIFFLAGS, &ifr);
 				if (ifr.ifr_flags & IFF_LOOPBACK) {
 					is_loopback = true;
 				}
@@ -905,8 +687,8 @@ xlio_sock_set_nonblock(int fd)
 {
 	int flag;
 
-	flag = g_xlio_ops.fcntl(fd, F_GETFL);
-	if (g_xlio_ops.fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
+	flag = xlio_fcntl(fd, F_GETFL);
+	if (xlio_fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
 		SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n",
 			    fd, errno);
 		return -1;
@@ -954,16 +736,16 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 	hints.ai_flags = AI_NUMERICSERV;
 	hints.ai_flags |= AI_PASSIVE;
 	hints.ai_flags |= AI_NUMERICHOST;
-	rc = g_xlio_ops.getaddrinfo(ip, portnum, &hints, &res0);
+	rc = xlio_getaddrinfo(ip, portnum, &hints, &res0);
 	if (rc != 0) {
-		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", g_xlio_ops.gai_strerror(rc), rc);
+		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", xlio_gai_strerror(rc), rc);
 		return rc;
 	}
 
 	/* try listen */
 	fd = -1;
 	for (res = res0; res != NULL; res = res->ai_next) {
-		fd = g_xlio_ops.socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		fd = xlio_socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		if (fd < 0) {
 			/* error */
 			continue;
@@ -971,35 +753,35 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 
 		if (isolate) {
 			sz = SO_XLIO_ISOLATE_SAFE;
-			rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_ISOLATE, &sz, sizeof(sz));
+			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_ISOLATE, &sz, sizeof(sz));
 			if (rc) {
 				SPDK_WARNLOG("Fail to set isolation: sock %p rc %d errno %d\n", sock, rc, errno);
 			}
 		}
 
 		sz = xlio_opts->recv_buf_size;
-		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
+		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 		if (rc) {
 			/* Not fatal */
 		}
 
 		sz = xlio_opts->send_buf_size;
-		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
+		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 		if (rc) {
 			/* Not fatal */
 		}
 
-		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
+		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 		if (rc != 0) {
-			g_xlio_ops.close(fd);
+			xlio_close(fd);
 			/* error */
 			continue;
 		}
 
 		if (xlio_opts->enable_tcp_nodelay) {
-			rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+			rc = xlio_setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
 			if (rc != 0) {
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				/* error */
 				continue;
 			}
@@ -1007,9 +789,9 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 
 #if defined(SO_PRIORITY)
 		if (opts->priority) {
-			rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
+			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &opts->priority, sizeof val);
 			if (rc != 0) {
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				/* error */
 				continue;
 			}
@@ -1017,9 +799,9 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 #endif
 
 		if (res->ai_family == AF_INET6) {
-			rc = g_xlio_ops.setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
+			rc = xlio_setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &val, sizeof val);
 			if (rc != 0) {
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				/* error */
 				continue;
 			}
@@ -1030,9 +812,9 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 			int to;
 
 			to = opts->ack_timeout;
-			rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &to, sizeof(to));
+			rc = xlio_setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &to, sizeof(to));
 			if (rc != 0) {
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				/* error */
 				continue;
 			}
@@ -1042,38 +824,38 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 		}
 
 		uint64_t user_data = (uintptr_t)NULL;
-		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_USER_DATA,
-					   &user_data, sizeof(user_data));
+		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_USER_DATA,
+				     &user_data, sizeof(user_data));
 		if (rc != 0) {
-			SPDK_ERRLOG("Failed to set socket user data for sock %p: rc %d, errno %d\n",
-				    sock, rc, errno);
-			g_xlio_ops.close(fd);
+			SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
+				    fd, rc, errno);
+			xlio_close(fd);
 			fd = -1;
 			break;
 		}
 
 		if (vlan_tag != 0) {
-			rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_EXT_VLAN_TAG, &vlan_tag,
-						   sizeof vlan_tag);
+			rc = xlio_setsockopt(fd, SOL_SOCKET, SO_XLIO_EXT_VLAN_TAG, &vlan_tag,
+					     sizeof vlan_tag);
 			if (rc != 0) {
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				/* error */
 				continue;
 			}
 		}
 
 		if (xlio_sock_set_nonblock(fd)) {
-			g_xlio_ops.close(fd);
+			xlio_close(fd);
 			fd = -1;
 			break;
 		}
 
-		rc = g_xlio_ops.connect(fd, res->ai_addr, res->ai_addrlen);
+		rc = xlio_connect(fd, res->ai_addr, res->ai_addrlen);
 		if (rc != 0) {
 			if (rc != EAGAIN && rc != EWOULDBLOCK && errno != EINPROGRESS) {
 				SPDK_ERRLOG("connect() failed, rc %d, errno = %d\n", rc, errno);
 				/* try next family */
-				g_xlio_ops.close(fd);
+				xlio_close(fd);
 				fd = -1;
 				continue;
 			}
@@ -1083,7 +865,7 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 
 		break;
 	}
-	g_xlio_ops.freeaddrinfo(res0);
+	xlio_freeaddrinfo(res0);
 
 	if (fd < 0) {
 		return -EINVAL;
@@ -1095,7 +877,7 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 	rc = xlio_sock_alloc(sock, fd, enable_zcopy_user_opts && enable_zcopy_impl_opts, xlio_opts);
 	if (rc) {
 		SPDK_ERRLOG("sock allocation failed\n");
-		g_xlio_ops.close(fd);
+		xlio_close(fd);
 		return rc;
 	}
 
@@ -1136,7 +918,7 @@ xlio_sock_close(struct spdk_xlio_sock *sock)
 	/* If the socket fails to close, the best choice is to
 	 * leak the fd but continue to free the rest of the sock
 	 * memory. */
-	g_xlio_ops.close(sock->fd);
+	xlio_close(sock->fd);
 
 	if (sock->ring_fd && --sock->ring_fd->refs == 0) {
 		free(sock->ring_fd);
@@ -1167,7 +949,7 @@ _sock_check_zcopy(struct spdk_xlio_sock *vsock)
 	msgh.msg_controllen = sizeof(buf);
 
 	while (true) {
-		rc = g_xlio_ops.recvmsg(vsock->fd, &msgh, MSG_ERRQUEUE);
+		rc = xlio_recvmsg(vsock->fd, &msgh, MSG_ERRQUEUE);
 
 		if (rc < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
@@ -1298,7 +1080,7 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 		      sock, packet->xlio_packet.buff_lst);
 	assert(packet->refs == 0);
 	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
-	ret = g_xlio_api->socketxtreme_free_packets(&packet->xlio_packet, 1);
+	ret = xlio_socketxtreme_free_packets(&packet->xlio_packet, 1);
 	if (ret < 0) {
 		SPDK_ERRLOG("Free xlio packets failed, ret %d, errno %d\n",
 			    ret, errno);
@@ -1407,7 +1189,7 @@ poll_no_group_socket(struct spdk_xlio_sock *sock)
 		int ring_fds[2];
 		int num_rings;
 
-		ret = g_xlio_api->get_socket_rings_fds(sock->fd, ring_fds, 2);
+		ret = xlio_get_socket_rings_fds(sock->fd, ring_fds, 2);
 		if (ret < 0) {
 			SPDK_ERRLOG("Failed to get ring FDs for socket %d: rc %d, errno %d\n",
 				    sock->fd, ret, errno);
@@ -1505,8 +1287,8 @@ xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 
 		SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
 	} else {
-		ret = g_xlio_ops.readv(sock->fd, iovs, iovcnt);
-		SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d, errno %d\n", sock, ret, errno);
+		ret = xlio_readv(sock->fd, iovs, iovcnt);
+		SPDK_DEBUGLOG(nvme_xlio, "Sock %d: readv_wrapper ret %d, errno %d\n", sock->fd, ret, errno);
 	}
 
 	return ret;
@@ -1699,7 +1481,7 @@ xlio_sock_flush_ext(struct spdk_xlio_sock *vsock)
 	msg.msg_iov = iovs;
 	msg.msg_iovlen = iovcnt;
 
-	rc = g_xlio_ops.sendmsg(vsock->fd, &msg, flags);
+	rc = xlio_sendmsg(vsock->fd, &msg, flags);
 	SPDK_DEBUGLOG(nvme_xlio, "sock %p, iovs %zu, len %u, zcopy %d, rc %zd\n", vsock, iovcnt, total,
 		      is_zcopy, rc);
 	if (rc <= 0) {
@@ -1884,7 +1666,7 @@ xlio_sock_group_impl_add_sock(struct spdk_xlio_sock_group_impl *group, struct sp
 	int ring_fds[2];
 	int rc;
 
-	rc = g_xlio_api->get_socket_rings_fds(vsock->fd, ring_fds, 2);
+	rc = xlio_get_socket_rings_fds(vsock->fd, ring_fds, 2);
 	if (rc < 0) {
 		SPDK_ERRLOG("Failed to get ring FDs for socket %d\n", vsock->fd);
 		return rc;
@@ -1949,7 +1731,7 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 	int num_events, i, rc;
 	struct xlio_socketxtreme_completion_t comps[MAX_EVENTS_PER_POLL];
 
-	num_events = g_xlio_api->socketxtreme_poll(fd, comps, max_events_per_poll, SOCKETXTREME_POLL_TX);
+	num_events = xlio_socketxtreme_poll(fd, comps, max_events_per_poll, SOCKETXTREME_POLL_TX);
 	if (num_events < 0) {
 		SPDK_ERRLOG("Socket extreme poll failed for fd %d: fd, result %d, errno %d\n", fd, num_events,
 			    errno);
@@ -2226,20 +2008,10 @@ xlio_sock_free_bufs(struct spdk_xlio_sock *sock, struct spdk_sock_buf *sock_buf)
 }
 
 static void
-__attribute__((constructor))
-spdk_net_impl_register_xlio(void)
-{
-	if (!xlio_load() == 0 ||
-	    !xlio_init() == 0) {
-		SPDK_ERRLOG("Failed to load XLIO\n");
-	}
-}
-
-static void
 __attribute__((destructor))
-spdk_net_impl_unregister_xlio(void)
+nvme_tcp_cleanup(void)
 {
-	xlio_unload();
+	xlio_sock_free_pools();
 }
 
 SPDK_LOG_REGISTER_COMPONENT(nvme_xlio)

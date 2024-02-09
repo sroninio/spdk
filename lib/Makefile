@@ -31,6 +31,7 @@ DIRS-$(CONFIG_VIRTIO) += virtio
 DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_RDMA) += rdma rdma_utils
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
+DIRS-$(CONFIG_XLIO) += xlio
 
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 DIRS-y += mlx5

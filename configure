@@ -134,6 +134,8 @@ function usage() {
 	echo " --with-xlio[=DIR]         Build xlio socket layer."
 	echo " --without-xlio            Path to custom libxlio installation directory may be specified."
 	echo "                           If path is given, it should contain 'include/mellanox/xlio_extra.h' file."
+	echo " --with-static-xlio        Link with static libxlio. Requires --with-xlio."
+	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -698,6 +700,13 @@ for i in "$@"; do
 		--without-xlio)
 			CONFIG[XLIO_DIR]=
 			CONFIG[XLIO]=n
+			;;
+		--with-static-xlio)
+			CONFIG[STATIC_XLIO]=y
+			;;
+		--with-dpcp=*)
+			check_dir "$i"
+			CONFIG[DPCP_DIR]=$(readlink -f ${i#*=})
 			;;
 		--)
 			break
