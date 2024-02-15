@@ -353,6 +353,13 @@ struct spdk_memory_domain *spdk_memory_domain_get_first(const char *id);
 struct spdk_memory_domain *spdk_memory_domain_get_next(struct spdk_memory_domain *prev,
 		const char *id);
 
+/**
+ * Get the System memory domain.
+ *
+ * \return Pointer to the System memory domain.
+ */
+struct spdk_memory_domain *spdk_memory_domain_get_system_domain(void);
+
 enum spdk_memory_domain_update_notification_type {
 	SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_CREATED,
 	SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_DELETED

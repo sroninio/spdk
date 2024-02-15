@@ -41,6 +41,24 @@ TAILQ_HEAD(, memory_domain_subscriber) g_subscribers_list = TAILQ_HEAD_INITIALIZ
 static void memory_domain_notify(struct spdk_memory_domain *domain,
 				 enum spdk_memory_domain_update_notification_type type);
 
+static struct spdk_memory_domain g_system_domain = {
+	.type = SPDK_DMA_DEVICE_TYPE_DMA,
+	.id = "system",
+};
+
+static void
+__attribute__((constructor))
+_memory_domain_register(void)
+{
+	TAILQ_INSERT_TAIL(&g_dma_memory_domains, &g_system_domain, link);
+}
+
+struct spdk_memory_domain *
+spdk_memory_domain_get_system_domain(void)
+{
+	return &g_system_domain;
+}
+
 int
 spdk_memory_domain_create(struct spdk_memory_domain **_domain, enum spdk_dma_device_type type,
 			  struct spdk_memory_domain_ctx *ctx, const char *id)
@@ -175,6 +193,8 @@ spdk_memory_domain_destroy(struct spdk_memory_domain *domain)
 	if (!domain) {
 		return;
 	}
+
+	assert(domain != &g_system_domain);
 
 	pthread_mutex_lock(&g_dma_mutex);
 	memory_domain_notify(domain, SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_DELETED);
