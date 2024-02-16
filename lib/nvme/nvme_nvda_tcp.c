@@ -826,8 +826,8 @@ xlio_sock_alloc(struct spdk_xlio_sock *sock, int fd, bool enable_zero_copy,
 		rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_XLIO_USER_DATA,
 					   &user_data, sizeof(user_data));
 		if (rc != 0) {
-			SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
-				    sock->fd, rc, errno);
+			SPDK_ERRLOG("Failed to set socket user data for sock %p: rc %d, errno %d\n",
+				    sock, rc, errno);
 			return rc;
 		}
 	}
@@ -1043,8 +1043,8 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_USER_DATA,
 					   &user_data, sizeof(user_data));
 		if (rc != 0) {
-			SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
-				    fd, rc, errno);
+			SPDK_ERRLOG("Failed to set socket user data for sock %p: rc %d, errno %d\n",
+				    sock, rc, errno);
 			g_xlio_ops.close(fd);
 			fd = -1;
 			break;
@@ -1091,8 +1091,8 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 		sock->zcopy_threshold = opts->impl_opts->zerocopy_threshold;
 	}
 
-	SPDK_NOTICELOG("Created xlio sock %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u isolate %d\n",
-		       fd, sock->flags.zcopy, sock->flags.recv_zcopy, sock->pd,
+	SPDK_NOTICELOG("sock %p %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u isolate %d\n",
+		       sock, fd, sock->flags.zcopy, sock->flags.recv_zcopy, sock->pd,
 		       sock->pd ? sock->pd->context : NULL,
 		       sock->pd ? sock->pd->context->device->name : "unknown",
 		       sock->pd ? sock->pd->handle : 0, isolate);
@@ -1281,8 +1281,8 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 {
 	int ret;
 
-	SPDK_DEBUGLOG(nvme_xlio, "Sock %d: free xlio packet, first buf %p\n",
-		      sock->fd, packet->xlio_packet.buff_lst);
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: free xlio packet, first buf %p\n",
+		      sock, packet->xlio_packet.buff_lst);
 	assert(packet->refs == 0);
 	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
 	ret = g_xlio_api->socketxtreme_free_packets(&packet->xlio_packet, 1);
@@ -1298,7 +1298,7 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 static void
 packets_advance(struct spdk_xlio_sock *sock, size_t len)
 {
-	SPDK_DEBUGLOG(nvme_xlio, "Sock %d: advance packets by %lu bytes\n", sock->fd, len);
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: advance packets by %lu bytes\n", sock, len);
 	while (len > 0) {
 		struct xlio_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
 		/* We don't allow to advance by more than we have data in packets */
@@ -1473,7 +1473,7 @@ xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 			len = packets_next_chunk(sock, &buf, &packet, iov_len);
 			if (len == 0) {
 				/* No more data */
-				SPDK_DEBUGLOG(nvme_xlio, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
+				SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
 				return ret;
 			}
 
@@ -1488,10 +1488,10 @@ xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 			}
 		}
 
-		SPDK_DEBUGLOG(nvme_xlio, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
+		SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d\n", sock, ret);
 	} else {
 		ret = g_xlio_ops.readv(sock->fd, iovs, iovcnt);
-		SPDK_DEBUGLOG(nvme_xlio, "Sock %d: readv_wrapper ret %d, errno %d\n", sock->fd, ret, errno);
+		SPDK_DEBUGLOG(nvme_xlio, "sock %p: readv_wrapper ret %d, errno %d\n", sock, ret, errno);
 	}
 
 	return ret;
@@ -2113,7 +2113,7 @@ xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_
 	struct xlio_sock_buf *prev_buf = NULL;
 	int ret;
 
-	SPDK_DEBUGLOG(nvme_xlio, "Sock %d: zcopy recv %lu bytes\n", vsock->fd, len);
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: zcopy recv %lu bytes\n", vsock, len);
 	assert(vsock->flags.recv_zcopy);
 	*sock_buf = NULL;
 
@@ -2152,7 +2152,7 @@ xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_
 		assert(chunk_len <= len);
 		buf = spdk_mempool_get(g_xlio_buffers_pool);
 		if (spdk_unlikely(!buf)) {
-			SPDK_DEBUGLOG(nvme_xlio, "Sock %d: no more buffers, total_len %d\n", vsock->fd, ret);
+			SPDK_DEBUGLOG(nvme_xlio, "sock %p: no more buffers, total_len %d\n", vsock, ret);
 			if (spdk_unlikely(group && !vsock->flags.pending_recv)) {
 				vsock->flags.pending_recv = true;
 				SPDK_DEBUGLOG(nvme_xlio, "Sock %d, insert to pending_recv\n", vsock->fd);
@@ -2180,11 +2180,11 @@ xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_
 		len -= chunk_len;
 		ret += chunk_len;
 		prev_buf = buf;
-		SPDK_DEBUGLOG(nvme_xlio, "Sock %d: add buffer %p, len %lu, total_len %d\n",
-			      vsock->fd, buf, buf->sock_buf.iov.iov_len, ret);
+		SPDK_DEBUGLOG(nvme_xlio, "sock %p: add buffer %p, len %lu, total_len %d\n",
+			      vsock, buf, buf->sock_buf.iov.iov_len, ret);
 	}
 
-	SPDK_DEBUGLOG(nvme_xlio, "Sock %d: recv_zcopy ret %d\n", vsock->fd, ret);
+	SPDK_DEBUGLOG(nvme_xlio, "sock %p: recv_zcopy ret %d\n", vsock, ret);
 	return ret;
 }
 
@@ -3437,6 +3437,7 @@ _nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req,
 	qpair = req->qpair;
 
 	TAILQ_REMOVE(&tqpair->outstanding_reqs, tcp_req, link);
+	assert(tqpair->stats->outstanding_reqs > 0);
 	tqpair->stats->outstanding_reqs--;
 	SPDK_DEBUGLOG(nvme,
 		      "tqpair %p %u (out %"PRIu64"), sock %p, tcp_req %p pdu %p, ordering %x, cid %u\n", tqpair,
@@ -3669,6 +3670,8 @@ nvme_tcp_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
 	cpl.status.dnr = dnr;
 
 	TAILQ_FOREACH_SAFE(tcp_req, &tqpair->outstanding_reqs, link, tmp) {
+		SPDK_DEBUGLOG(nvme, "tqpair %p %u, sock %p, req %p, ordering 0x%x\n", tqpair, tqpair->qpair.id,
+			      &tqpair->sock, tcp_req, tcp_req->ordering.raw);
 		if (tcp_req->ordering.bits.in_progress_accel) {
 			continue;
 		}
@@ -4379,19 +4382,17 @@ nvme_tcp_c2h_data_hdr_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu 
 	enum spdk_nvme_tcp_term_req_fes fes;
 	int flags = c2h_data->common.flags;
 
-	SPDK_DEBUGLOG(nvme, "enter\n");
-	SPDK_DEBUGLOG(nvme, "c2h_data info on tqpair(%p): datao=%u, datal=%u, cccid=%d\n",
-		      tqpair, c2h_data->datao, c2h_data->datal, c2h_data->cccid);
 	tcp_req = get_nvme_active_req_by_cid(tqpair, c2h_data->cccid);
+	SPDK_DEBUGLOG(nvme,
+		      "tqpair %p %u, sock %p, tcp_req %p pdu %p, ordering 0x%x: datao=%u, datal=%u, cccid=%d\n",
+		      tqpair, tqpair->qpair.id, &tqpair->sock, tcp_req, &tcp_req->pdu, tcp_req->ordering.raw,
+		      c2h_data->datao, c2h_data->datal, c2h_data->cccid);
 	if (spdk_unlikely(!tcp_req)) {
 		SPDK_ERRLOG("no tcp_req found for c2hdata cid=%d\n", c2h_data->cccid);
 		fes = SPDK_NVME_TCP_TERM_REQ_FES_INVALID_HEADER_FIELD;
 		error_offset = offsetof(struct spdk_nvme_tcp_c2h_data_hdr, cccid);
 		goto end;
 	}
-
-	SPDK_DEBUGLOG(nvme, "tcp_req(%p) on tqpair(%p): expected_datao=%u, payload_size=%u\n",
-		      tcp_req, tqpair, tcp_req->expected_datao, tcp_req->req.payload_size);
 
 	if (spdk_unlikely((flags & SPDK_NVME_TCP_C2H_DATA_FLAGS_SUCCESS) &&
 			  !(flags & SPDK_NVME_TCP_C2H_DATA_FLAGS_LAST_PDU))) {
@@ -4957,11 +4958,13 @@ nvme_tcp_read_payload_data_zcopy(struct spdk_xlio_sock *vsock, struct nvme_tcp_p
 			goto fail;
 		}
 
-		SPDK_DEBUGLOG(nvme, "Got %d bytes from socket layer\n", ret);
-
+		SPDK_DEBUGLOG(nvme, "sock %p, pdu %p: requested %zu, got %d bytes\n", vsock, pdu, len, ret);
 		if (tcp_req->sock_buf) {
 			struct spdk_sock_buf *cur_buf = tcp_req->sock_buf;
-			while (cur_buf->next) { cur_buf = cur_buf->next; }
+
+			while (cur_buf->next) {
+				cur_buf = cur_buf->next;
+			}
 			cur_buf->next = sock_buf;
 		} else {
 			tcp_req->sock_buf = sock_buf;
@@ -5072,12 +5075,14 @@ nvme_tcp_read_payload_data_memory_domain(struct spdk_xlio_sock *sock, struct nvm
 		if (spdk_unlikely(ret <= 0)) {
 			goto fail;
 		}
-
-		SPDK_DEBUGLOG(nvme, "Got %d bytes from socket layer\n", ret);
+		SPDK_DEBUGLOG(nvme, "sock %p, pdu %p: requested %zu, got %d bytes\n", sock, recv_pdu, len, ret);
 
 		if (tcp_req->sock_buf) {
 			struct spdk_sock_buf *cur_buf = tcp_req->sock_buf;
-			while (cur_buf->next) { cur_buf = cur_buf->next; }
+
+			while (cur_buf->next) {
+				cur_buf = cur_buf->next;
+			}
 			cur_buf->next = sock_buf;
 		} else {
 			tcp_req->sock_buf = sock_buf;
@@ -5466,6 +5471,7 @@ nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair)
 		tqpair->flags.needs_poll = false;
 		if (tqpair->flags.needs_resubmit) {
 			tqpair->flags.needs_resubmit = false;
+			SPDK_DEBUGLOG(nvme, "tqpair %p %u, sock %p\n", tqpair, tqpair->qpair.id, &tqpair->sock);
 			nvme_qpair_resubmit_requests(qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
 		}
 		if (spdk_unlikely(tqpair->flags.has_accel_nomem_pdus)) {
@@ -6178,6 +6184,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 
 		if (tqpair->sock.ring_fd != NULL) {
 			int rc = xlio_sock_close(&tqpair->sock);
+
 			if (tqpair->sock.ring_fd != NULL) {
 				SPDK_ERRLOG("tqpair=%p, errno=%d, rc=%d\n", tqpair, errno, rc);
 				/* Set it to NULL manually */
