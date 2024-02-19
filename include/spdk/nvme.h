@@ -291,6 +291,11 @@ struct spdk_nvme_ctrlr_opts {
 	 * Default is `false` (Enable I/O splitting).
 	 */
 	bool disable_io_split;
+
+	/**
+	 * VLAN tag for sockets.
+	 */
+	int vlan_tag;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 824, "Incorrect size");
 

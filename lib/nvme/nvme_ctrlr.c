@@ -239,6 +239,7 @@ spdk_nvme_ctrlr_get_default_ctrlr_opts(struct spdk_nvme_ctrlr_opts *opts, size_t
 	}
 
 	SET_FIELD(disable_io_split, false);
+	SET_FIELD(vlan_tag, 0);
 
 #undef FIELD_OK
 #undef SET_FIELD
