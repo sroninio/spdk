@@ -692,7 +692,7 @@ nvme_transport_poll_group_init(struct spdk_nvme_transport_poll_group *group,
 	}
 
 	for (i = 0; i < num_requests; i++) {
-		struct nvme_request *req = group->req_buf + i * req_size_padded;
+		struct nvme_request *req = (struct nvme_request *)((uint8_t *)group->req_buf + i * req_size_padded);
 
 		STAILQ_INSERT_TAIL(&group->free_req, req, stailq);
 	}

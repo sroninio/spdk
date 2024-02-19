@@ -1676,13 +1676,13 @@ spdk_copy_iov_with_offset(struct iovec *src_iov, int src_iovcnt,
 	assert(shift_iov_cnt >= 0);
 
 	/* shift iov */
-	dst_iov[shift_iov_cnt].iov_base += last_iov_offset;
+	dst_iov[shift_iov_cnt].iov_base = (uint8_t *)dst_iov[shift_iov_cnt].iov_base + last_iov_offset;
 	dst_iov[shift_iov_cnt].iov_len -= last_iov_offset;
 
 	copied_sz = spdk_iovcpy(src_iov, src_iovcnt, diov, diovcnt);
 
 	/* recover the shift iov */
-	dst_iov[shift_iov_cnt].iov_base -= last_iov_offset;
+	dst_iov[shift_iov_cnt].iov_base = (uint8_t *)dst_iov[shift_iov_cnt].iov_base - last_iov_offset;
 	dst_iov[shift_iov_cnt].iov_len += last_iov_offset;
 
 	return copied_sz;

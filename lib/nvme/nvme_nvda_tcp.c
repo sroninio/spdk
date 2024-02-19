@@ -1375,7 +1375,7 @@ packets_next_chunk(struct spdk_xlio_sock *sock,
 		assert(max_len > 0);
 		assert(len > 0);
 		len = spdk_min(len, max_len);
-		*buf = cur_xlio_buf->payload + sock->cur_offset;
+		*buf = (uint8_t *)cur_xlio_buf->payload + sock->cur_offset;
 		*packet = cur_packet;
 		return len;
 	}
@@ -1482,7 +1482,7 @@ xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 				return ret;
 			}
 
-			memcpy(iov->iov_base + offset, buf, len);
+			memcpy((uint8_t *)iov->iov_base + offset, buf, len);
 			packets_advance(sock, len);
 			ret += len;
 			offset += len;
@@ -1571,7 +1571,7 @@ xlio_sock_prep_reqs(struct spdk_xlio_sock *vsock, struct iovec *iovs, struct msg
 				mkeys[iovcnt].mkey = pdu->mkeys[i];
 				mkeys[iovcnt].flags = 0;
 			}
-			iovs[iovcnt].iov_base = pdu->iovs[i].iov_base + offset;
+			iovs[iovcnt].iov_base = (uint8_t *)pdu->iovs[i].iov_base + offset;
 			iovs[iovcnt].iov_len = pdu->iovs[i].iov_len - offset;
 			iovs[iovcnt].iov_len = spdk_min(pdu_data_len_remaining, iovs[iovcnt].iov_len);
 			pdu_data_len_remaining -= iovs[iovcnt].iov_len;
@@ -2259,7 +2259,6 @@ struct nvme_tcp_poll_group {
 	struct spdk_nvme_transport_poll_group group;
 	struct spdk_xlio_sock_group_impl xlio_group;
 	uint32_t completions_per_qpair;
-	bool in_polling;
 	int64_t num_completions;
 
 	void *tcp_reqs;
@@ -2746,7 +2745,7 @@ nvme_tcp_build_contig_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req
 	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
 
 	pdu->iovs = tcp_req->iovs;
-	pdu->iovs[0].iov_base = req->payload.contig_or_cb_arg + req->payload_offset;
+	pdu->iovs[0].iov_base = (uint8_t *)req->payload.contig_or_cb_arg + req->payload_offset;
 	pdu->iovs[0].iov_len = req->payload_size;
 	pdu->data_iovcnt = 1;
 
@@ -4156,7 +4155,9 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 	int rc = 0;
 
 	assert(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
-	SPDK_DEBUGLOG(nvme, "enter\n");
+
+	SPDK_DEBUGLOG(nvme, "tqpair %p %u sock %p, tcp_req %p pdu %p, ordering %x, cid %u\n", tqpair,
+		      tqpair->qpair.id, &tqpair->sock, tcp_req, &tcp_req->pdu, tcp_req->ordering.raw, tcp_req->cid);
 
 	/* The request can be NULL, e.g. in case of C2HTermReq */
 	if (spdk_likely(tcp_req != NULL)) {
@@ -6034,7 +6035,7 @@ nvme_tcp_poll_group_create(void)
 		}
 
 		for (i = 0; i < num_requests; i++) {
-			tcp_req = group->tcp_reqs + i * req_size_padded;
+			tcp_req = (struct nvme_tcp_req *)((uint8_t *)group->tcp_reqs + i * req_size_padded);
 			tcp_req->cid = UINT16_MAX;
 			STAILQ_INSERT_HEAD(&group->group.free_req, &tcp_req->req, stailq);
 		}
@@ -6052,7 +6053,7 @@ nvme_tcp_poll_group_create(void)
 
 		TAILQ_INIT(&group->free_pdus);
 		for (i = 0; i < num_requests; i++) {
-			pdu = group->recv_pdus + i * pdu_size_padded;
+			pdu = (struct nvme_tcp_pdu *)((uint8_t *)group->recv_pdus + i * pdu_size_padded);
 			TAILQ_INSERT_TAIL(&group->free_pdus, pdu, tailq);
 		}
 	}
@@ -6163,11 +6164,6 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	struct spdk_xlio_sock *vsocks[MAX_EVENTS_PER_POLL];
 	int num_events, i;
 
-	if (group->in_polling) {
-		return 0;
-	}
-
-	group->in_polling = true;
 	group->completions_per_qpair = completions_per_qpair;
 	group->num_completions = 0;
 	group->stats.polls++;
@@ -6214,8 +6210,6 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	TAILQ_FOREACH_SAFE(tqpair, &group->needs_poll, link, tmp_tqpair) {
 		nvme_tcp_qpair_sock_cb(tqpair);
 	}
-
-	group->in_polling = false;
 
 	if (spdk_unlikely(num_events < 0)) {
 		return num_events;
