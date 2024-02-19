@@ -917,7 +917,7 @@ xlio_sock_set_nonblock(int fd)
 
 static int
 xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spdk_sock_opts *opts,
-	       bool isolate)
+	       bool isolate, int vlan_tag)
 {
 	struct spdk_sock_impl_opts *xlio_opts;
 	char buf[MAX_TMPBUF];
@@ -1050,6 +1050,16 @@ xlio_sock_init(struct spdk_xlio_sock *sock, const char *ip, int port, struct spd
 			g_xlio_ops.close(fd);
 			fd = -1;
 			break;
+		}
+
+		if (vlan_tag != 0) {
+			rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_EXT_VLAN_TAG, &vlan_tag,
+						   sizeof vlan_tag);
+			if (rc != 0) {
+				g_xlio_ops.close(fd);
+				/* error */
+				continue;
+			}
 		}
 
 		if (xlio_sock_set_nonblock(fd)) {
@@ -5678,7 +5688,8 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
 	rc = xlio_sock_init(&tqpair->sock, ctrlr->trid.traddr, port, &opts,
-			    nvme_qpair_is_admin_queue(qpair));
+			    nvme_qpair_is_admin_queue(qpair),
+			    ctrlr->opts.vlan_tag);
 	if (rc) {
 		SPDK_ERRLOG("sock connection error of tqpair=%p with addr=%s, port=%ld, rc %d\n",
 			    tqpair, ctrlr->trid.traddr, port, rc);
