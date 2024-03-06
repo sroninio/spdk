@@ -78,7 +78,7 @@ struct nvme_tcp_poll_group {
 	struct spdk_nvme_transport_poll_group		group;
 	xlio_poll_group_t				xgroup;
 
-	TAILQ_HEAD(pending_recv_head, nvme_tcp_qpair)	pending_recv;
+	TAILQ_HEAD(pending_recv_head, nvme_tcp_qpair)	pending_events;
 	struct xlio_packets_pool			*xlio_packets_pool;
 	struct spdk_sock_impl_opts			impl_opts;
 	union {
@@ -95,7 +95,6 @@ struct nvme_tcp_poll_group {
 	void						*tcp_reqs;
 	TAILQ_HEAD(, nvme_tcp_pdu)			free_pdus;
 	void						*recv_pdus;
-	TAILQ_HEAD(, nvme_tcp_qpair)			needs_poll;
 	struct spdk_nvme_tcp_stat			stats;
 };
 
@@ -119,16 +118,15 @@ struct nvme_tcp_qpair {
 			uint16_t icreq_send_ack: 1;
 			uint16_t in_connect_poll: 1;
 			uint16_t use_poll_group_req_pool: 1;
-			uint16_t needs_poll: 1;
 			uint16_t needs_resubmit: 1;
 			uint16_t shared_stats: 1;
 			uint16_t has_accel_nomem_pdus : 1;
-			uint16_t pending_recv: 1;
+			uint16_t pending_events: 1;
 			uint16_t pending_send: 1;
 			uint16_t disconnected: 1;
 			uint16_t closed: 1;
 			uint16_t connect_notified: 1;
-			uint16_t reserved : 2;
+			uint16_t reserved : 3;
 		} flags;
 		uint16_t flags_raw;
 	};
@@ -889,11 +887,11 @@ xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t 
 	tqpair->consumed_packets++;
 
 	/* If the socket does not already have recv pending, add it now */
-	if (spdk_likely(tqpair->group) && !tqpair->flags.pending_recv) {
+	if (spdk_likely(tqpair->group) && !tqpair->flags.pending_events) {
 		struct nvme_tcp_poll_group *group = tqpair->group;
 
-		tqpair->flags.pending_recv = true;
-		TAILQ_INSERT_TAIL(&group->pending_recv, tqpair, link);
+		tqpair->flags.pending_events = true;
+		TAILQ_INSERT_TAIL(&group->pending_events, tqpair, link);
 	}
 }
 
@@ -1034,7 +1032,7 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 	num_packets = group->impl_opts.packets_pool_size;
 	num_buffers = group->impl_opts.buffers_pool_size;
 
-	TAILQ_INIT(&group->pending_recv);
+	TAILQ_INIT(&group->pending_events);
 
 	if (num_packets) {
 		group->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
@@ -1055,25 +1053,23 @@ static int
 xlio_sock_group_impl_poll(struct nvme_tcp_poll_group *group, int max_events)
 {
 	int num_events;
-	struct nvme_tcp_qpair *tqpair, *ptmp;
+	struct nvme_tcp_qpair *tqpair, *tmp_tqpair;
 
 	xlio_poll_group_poll(group->xgroup);
 
 	num_events = 0;
-	ptmp = TAILQ_LAST(&group->pending_recv, pending_recv_head);
+	tmp_tqpair = TAILQ_LAST(&group->pending_events, pending_recv_head);
 	tqpair = NULL;
-	while (tqpair != ptmp && num_events < max_events) {
-		tqpair = TAILQ_FIRST(&group->pending_recv);
-		/* If the socket's cb_fn is NULL, just remove it from the
-		 * list and do not add it to socks array */
+	while (tqpair != tmp_tqpair && num_events < MAX_EVENTS_PER_POLL) {
+		tqpair = TAILQ_FIRST(&group->pending_events);
+
+		TAILQ_REMOVE(&group->pending_events, tqpair, link);
+		tqpair->flags.pending_events = false;
+
 		if (spdk_unlikely(tqpair->flags.closed)) {
-			tqpair->flags.pending_recv = false;
-			TAILQ_REMOVE(&group->pending_recv, tqpair, link);
 			continue;
 		}
 
-		TAILQ_REMOVE(&group->pending_recv, tqpair, link);
-		tqpair->flags.pending_recv = false;
 		nvme_tcp_qpair_sock_cb(tqpair);
 		num_events++;
 	}
@@ -1141,10 +1137,10 @@ xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct spdk_sock
 		buf = spdk_mempool_get(g_xlio_buffers_pool);
 		if (spdk_unlikely(!buf)) {
 			SPDK_DEBUGLOG(nvme_xlio, "tqpair %p: no more buffers, total_len %d\n", tqpair, ret);
-			if (spdk_unlikely(group && !tqpair->flags.pending_recv)) {
-				tqpair->flags.pending_recv = true;
+			if (spdk_unlikely(group && !tqpair->flags.pending_events)) {
+				tqpair->flags.pending_events = true;
 				SPDK_DEBUGLOG(nvme_xlio, "tqpair %p, insert to pending_recv\n", tqpair);
-				TAILQ_INSERT_TAIL(&group->pending_recv, tqpair, link);
+				TAILQ_INSERT_TAIL(&group->pending_events, tqpair, link);
 			}
 			if (ret == 0) {
 				ret = -1;
@@ -1483,10 +1479,10 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 	struct nvme_tcp_poll_group *group;
 
-	if (tqpair->flags.needs_poll) {
+	if (tqpair->flags.pending_events) {
 		group = nvme_tcp_poll_group(qpair->poll_group);
-		TAILQ_REMOVE(&group->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = false;
+		TAILQ_REMOVE(&group->pending_events, tqpair, link);
+		tqpair->flags.pending_events = false;
 	}
 
 	nvme_tcp_qpair_abort_reqs(qpair, 0);
@@ -1562,17 +1558,17 @@ _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err
 	 * that happen. Add it to a list of qpairs to poll regardless of network activity
 	 * here.
 	 * Besides, when tqpair state is NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL or
-	 * NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED, need to add it to needs_poll list too to make
+	 * NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED, need to add it to pending_events list too to make
 	 * forward progress in case that the resources are released after icreq's or CONNECT's
 	 * resp is processed. */
-	if (tqpair->qpair.poll_group && !tqpair->flags.needs_poll &&
+	if (tqpair->qpair.poll_group && !tqpair->flags.pending_events &&
 	    (!STAILQ_EMPTY(&tqpair->qpair.queued_req) ||
 	     tqpair->state == NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL ||
 	     tqpair->state == NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED)) {
 		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 
-		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = true;
+		TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
+		tqpair->flags.pending_events = true;
 	}
 
 	TAILQ_REMOVE(&tqpair->send_queue, pdu, tailq);
@@ -2358,16 +2354,16 @@ nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair,
 	req->zcopy.iovcnt = 0;
 	nvme_free_request(req);
 
-	/* Zcopy requests may be queued for waiting resources, so set needs_poll
+	/* Zcopy requests may be queued for waiting resources, so set pending_events
 	 * and increase async_complete to trigger a resubmission of queued requests.
 	 */
 	if (tqpair->qpair.poll_group && !STAILQ_EMPTY(&tqpair->qpair.queued_req) &&
-	    !tqpair->flags.needs_poll) {
+	    !tqpair->flags.pending_events) {
 		struct nvme_tcp_poll_group *pgroup;
 		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 
-		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = true;
+		TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
+		tqpair->flags.pending_events = true;
 	}
 	tqpair->async_complete++;
 
@@ -2459,12 +2455,12 @@ complete:
 	 * so need to poll again or resubmit them.
 	 */
 	if (tqpair->qpair.poll_group && !STAILQ_EMPTY(&tqpair->qpair.queued_req)) {
-		if (!tqpair->flags.needs_poll) {
+		if (!tqpair->flags.pending_events) {
 			struct nvme_tcp_poll_group *pgroup;
 
 			pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
-			TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
-			tqpair->flags.needs_poll = true;
+			TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
+			tqpair->flags.pending_events = true;
 		}
 		tqpair->flags.needs_resubmit = true;
 	}
@@ -2895,10 +2891,10 @@ tcp_data_recv_crc32_done(void *cb_arg, int status)
 	assert(tqpair != NULL);
 
 	if (tqpair->qpair.poll_group && !STAILQ_EMPTY(&tqpair->qpair.queued_req) &&
-	    !tqpair->flags.needs_poll) {
+	    !tqpair->flags.pending_events) {
 		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
-		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = true;
+		TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
+		tqpair->flags.pending_events = true;
 	}
 
 	if (spdk_unlikely(status)) {
@@ -2934,10 +2930,10 @@ nvme_tcp_req_accel_seq_complete_crc_c2h_cb(void *arg, int status)
 	tqpair = nvme_tcp_qpair(tcp_req->req.qpair);
 
 	if (tqpair->qpair.poll_group && !STAILQ_EMPTY(&tqpair->qpair.queued_req) &&
-	    !tqpair->flags.needs_poll) {
+	    !tqpair->flags.pending_events) {
 		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
-		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = true;
+		TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
+		tqpair->flags.pending_events = true;
 	}
 
 	if (spdk_unlikely(status)) {
@@ -2993,11 +2989,11 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 				TAILQ_INSERT_TAIL(&tqpair->accel_nomem_queue, pdu, tailq);
 				tqpair->flags.has_accel_nomem_pdus = 1;
 
-				if (!tqpair->flags.needs_poll) {
+				if (!tqpair->flags.pending_events) {
 					struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 
-					TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
-					tqpair->flags.needs_poll = 1;
+					TAILQ_INSERT_TAIL(&tgroup->pending_events, tqpair, link);
+					tqpair->flags.pending_events = 1;
 				}
 
 				return rc;
@@ -3017,11 +3013,11 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 			TAILQ_INSERT_TAIL(&tqpair->accel_nomem_queue, pdu, tailq);
 			tqpair->flags.has_accel_nomem_pdus = 1;
 
-			if (!tqpair->flags.needs_poll) {
+			if (!tqpair->flags.pending_events) {
 				struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 
-				TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
-				tqpair->flags.needs_poll = 1;
+				TAILQ_INSERT_TAIL(&tgroup->pending_events, tqpair, link);
+				tqpair->flags.pending_events = 1;
 			}
 
 			return rc;
@@ -4430,31 +4426,28 @@ static void
 nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair)
 {
 	struct spdk_nvme_qpair *qpair = &tqpair->qpair;
-	struct nvme_tcp_poll_group *pgroup = nvme_tcp_poll_group(qpair->poll_group);
+	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
 	int32_t num_completions;
 
-	if (tqpair->flags.needs_poll) {
-		TAILQ_REMOVE(&pgroup->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = false;
-		if (tqpair->flags.needs_resubmit) {
-			tqpair->flags.needs_resubmit = false;
-			SPDK_DEBUGLOG(nvme, "tqpair %p %u, sock %p\n", tqpair, tqpair->qpair.id, &tqpair->sock);
-			nvme_qpair_resubmit_requests(qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
-		}
-		if (spdk_unlikely(tqpair->flags.has_accel_nomem_pdus)) {
-			/* For now it only works for C2H payload */
-			tqpair->flags.has_accel_nomem_pdus = 0;
-			nvme_tcp_qpair_resubmit_accel_nomem(tqpair);
-		}
+	if (tqpair->flags.needs_resubmit) {
+		tqpair->flags.needs_resubmit = false;
+		SPDK_DEBUGLOG(nvme, "tqpair %p %u\n", tqpair, tqpair->qpair.id);
+		nvme_qpair_resubmit_requests(qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
 	}
 
-	num_completions = spdk_nvme_qpair_process_completions(qpair, pgroup->completions_per_qpair);
+	if (spdk_unlikely(tqpair->flags.has_accel_nomem_pdus)) {
+		/* For now it only works for C2H payload */
+		tqpair->flags.has_accel_nomem_pdus = 0;
+		nvme_tcp_qpair_resubmit_accel_nomem(tqpair);
+	}
 
-	if (pgroup->num_completions >= 0 && num_completions >= 0) {
-		pgroup->num_completions += num_completions;
-		pgroup->stats.nvme_completions += num_completions;
+	num_completions = spdk_nvme_qpair_process_completions(qpair, group->completions_per_qpair);
+
+	if (group->num_completions >= 0 && num_completions >= 0) {
+		group->num_completions += num_completions;
+		group->stats.nvme_completions += num_completions;
 	} else {
-		pgroup->num_completions = -ENXIO;
+		group->num_completions = -ENXIO;
 	}
 }
 
@@ -4547,10 +4540,10 @@ nvme_tcp_qpair_connect_sock_done(struct nvme_tcp_qpair *tqpair, int err)
 	/* We can send icreq only when user asked to connect qpair. If it didn't happen yet, just wait. */
 	if (tqpair->state == NVME_TCP_QPAIR_STATE_CONNECTING) {
 		tqpair->state = NVME_TCP_QPAIR_STATE_ICREQ_SEND;
-		if (tqpair->qpair.poll_group && !tqpair->flags.needs_poll) {
+		if (tqpair->qpair.poll_group && !tqpair->flags.pending_events) {
 			tgroup = nvme_tcp_poll_group(qpair->poll_group);
-			TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
-			tqpair->flags.needs_poll = true;
+			TAILQ_INSERT_TAIL(&tgroup->pending_events, tqpair, link);
+			tqpair->flags.pending_events = true;
 		}
 	} else {
 		tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECTED;
@@ -4783,10 +4776,10 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 	/* We can send icreq only when socket is connected. If it didn't happen yet, just wait. */
 	if (tqpair->state == NVME_TCP_QPAIR_STATE_SOCK_CONNECTED) {
 		tqpair->state = NVME_TCP_QPAIR_STATE_ICREQ_SEND;
-		if (tqpair->qpair.poll_group && !tqpair->flags.needs_poll) {
+		if (tqpair->qpair.poll_group && !tqpair->flags.pending_events) {
 			struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(qpair->poll_group);
-			TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
-			tqpair->flags.needs_poll = true;
+			TAILQ_INSERT_TAIL(&tgroup->pending_events, tqpair, link);
+			tqpair->flags.pending_events = true;
 		}
 	} else {
 		tqpair->state = NVME_TCP_QPAIR_STATE_CONNECTING;
@@ -4998,7 +4991,7 @@ nvme_tcp_poll_group_create(void)
 		return NULL;
 	}
 
-	TAILQ_INIT(&group->needs_poll);
+	TAILQ_INIT(&group->pending_events);
 
 	rc = nvme_transport_poll_group_init(&group->group, 0);
 	if (rc != 0) {
@@ -5073,14 +5066,9 @@ nvme_tcp_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair)
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 
-	if (tqpair->flags.needs_poll) {
-		TAILQ_REMOVE(&group->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = false;
-	}
-
-	if (tqpair->flags.pending_recv) {
-		TAILQ_REMOVE(&group->pending_recv, tqpair, link);
-		tqpair->flags.pending_recv = false;
+	if (tqpair->flags.pending_events) {
+		TAILQ_REMOVE(&group->pending_events, tqpair, link);
+		tqpair->flags.pending_events = false;
 	}
 
 	return 0;
@@ -5120,9 +5108,9 @@ nvme_tcp_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 	assert(tqpair->flags.shared_stats == true);
 	tqpair->stats = &g_dummy_stats;
 
-	if (tqpair->flags.needs_poll) {
-		TAILQ_REMOVE(&group->needs_poll, tqpair, link);
-		tqpair->flags.needs_poll = false;
+	if (tqpair->flags.pending_events) {
+		TAILQ_REMOVE(&group->pending_events, tqpair, link);
+		tqpair->flags.pending_events = false;
 	}
 
 	assert(tqpair->sock.flags.closed);
@@ -5136,7 +5124,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 {
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tgroup);
 	struct spdk_nvme_qpair *qpair, *tmp_qpair;
-	struct nvme_tcp_qpair *tqpair, *tmp_tqpair;
+	struct nvme_tcp_qpair *tqpair;
 	int num_events;
 
 	group->completions_per_qpair = completions_per_qpair;
@@ -5171,12 +5159,6 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED) {
 			disconnected_qpair_cb(qpair, tgroup->group->ctx);
 		}
-	}
-
-	/* If any qpairs were marked as needing to be polled due to an asynchronous write completion
-	 * and they weren't polled as a consequence of calling spdk_sock_group_poll above, poll them now. */
-	TAILQ_FOREACH_SAFE(tqpair, &group->needs_poll, link, tmp_tqpair) {
-		nvme_tcp_qpair_sock_cb(tqpair);
 	}
 
 	if (spdk_unlikely(num_events < 0)) {
