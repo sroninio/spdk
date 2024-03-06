@@ -252,7 +252,7 @@ static int xlio_sock_close(struct nvme_tcp_qpair *qpair);
 static void _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err);
 static inline int nvme_tcp_fill_data_mkeys(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_req *tcp_req, struct nvme_tcp_pdu *pdu);
-static void nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair);
+static void nvme_tcp_qpair_process_pending_events(struct nvme_tcp_qpair *tqpair);
 static void nvme_tcp_qpair_connect_sock_done(struct nvme_tcp_qpair *qpair, int err);
 static int xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags);
 
@@ -1070,7 +1070,7 @@ xlio_sock_group_impl_poll(struct nvme_tcp_poll_group *group, int max_events)
 			continue;
 		}
 
-		nvme_tcp_qpair_sock_cb(tqpair);
+		nvme_tcp_qpair_process_pending_events(tqpair);
 		num_events++;
 	}
 
@@ -4423,16 +4423,15 @@ nvme_tcp_qpair_resubmit_accel_nomem(struct nvme_tcp_qpair *tqpair)
 }
 
 static void
-nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair)
+nvme_tcp_qpair_process_pending_events(struct nvme_tcp_qpair *tqpair)
 {
-	struct spdk_nvme_qpair *qpair = &tqpair->qpair;
-	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
 	int32_t num_completions;
+	struct nvme_tcp_poll_group *group = tqpair->group;
 
 	if (tqpair->flags.needs_resubmit) {
 		tqpair->flags.needs_resubmit = false;
 		SPDK_DEBUGLOG(nvme, "tqpair %p %u\n", tqpair, tqpair->qpair.id);
-		nvme_qpair_resubmit_requests(qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
+		nvme_qpair_resubmit_requests(&tqpair->qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
 	}
 
 	if (spdk_unlikely(tqpair->flags.has_accel_nomem_pdus)) {
@@ -4441,7 +4440,7 @@ nvme_tcp_qpair_sock_cb(struct nvme_tcp_qpair *tqpair)
 		nvme_tcp_qpair_resubmit_accel_nomem(tqpair);
 	}
 
-	num_completions = spdk_nvme_qpair_process_completions(qpair, group->completions_per_qpair);
+	num_completions = spdk_nvme_qpair_process_completions(&tqpair->qpair, group->completions_per_qpair);
 
 	if (group->num_completions >= 0 && num_completions >= 0) {
 		group->num_completions += num_completions;
