@@ -18,7 +18,14 @@ build-job:
     image: harbor.mellanox.com/swx-storage/spdk/x86_64/fedora39-spdk_dev:20240228
     variables:
         GIT_SUBMODULE_STRATEGY: recursive
+        GIT_SUBMODULE_DEPTH: 1
+    hooks:
+      pre_get_sources_script:
+        - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
     script:
+        # do git submodule explicitly: we need to replace URL for dpdk
+        # - git config -f .gitmodules remote.dpdk.url https://gitlab.com/Mellanox/spdk_team/dpdk.git
+        #- git submodule update --init
         # GET FIO source, run ./configure
         - (cd .. ; curl -LO https://github.com/axboe/fio/archive/refs/tags/fio-3.35.tar.gz; tar xf fio-3.35.tar.gz)
         - cd ../fio-fio-3.35
@@ -29,12 +36,13 @@ build-job:
         - make -j4
         - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
     artifacts:
-      paths:
-        - ./build
-        - ./dpdk/build/
-        - .test.tar
-        - ./mk/config.mk
-        - ./mk/cc.mk
+        expire_in: 1 week
+        paths:
+          - ./build
+          - ./dpdk/build/
+          - .test.tar
+          - ./mk/config.mk
+          - ./mk/cc.mk
 
 test-job:
     stage: test
