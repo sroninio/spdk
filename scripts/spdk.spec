@@ -58,7 +58,7 @@ BuildRequires: libiscsi-devel
 
 # SPDK build dependencies
 BuildRequires:	make gcc gcc-c++
-BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel 
+BuildRequires:	CUnit-devel, libaio-devel, openssl-devel, libuuid-devel
 BuildRequires:	libiscsi-devel, fuse3-devel
 
 %if 0%{?rhel} >= 8
@@ -78,7 +78,7 @@ BuildRequires:	libibverbs-devel, librdmacm-devel
 
 # SPDK runtime dependencies
 Requires:	libibverbs
-Requires:	librdmacm 
+Requires:	librdmacm
 Requires:	sg3_utils
 Requires:   libhugetlbfs-utils
 %if "%{use_python}" == "python3.6"

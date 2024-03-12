@@ -10,8 +10,6 @@
 #include <sys/epoll.h>
 #include <linux/errqueue.h>
 
-#include <dlfcn.h>
-
 #include <infiniband/verbs.h>
 
 #include "spdk/log.h"

@@ -3165,7 +3165,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
     p.add_argument('-c', '--cq-size', type=int, help='CQ size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
-    p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR. Requires crypto-mb")
+    p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR.")
     p.add_argument('-d', '--allowed-devs', help="Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1")
     p.add_argument('--allowed-crypto-devs', dest='allowed_devs', help="[DEPRECATED] Comma separated list of allowed crypto device names")
     p.add_argument('-l', '--siglast', dest='siglast', action='store_true',
@@ -3175,21 +3175,17 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    help="Use dedicated qpair per memory domain per channel")
     p.add_argument('-n', '--qp-per-channel', dest='qp_per_domain', action='store_false', default=None,
                    help="Use single QP per channel")
-    p.add_argument('-e', '--enable-driver', dest='enable_driver', action='store_true',default=None,
-                  help="Enable accel mlx5 platform driver")
+    p.add_argument('-e', '--enable-driver', dest='enable_driver', action='store_true', default=None,
+                   help="Enable accel mlx5 platform driver")
     p.set_defaults(func=mlx5_scan_accel_module)
 
-
     def accel_mlx5_dump_stats(args):
-        print_dict(rpc.mlx5.accel_mlx5_dump_stats(args.client,
-                                       level=args.level))
+        print_dict(rpc.mlx5.accel_mlx5_dump_stats(args.client, level=args.level))
 
     p = subparsers.add_parser('accel_mlx5_dump_stats', help='Dump accel mlx5 module statistics.')
     p.add_argument('-l', '--level', type=str, help='Verbose level, one of \"total\", \"channel\" or \"device\"')
     p.set_defaults(func=accel_mlx5_dump_stats)
 
-
-    # accel_error
     def accel_error_inject_error(args):
         rpc.accel.accel_error_inject_error(args.client, opcode=args.opcode,
                                            type=args.type, count=args.count,
@@ -3508,7 +3504,6 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    enable_zerocopy_recv=None, enable_tcp_nodelay=None, buffers_pool_size=None, packets_pool_size=None,
                    enable_early_init=None)
 
-
     def sock_set_default_impl(args):
         print_json(rpc.sock.sock_set_default_impl(args.client,
                                                   impl_name=args.impl))
@@ -3725,7 +3720,6 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p = subparsers.add_parser('bdev_groups_get', help='Get bdev groups info')
     p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
     p.set_defaults(func=bdev_groups_get)
-
 
     class dry_run_client:
         def call(self, method, params=None):

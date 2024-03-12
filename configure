@@ -1169,7 +1169,7 @@ if [[ "${CONFIG[PGO_USE]}" = "y" ]]; then
 	if [[ "$CC_TYPE" = "clang" ]]; then
 		# For clang we need to run an extra step on gathered profiling data.
 		echo "Generating suitable profile data"
-		llvm-profdata merge -output=$CONFIG[PGO_DIR]/default.profdata $CONFIG[PGO_DIR]
+		llvm-profdata merge -output=${CONFIG[PGO_DIR]}/default.profdata ${CONFIG[PGO_DIR]}
 	fi
 fi
 

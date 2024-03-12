@@ -1,4 +1,9 @@
 #!/usr/bin/make -f
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  All rights reserved.
+#
+
 export DH_VERBOSE=1
 export PYBUILD_NAME=spdk-rpc
 export PYBUILD_INTERPRETERS=python{version}

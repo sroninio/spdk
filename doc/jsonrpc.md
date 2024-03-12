@@ -435,6 +435,12 @@ Example response:
     "iscsi_set_options",
     "bdev_set_options",
     "bdev_set_qos_limit",
+    "bdev_group_create",
+    "bdev_group_add_bdev",
+    "bdev_group_remove_bdev",
+    "bdev_group_delete",
+    "bdev_group_set_qos_limit",
+    "bdev_groups_get",
     "bdev_get_bdevs",
     "bdev_get_iostat",
     "framework_get_config",
@@ -456,6 +462,7 @@ Example response:
     "dpdk_cryptodev_set_driver",
     "dpdk_cryptodev_get_driver",
     "mlx5_scan_accel_module",
+    "accel_mlx5_dump_stats",
     "bdev_virtio_attach_controller",
     "bdev_virtio_scsi_get_devices",
     "bdev_virtio_detach_controller",
@@ -2318,10 +2325,16 @@ Enable mlx5 accel offload
 
 #### Parameters
 
-Name                    | Optional | Type   | Description
------------------------ | -------- |--------| -----------
-qp_size                 | Optional | number | qpair size
-num_requests            | Optional | number | Size of the shared requests pool
+Name                    | Optional | Type    | Description
+----------------------- | -------- |---------| -----------
+qp_size                 | Optional | number  | qpair size
+cq_size                 | Optional | number  | Size of the shared CQ
+num_requests            | Optional | number  | Size of the shared requests pool
+split_mb_blocks         | Optional | number  | Number of data blocks to be processed in 1 UMR
+allowed-devs            | Optional | string  | Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1
+siglast                 | Optional | boolean | Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB
+qp_per_domain           | Optional | boolean | Use dedicated qpair per memory domain per channel
+enable_driver           | Optional | boolean | Enable accel mlx5 platform driver
 
 #### Example
 
@@ -2346,6 +2359,74 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": true
+}
+~~~
+
+### accel_mlx5_dump_stats {#rpc_accel_mlx5_dump_stats}
+
+Dump mlx5 accel module statistics
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- |---------| -----------
+level                   | Optional | string  | Verbose level, one of \"total\", \"channel\" or \"device\"
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "accel_mlx5_dump_stats",
+  "id": 1,
+  "params": {
+    "level": "total"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "Total": {
+      "UMRs": {
+        "crypto_umrs": 1234,
+        "sig_umrs": 2345,
+        "sig_crypto_umrs": 3456,
+        "total": 7035
+      },
+      "RDMA": {
+        "read": 0,
+        "write": 7035,
+        "total": 7035
+      },
+      "Polling": {
+        "polls": 1096,
+        "idle_polls": 300,
+        "completions": 7035,
+        "idle_polls_percentage": 36.5,
+        "cpls_per_poll": 6.418,
+        "nomem_qdepth": 0,
+        "nomem_mkey": 0
+      },
+      "tasks": {
+        "copy": 0,
+        "crypto": 1234,
+        "encrypt_mkey": 0,
+        "decrypt_mkey": 0,
+        "crc32c": 2345,
+        "encrypt_crc": 3456,
+        "crc_decrypt": 0,
+        "total": 7035
+      }
+    }
+  }
 }
 ~~~
 
@@ -2762,6 +2843,242 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": true
+}
+~~~
+
+### bdev_group_create {#rpc_bdev_group_create}
+
+Create a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_create",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_add_bdev {#rpc_bdev_group_add_bdev}
+
+Add a bdev to a group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+bdev                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_add_bdev",
+  "params": {
+    "name": "grp0",
+    "bdev": "Malloc0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_remove_bdev {#rpc_bdev_group_remove_bdev}
+
+Remove a bdev from a group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+bdev                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_remove_bdev",
+  "params": {
+    "name": "grp0",
+    "bdev": "Malloc0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_delete {#rpc_bdev_group_delete}
+
+Delete a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_delete",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_set_qos_limit {#rpc_bdev_group_set_qos_limit}
+
+Set QoS rate limit on a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+rw_ios_per_sec          | Optional | number      | Number of R/W I/Os per second to allow. 0 means unlimited.
+rw_mbytes_per_sec       | Optional | number      | Number of R/W megabytes per second to allow. 0 means unlimited.
+r_mbytes_per_sec        | Optional | number      | Number of Read megabytes per second to allow. 0 means unlimited.
+w_mbytes_per_sec        | Optional | number      | Number of Write megabytes per second to allow. 0 means unlimited.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_set_qos_limit",
+  "params": {
+    "name": "grp0"
+    "rw_ios_per_sec": 20000
+    "rw_mbytes_per_sec": 100
+    "r_mbytes_per_sec": 50
+    "w_mbytes_per_sec": 50
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_groups_get {#rpc_bdev_groups_get}
+
+Get bdev groups info
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Optional | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_groups_get",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "name": "grp0",
+      "assigned_rate_limits": {
+        "rw_ios_per_sec": 20000,
+        "rw_mbytes_per_sec": 100,
+        "r_mbytes_per_sec": 50,
+        "w_mbytes_per_sec": 50
+      },
+      "bdevs": [
+        "Malloc0",
+        "Malloc1"
+      ]
+    }
+  ]
 }
 ~~~
 

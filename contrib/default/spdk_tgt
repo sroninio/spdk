@@ -8,7 +8,7 @@ CPU_MASK=[0-1]
 # extra args like -r 0.0.0.0 to start RPC listener on
 EXTRA_ARGS=""
 
-# Size of hugepage memory to allocate (in MB). 
+# Size of hugepage memory to allocate (in MB).
 # 2048 by default.
 HUGEMEM="2048"
 

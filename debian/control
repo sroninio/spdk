@@ -33,4 +33,3 @@ Description: RPC modules for Storage Performance Development Kit
  The Storage Performance Development Kit (SPDK) provides a set of tools and
  libraries for writing high performance, scalable, user-mode storage
  applications. This package provides JSON-RPC modules and CLI to manage SPDK
-

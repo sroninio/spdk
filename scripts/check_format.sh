@@ -478,7 +478,7 @@ function check_python_style() {
 		PEP8_ARGS=" --max-line-length=140"
 
 		error=0
-		git ls-files '*.py' | xargs -P$(nproc) -n1 $PEP8 $PEP8_ARGS > pep8.log || error=1
+		git ls-files '*.py' | grep -v 'contrib/*' | xargs -P$(nproc) -n1 $PEP8 $PEP8_ARGS > pep8.log || error=1
 		if [ $error -ne 0 ]; then
 			echo " Python formatting errors detected"
 			cat pep8.log
@@ -519,8 +519,8 @@ function check_golang_style() {
 function get_bash_files() {
 	local sh shebang
 
-	mapfile -t sh < <(git ls-files '*.sh')
-	mapfile -t shebang < <(git grep -l '^#!.*bash')
+	mapfile -t sh < <(git ls-files '*.sh' | grep -v 'contrib/*' | grep -v '.ci/*')
+	mapfile -t shebang < <(git grep -l '^#!.*bash' | grep -v 'contrib/*' | grep -v '.ci/*')
 
 	get_diffed_dups "${sh[@]}" "${shebang[@]}"
 }

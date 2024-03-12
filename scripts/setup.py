@@ -1,4 +1,8 @@
 #!/usr/bin/env python
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  All rights reserved.
+#
 
 from distutils.core import setup
 import os.path

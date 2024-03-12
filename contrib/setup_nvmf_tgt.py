@@ -1,4 +1,8 @@
 #!/usr/bin/env python2
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  All rights reserved.
+#
 from __future__ import print_function
 import sys
 import os

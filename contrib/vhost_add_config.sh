@@ -1,12 +1,15 @@
 #!/usr/bin/bash -x
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  All rights reserved.
+#
 tts=${1-2}
 sleep $tts
 mkdir -p /dev/hugepages/qemu
 chown qemu /dev/hugepages/qemu
 
-function rpc()
-{
-   /usr/bin/spdk_rpc.py -s /var/tmp/spdk.sock $@
+function rpc() {
+	/usr/bin/spdk_rpc.py -s /var/tmp/spdk.sock $@
 }
 
 rpc start_subsystem_init

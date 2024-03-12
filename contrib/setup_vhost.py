@@ -1,4 +1,8 @@
 #!/usr/bin/python2
+#  SPDX-License-Identifier: BSD-3-Clause
+#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  All rights reserved.
+#
 from __future__ import print_function
 import sys
 import os
@@ -26,7 +30,7 @@ if has_iommu:
     if not vfio_pci_loaded:
         os.system('/sbin/modprobe -v vfio_pci')
     if os.path.exists('/sys/bus/pci/drivers/vfio-pci'):
-        stub_driver = 'vfio-pci' 
+        stub_driver = 'vfio-pci'
 # stub_driver = 'uio_pci_generic'
 # has_iommu = False
 

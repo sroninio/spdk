@@ -5,7 +5,6 @@
 #include "spdk/stdinc.h"
 #include "spdk/env.h"
 #include "spdk_internal/xlio.h"
-#include <dlfcn.h>
 #include "spdk/log.h"
 
 #define DEFAULT_XLIO_PATH "libxlio.so"
