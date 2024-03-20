@@ -26,6 +26,7 @@ DEFINE_STUB(spdk_mlx5_create_indirect_mkey, struct spdk_mlx5_indirect_mkey *, (s
 		struct mlx5_devx_mkey_attr *attr), NULL);
 DEFINE_STUB(spdk_mlx5_qp_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 				       struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out), 0);
+DEFINE_STUB(spdk_mlx5_qp_connect_loopback, int, (struct spdk_mlx5_qp *qp), 0);
 DEFINE_STUB_V(spdk_mlx5_qp_destroy, (struct spdk_mlx5_qp *qp));
 DEFINE_STUB_V(spdk_mlx5_qp_complete_send, (struct spdk_mlx5_qp *qp));
 DEFINE_STUB(spdk_mlx5_cq_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,

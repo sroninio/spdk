@@ -3882,6 +3882,12 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 		return rc;
 	}
 
+	rc = spdk_mlx5_qp_connect_loopback(qp->qp);
+	if (rc) {
+		spdk_mlx5_qp_destroy(qp->qp);
+		return rc;
+	}
+
 	STAILQ_INIT(&qp->in_hw);
 	qp->dev = dev;
 	qp->max_wrs = g_accel_mlx5.qp_size;

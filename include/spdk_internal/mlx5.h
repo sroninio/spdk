@@ -10,6 +10,7 @@
 #include "spdk/tree.h"
 
 #include <infiniband/mlx5dv.h>
+#include <rdma/rdma_cma.h>
 
 #define SPDK_MLX5_VENDOR_ID_MELLANOX 0x2c9
 
@@ -272,7 +273,7 @@ int spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
 int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
 
 /**
- * Create loopback qpair suitable for RDMA operations
+ * Create qpair suitable for RDMA operations
  *
  * \param pd Protection Domain
  * \param cq Completion Queue to bind QP to
@@ -282,6 +283,14 @@ int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
  */
 int spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 			struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out);
+
+/**
+ * Connect QP as loopback
+ *
+ * \param qp QP created with \ref spdk_mlx5_qp_create
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp);
 
 int spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp);
 

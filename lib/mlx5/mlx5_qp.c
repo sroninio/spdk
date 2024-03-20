@@ -41,8 +41,6 @@ struct mlx5_qp_conn_caps {
 	enum ibv_mtu mtu;
 };
 
-static int mlx5_qp_connect(struct spdk_mlx5_qp *qp);
-
 static void
 mlx5_cq_deinit(struct spdk_mlx5_cq *cq)
 {
@@ -198,13 +196,6 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 		qp->sigmode = SPDK_MLX5_QP_SIG_ALL;
 	} else if (attr->siglast) {
 		qp->sigmode = SPDK_MLX5_QP_SIG_LAST;
-	}
-
-	rc = mlx5_qp_connect(qp);
-	if (rc) {
-		ibv_destroy_qp(qp->verbs_qp);
-		free(qp->completions);
-		return rc;
 	}
 
 	return 0;
@@ -518,8 +509,8 @@ mlx5_qp_loopback_conn(struct spdk_mlx5_qp *qp, struct mlx5_qp_conn_caps *caps)
 	return rc;
 }
 
-static int
-mlx5_qp_connect(struct spdk_mlx5_qp *qp)
+int
+spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp)
 {
 	struct mlx5_qp_conn_caps conn_caps = {};
 	struct ibv_context *context = qp->verbs_qp->context;
