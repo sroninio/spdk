@@ -3462,6 +3462,23 @@ accel_mlx5_process_error_cpl(struct spdk_mlx5_cq_completion *wc, struct accel_ml
 	}
 }
 
+static inline struct spdk_mlx5_mkey_pool_obj *
+accel_mlx5_find_mkey_by_id(struct accel_mlx5_dev *dev, uint32_t mkey_id)
+{
+	struct spdk_mlx5_mkey_pool_obj *mkey = NULL;
+
+	/* We don't know which pool (sig or crypto_sig) this mkey belongs to, so try both */
+	if (dev->crypto_sig_mkeys) {
+		mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->crypto_sig_mkeys, mkey_id);
+	}
+
+	if (!mkey && dev->sig_mkeys) {
+		mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->sig_mkeys, mkey_id);
+	}
+
+	return mkey;
+}
+
 static inline void
 accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc,
 				int reaped)
@@ -3473,13 +3490,8 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 
 	for (i = 0; i < reaped; i++) {
 		if (spdk_unlikely(wc[i].status == MLX5_CQE_SYNDROME_SIGERR)) {
-			struct spdk_mlx5_mkey_pool_obj *mkey;
+			struct spdk_mlx5_mkey_pool_obj *mkey = accel_mlx5_find_mkey_by_id(dev, wc[i].mkey);
 
-			/* We don't know which pool (sig or crypto_sig) this mkey belongs to, so try both */
-			mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->crypto_sig_mkeys, wc[i].mkey);
-			if (!mkey) {
-				mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->sig_mkeys, wc[i].mkey);
-			}
 			assert(mkey);
 			mkey->sig.sigerr_count++;
 			mkey->sig.sigerr = true;
@@ -3542,13 +3554,8 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 
 	for (i = 0; i < reaped; i++) {
 		if (spdk_unlikely(wc[i].status == MLX5_CQE_SYNDROME_SIGERR)) {
-			struct spdk_mlx5_mkey_pool_obj *mkey;
+			struct spdk_mlx5_mkey_pool_obj *mkey = accel_mlx5_find_mkey_by_id(dev, wc[i].mkey);
 
-			/* We don't know which pool (sig or crypto_sig) this mkey belongs to, so try both */
-			mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->crypto_sig_mkeys, wc[i].mkey);
-			if (!mkey) {
-				mkey = spdk_mlx5_mkey_pool_find_mkey_by_id(dev->sig_mkeys, wc[i].mkey);
-			}
 			assert(mkey);
 			mkey->sig.sigerr_count++;
 			mkey->sig.sigerr = true;
