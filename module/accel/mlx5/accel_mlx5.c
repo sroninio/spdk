@@ -377,7 +377,8 @@ accel_mlx5_task_check_sigerr(struct accel_mlx5_task *task)
 	unsigned i;
 	int rc;
 
-	assert(task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C);
+	assert(task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	       task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
 
 	rc = 0;
 	for (i = 0; i < task->num_ops; i++) {
@@ -450,7 +451,8 @@ accel_mlx5_crc_task_complete(struct accel_mlx5_task *mlx5_task)
 	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
 	int sigerr = 0;
 
-	if (mlx5_task->base.op_code != SPDK_ACCEL_OPC_CHECK_CRC32C) {
+	if (mlx5_task->base.op_code != SPDK_ACCEL_OPC_CHECK_CRC32C &&
+	    mlx5_task->base.op_code != SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 		*mlx5_task->base.crc_dst = *mlx5_task->psv->crc ^ UINT32_MAX;
 	} else {
 		sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
@@ -1694,7 +1696,10 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_ops = spdk_min(mlx5_task->num_reqs - mlx5_task->num_completed_reqs,
 				    mlx5_task->num_ops);
 	uint32_t rdma_fence = SPDK_MLX5_WQE_CTRL_STRONG_ORDERING;
-	bool check_op = mlx5_task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C;
+	bool check_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+			 mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
+	bool copy_check_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
+	bool copy_crc_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CRC32C);
 	struct mlx5_wqe_data_seg *klm;
 	uint16_t klm_count;
 	int rc;
@@ -1709,8 +1714,16 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
-	rc = accel_mlx5_crc_task_configure_umr(mlx5_task, klms.src_klm, klms.src_klm_count,
-					       mlx5_task->mkeys[0],
+
+	if (copy_check_op) {
+		klm = klms.dst_klm;
+		klm_count = klms.dst_klm_count;
+	} else {
+		klm = klms.src_klm;
+		klm_count = klms.src_klm_count;
+	}
+
+	rc = accel_mlx5_crc_task_configure_umr(mlx5_task, klm, klm_count, mlx5_task->mkeys[0],
 					       SPDK_MLX5_UMR_SIG_DOMAIN_WIRE, mlx5_task->base.nbytes, true, true);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
@@ -1719,7 +1732,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	dev->stats.sig_umrs++;
 	ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 
-	if (mlx5_task->flags.bits.inplace) {
+	if (!copy_crc_op) {
 		klm = klms.src_klm;
 		klm_count = klms.src_klm_count;
 	} else {
@@ -1749,8 +1762,6 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (check_op) {
-		/* Check with copy is not implemeted in this function */
-		assert(mlx5_task->flags.bits.inplace);
 		rc = spdk_mlx5_qp_rdma_write(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
 					     (uint64_t)mlx5_task, rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 		dev->stats.rdma_writes++;
@@ -1854,10 +1865,12 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_ops = spdk_min(mlx5_task->num_reqs - mlx5_task->num_completed_reqs,
 				    mlx5_task->num_ops);
 	struct accel_mlx5_iov_sgl umr_sgl;
-	struct accel_mlx5_iov_sgl *umr_sgl_ptr;
+	struct accel_mlx5_iov_sgl *sgl_ptr;
 	struct accel_mlx5_iov_sgl rdma_sgl;
 	uint32_t rdma_fence = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
-	bool check_op = mlx5_task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C;
+	bool check_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+			 mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
+	bool copy_crc_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CRC32C);
 	int klm_count;
 	uint32_t remaining;
 	uint64_t umr_offset;
@@ -1866,6 +1879,8 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	int rc;
 	size_t umr_len[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
 	struct mlx5_wqe_data_seg klms[ACCEL_MLX5_MAX_SGE];
+	struct spdk_memory_domain *domain;
+	void *domain_ctx;
 
 	if (spdk_unlikely(!num_ops)) {
 		return -EINVAL;
@@ -1880,16 +1895,28 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	 * In the in-place case, we iterate on the source IOV three times. That's why we need two copies of
 	 * the source accel_mlx5_iov_sgl.
 	 *
-	 * In the out-of-place case, we iterate on the source IOV once and on the destination IOV two times.
-	 * So, we need one copy of the destination accel_mlx5_iov_sgl.
+	 * In the out-of-place CRC calculate case, we iterate on the source IOV once and on the destination IOV
+	 * two times. So, we need one copy of the destination accel_mlx5_iov_sgl.
+	 *
+	 * In the copy check case, we iterate on the source IOV twice and on the destination IOV once.
+	 * So, we need one copy of source accel_mlx5_iov_sgl.
 	 */
 	if (mlx5_task->flags.bits.inplace) {
 		accel_mlx5_iov_sgl_init(&umr_sgl, mlx5_task->src.iov, mlx5_task->src.iovcnt);
-		umr_sgl_ptr = &umr_sgl;
+		sgl_ptr = &umr_sgl;
 		accel_mlx5_iov_sgl_init(&rdma_sgl, mlx5_task->src.iov, mlx5_task->src.iovcnt);
-	} else {
-		umr_sgl_ptr = &mlx5_task->src;
+		domain = task->src_domain;
+		domain_ctx = task->src_domain_ctx;
+	} else if (copy_crc_op) {
+		sgl_ptr = &mlx5_task->src;
 		accel_mlx5_iov_sgl_init(&rdma_sgl, mlx5_task->dst.iov, mlx5_task->dst.iovcnt);
+		domain = task->src_domain;
+		domain_ctx = task->src_domain_ctx;
+	} else {
+		sgl_ptr = &mlx5_task->dst;
+		accel_mlx5_iov_sgl_init(&rdma_sgl, mlx5_task->src.iov, mlx5_task->src.iovcnt);
+		domain = task->dst_domain;
+		domain_ctx = task->dst_domain_ctx;
 	}
 	mlx5_task->num_wrs = 0;
 	for (i = 0; i < num_ops; i++) {
@@ -1897,18 +1924,18 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		 * The last request may have only CRC. Skip UMR in this case because the MKey from
 		 * the previous request is used.
 		 */
-		if (umr_sgl_ptr->iovcnt == 0) {
+		if (sgl_ptr->iovcnt == 0) {
 			assert((mlx5_task->num_completed_reqs + i + 1) == mlx5_task->num_reqs);
 			break;
 		}
-		klm_count = accel_mlx5_crc_task_fill_umr_sge(qp, klms, umr_sgl_ptr, task->src_domain,
-				task->src_domain_ctx, &rdma_sgl, &umr_len[i]);
+		klm_count = accel_mlx5_crc_task_fill_umr_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+				&rdma_sgl, &umr_len[i]);
 		if (spdk_unlikely(klm_count <= 0)) {
 			rc = (klm_count == 0) ? -EINVAL : klm_count;
 			SPDK_ERRLOG("failed set UMR sge, rc %d\n", rc);
 			return rc;
 		}
-		if (umr_sgl_ptr->iovcnt == 0) {
+		if (sgl_ptr->iovcnt == 0) {
 			/*
 			 * We post RDMA without UMR if the last request has only CRC. We use an MKey from
 			 * the last UMR in this case. Since the last request can be postponed to the next
@@ -1939,22 +1966,26 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 	}
 
+	if (copy_crc_op) {
+		sgl_ptr = &mlx5_task->dst;
+		domain = task->dst_domain;
+		domain_ctx = task->dst_domain_ctx;
+	} else {
+		sgl_ptr = &mlx5_task->src;
+		domain = task->src_domain;
+		domain_ctx = task->src_domain_ctx;
+	}
+
+
 	for (i = 0; i < num_ops - 1; i++) {
-		if (mlx5_task->flags.bits.inplace) {
-			klm_count = accel_mlx5_fill_block_sge(qp, klms, &mlx5_task->src, task->src_domain,
-							      task->src_domain_ctx, 0, umr_len[i], &remaining);
-		} else {
-			klm_count = accel_mlx5_fill_block_sge(qp, klms, &mlx5_task->dst, task->dst_domain,
-							      task->dst_domain_ctx, 0, umr_len[i], &remaining);
-		}
+		klm_count = accel_mlx5_fill_block_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+						      0, umr_len[i], &remaining);
 		if (spdk_unlikely(klm_count <= 0)) {
 			rc = (klm_count == 0) ? -EINVAL : klm_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
 			return rc;
 		}
 		if (check_op) {
-			/* Check with copy is not implemeted in this function */
-			assert(mlx5_task->flags.bits.inplace);
 			rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, 0, mlx5_task->mkeys[i]->mkey,
 						     0, rdma_fence);
 			dev->stats.rdma_writes++;
@@ -1971,8 +2002,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 		rdma_fence = SPDK_MLX5_WQE_CTRL_STRONG_ORDERING;
 	}
-	if ((mlx5_task->flags.bits.inplace && mlx5_task->src.iovcnt == 0) ||
-	    (!mlx5_task->flags.bits.inplace && mlx5_task->dst.iovcnt == 0)) {
+	if (sgl_ptr->iovcnt == 0) {
 		/*
 		 * The last RDMA does not have any data, only CRC. It also does not have a paired Mkey.
 		 * The CRC is handled in the previous MKey in this case.
@@ -1982,13 +2012,8 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	} else {
 		umr_offset = 0;
 		mlx5_task->last_mkey_idx = i;
-		if (mlx5_task->flags.bits.inplace) {
-			klm_count = accel_mlx5_fill_block_sge(qp, klms, &mlx5_task->src, task->src_domain,
-							      task->src_domain_ctx, 0, umr_len[i], &remaining);
-		} else {
-			klm_count = accel_mlx5_fill_block_sge(qp, klms, &mlx5_task->dst, task->dst_domain,
-							      task->dst_domain_ctx, 0, umr_len[i], &remaining);
-		}
+		klm_count = accel_mlx5_fill_block_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+						      0, umr_len[i], &remaining);
 		if (spdk_unlikely(klm_count <= 0)) {
 			rc = (klm_count == 0) ? -EINVAL : klm_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
@@ -2009,8 +2034,6 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	}
 	rdma_fence |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
 	if (check_op) {
-		/* Check with copy is not implemeted in this function */
-		assert(mlx5_task->flags.bits.inplace);
 		rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, umr_offset,
 					     mlx5_task->mkeys[mlx5_task->last_mkey_idx]->mkey,
 					     (uint64_t)mlx5_task, rdma_fence);
@@ -2030,6 +2053,18 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 
 	return 0;
 }
+
+/*
+ * The following table describes UMR and RDMA operations configuration for crc tasks.
+ *
+ * | Operation         | Signature domain | UMR klm | RDMA operation | RDMA klm |
+ * |-------------------+------------------+---------+----------------+----------|
+ * | crc32c            | Wire             | src     | Read           | src      |
+ * | copy_crc32c       | Wire             | src     | Read           | dst      |
+ * | check_crc32c      | Wire             | src     | Write          | src      |
+ * | copy_check_crc32c | Wire             | dst     | Write          | src      |
+ * |-------------------+------------------+---------+----------------+----------|
+ */
 static inline int
 accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 {
@@ -2341,7 +2376,7 @@ accel_mlx5_advance_iovec(struct iovec *iov, uint32_t iovcnt, size_t *iov_offset,
 
 static inline uint32_t
 accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct iovec *dst_iov,
-			      uint32_t dst_iovcnt)
+			      uint32_t dst_iovcnt, uint8_t opcode)
 {
 	uint32_t src_idx = 0;
 	uint32_t dst_idx = 0;
@@ -2353,10 +2388,20 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 	uint32_t num_sge;
 	size_t src_len;
 	size_t dst_len;
+	bool copy_crc_op = (opcode == SPDK_ACCEL_OPC_COPY_CRC32C);
 
-	/* One operation is enough if both iovs fit into ACCEL_MLX5_MAX_SGE. One SGE is reserved for CRC on dst_iov. */
-	if (src_iovcnt <= ACCEL_MLX5_MAX_SGE && (dst_iovcnt + 1) <= ACCEL_MLX5_MAX_SGE) {
-		return 1;
+	/*
+	 * One operation is enough if both iovs fit into ACCEL_MLX5_MAX_SGE.
+	 * One SGE is reserved for CRC on dst_iov for copy_crc operations and on src_iov for others.
+	 */
+	if (copy_crc_op) {
+		if (src_iovcnt <= ACCEL_MLX5_MAX_SGE && (dst_iovcnt + 1) <= ACCEL_MLX5_MAX_SGE) {
+			return 1;
+		}
+	} else {
+		if (dst_iovcnt <= ACCEL_MLX5_MAX_SGE && (src_iovcnt + 1) <= ACCEL_MLX5_MAX_SGE) {
+			return 1;
+		}
 	}
 
 	while (src_idx < src_iovcnt && dst_idx < dst_iovcnt) {
@@ -2419,8 +2464,13 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 			}
 		}
 	}
-	/* An extra operation is needed if no space is left on dst_iov because CRC takes one SGE. */
-	if (num_dst_sge > ACCEL_MLX5_MAX_SGE) {
+
+	/*
+	 * An extra operation is needed if no space is left on dst_iov (for copy_crc operations)
+	 * or src_iov (for others) because CRC takes one SGE.
+	 */
+	if ((copy_crc_op && num_dst_sge > ACCEL_MLX5_MAX_SGE) ||
+	    (!copy_crc_op && num_src_sge > ACCEL_MLX5_MAX_SGE)) {
 		num_ops++;
 	}
 
@@ -2895,7 +2945,7 @@ accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 	} else {
 		accel_mlx5_iov_sgl_init(&mlx5_task->dst, task->d.iovs, task->d.iovcnt);
 		mlx5_task->num_reqs = accel_mlx5_get_crc_task_count(mlx5_task->src.iov, mlx5_task->src.iovcnt,
-				      mlx5_task->dst.iov, mlx5_task->dst.iovcnt);
+				      mlx5_task->dst.iov, mlx5_task->dst.iovcnt, task->op_code);
 	}
 
 	rc = accel_mlx5_task_alloc_crc_ctx(mlx5_task, dev->sig_mkeys);
@@ -3178,6 +3228,10 @@ accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 		mlx5_task->flags.bits.inplace = 0;
 		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C;
 		break;
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+		mlx5_task->flags.bits.inplace = 0;
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C;
+		break;
 	default:
 		SPDK_ERRLOG("wrong opcode %d\n", base_opcode);
 		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_LAST;
@@ -3447,7 +3501,8 @@ accel_mlx5_process_error_cpl(struct spdk_mlx5_cq_completion *wc, struct accel_ml
 	/* Check if SIGERR CQE happened before the WQE error or flush.
 	 * It is needed to recover the affected MKey and PSV properly.
 	 */
-	if (task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C) {
+	if (task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	    task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 		accel_mlx5_task_check_sigerr(task);
 	}
 
@@ -3721,6 +3776,7 @@ accel_mlx5_supports_opcode(enum spdk_accel_opcode opc)
 	case SPDK_ACCEL_OPC_CRC32C:
 	case SPDK_ACCEL_OPC_COPY_CRC32C:
 	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
 		return g_accel_mlx5.crc_supported;
 	default:
 		return false;
