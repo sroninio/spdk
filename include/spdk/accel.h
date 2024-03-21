@@ -49,7 +49,8 @@ enum spdk_accel_opcode {
 	SPDK_ACCEL_OPC_DIF_GENERATE		= 12,
 	SPDK_ACCEL_OPC_DIF_GENERATE_COPY	= 13,
 	SPDK_ACCEL_OPC_CHECK_CRC32C		= 14,
-	SPDK_ACCEL_OPC_LAST			= 15,
+	SPDK_ACCEL_OPC_COPY_CHECK_CRC32C	= 15,
+	SPDK_ACCEL_OPC_LAST			= 16,
 };
 
 enum spdk_accel_cipher {
@@ -297,6 +298,49 @@ int spdk_accel_submit_check_crc32c(struct spdk_io_channel *ch, uint32_t *crc, vo
  */
 int spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc, struct iovec *iovs,
 				    uint32_t iovcnt, uint32_t seed, spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a copy with CRC-32C check request.
+ *
+ * This operation will copy data, calculate the 4 byte CRC32-C for the given data
+ * and check if the result matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param dst Destination to write the data to.
+ * \param src The source address for the data.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param seed Four byte seed value.
+ * \param nbytes Length in bytes.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_copy_check_crc32c(struct spdk_io_channel *ch, void *dst, void *src,
+					uint32_t *crc, uint32_t seed, uint64_t nbytes,
+					spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a chained copy + CRC-32C check request.
+ *
+ * This operation will copy data, calculate the 4 byte CRC32-C for the given data
+ * and check if the result matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param dst Destination to write the data to.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param iovcnt The size of the io vectors.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_copy_check_crc32cv(struct spdk_io_channel *ch, void *dst,
+		struct iovec *src_iovs,
+		uint32_t iovcnt, uint32_t *crc, uint32_t seed,
+		spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Build and submit a memory compress request.
@@ -680,8 +724,8 @@ int spdk_accel_append_crc32c(struct spdk_accel_sequence **seq, struct spdk_io_ch
  * \param dst_crc Destination to write the calculated value.
  * \param dst_iovs The io vector array to write the data to.
  * \param dst_iovcnt The size of the destination io vectors.
- * \param src_domain Memory domain to which the destination buffers belong.
- * \param src_domain_ctx Destination buffer domain context.
+ * \param dst_domain Memory domain to which the destination buffers belong.
+ * \param dst_domain_ctx Destination buffer domain context.
  * \param src_iovs The io vector array which stores the src data and len.
  * \param src_iovcnt The size of the source io vectors.
  * \param src_domain Memory domain to which the source buffers belong.
@@ -725,6 +769,37 @@ int spdk_accel_append_check_crc32c(struct spdk_accel_sequence **seq,
 				   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 				   uint32_t seed,
 				   spdk_accel_step_cb cb_fn, void *cb_arg);
+
+/**
+ * Append a copy + check crc32c operation to a sequence.
+ *
+ * Along with the copy this operation will calculate the 4 byte CRC32-C for the given data
+ * and check if the result matches the given CRC32-C.
+ *
+ * \param seq Sequence object.  If NULL, a new sequence object will be created.
+ * \param ch I/O channel.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param dst_iovs The io vector array to write the data to.
+ * \param dst_iovcnt The size of the destination io vectors.
+ * \param dst_domain Memory domain to which the destination buffers belong.
+ * \param dst_domain_ctx Destination buffer domain context.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param src_iovcnt The size of the source io vectors.
+ * \param src_domain Memory domain to which the source buffers belong.
+ * \param src_domain_ctx Source buffer domain context.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_append_copy_check_crc32c(struct spdk_accel_sequence **seq,
+					struct spdk_io_channel *ch,
+					uint32_t *crc, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+					struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+					struct iovec *src_iovs, uint32_t src_iovcnt,
+					struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+					uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Append a crc32c operation to a sequence.

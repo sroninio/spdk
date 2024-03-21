@@ -15,6 +15,8 @@
 	spdk_accel_submit_copy_crc32cv;
 	spdk_accel_submit_check_crc32c;
 	spdk_accel_submit_check_crc32cv;
+	spdk_accel_submit_copy_check_crc32c;
+	spdk_accel_submit_copy_check_crc32cv;
 	spdk_accel_submit_compress;
 	spdk_accel_submit_decompress;
 	spdk_accel_submit_encrypt;
@@ -35,6 +37,7 @@
 	spdk_accel_append_crc32c;
 	spdk_accel_append_copy_crc32c;
 	spdk_accel_append_check_crc32c;
+	spdk_accel_append_copy_check_crc32c;
 	spdk_accel_sequence_finish;
 	spdk_accel_sequence_abort;
 	spdk_accel_sequence_reverse;
