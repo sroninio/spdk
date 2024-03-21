@@ -222,7 +222,6 @@ struct nvme_tcp_req {
 			uint16_t			needs_accel_seq : 1;
 			uint16_t			in_capsule_data : 1;
 			uint16_t			state : 3;
-			uint16_t			c2h_accel_copy : 1;
 		} bits;
 	} ordering;
 	uint8_t					active_r2ts;
@@ -2978,35 +2977,21 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 			task->s.iovcnt = req->zcopy.iovcnt;
 		}
 	}
-	if (!skip_copy && !tcp_req->ordering.bits.c2h_accel_copy) {
-		rc = group->accel_fn_table.append_copy(group->ctx, (void **)&accel_seq, tcp_req->pdu.iovs,
-						       tcp_req->pdu.data_iovcnt,
-						       req->payload.opts->memory_domain, req->payload.opts->memory_domain_ctx,
-						       req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, NULL, NULL);
-		if (spdk_unlikely(rc)) {
-			if (rc == -ENOMEM) {
-				SPDK_WARNLOG("no task for copy\n");
-				TAILQ_INSERT_TAIL(&tqpair->accel_nomem_queue, pdu, tailq);
-				tqpair->flags.has_accel_nomem_pdus = 1;
 
-				if (!tqpair->flags.pending_events) {
-					struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
-
-					TAILQ_INSERT_TAIL(&tgroup->pending_events, tqpair, link);
-					tqpair->flags.pending_events = 1;
-				}
-
-				return rc;
-			}
-			SPDK_ERRLOG("Failed to append copy accel task, rc %d\n", rc);
-			return rc;
-		}
-		tcp_req->ordering.bits.c2h_accel_copy = 1;
+	if (skip_copy) {
+		rc = group->accel_fn_table.append_check_crc32c(group->ctx, (void **)&accel_seq,
+				&pdu->data_digest_crc32, req->zcopy.iovs,
+				req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
+	} else {
+		rc = group->accel_fn_table.append_copy_check_crc32c(group->ctx, (void **)&accel_seq,
+				&pdu->data_digest_crc32,
+				tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
+				req->payload.opts->memory_domain,
+				req->payload.opts->memory_domain_ctx,
+				req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL,
+				0, NULL, NULL);
 	}
 
-	rc = group->accel_fn_table.append_check_crc32c(group->ctx, (void **)&accel_seq,
-			&pdu->data_digest_crc32, req->zcopy.iovs,
-			req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
 	if (spdk_unlikely(rc)) {
 		if (rc == -ENOMEM) {
 			SPDK_DEBUGLOG(nvme, "pdu %p, tqpair %p: no task for check_crc32c\n", pdu, tqpair);
