@@ -85,8 +85,8 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 	struct spdk_rdma_mlx5_dv_qp *mlx5_qp;
 	struct ibv_qp_init_attr_ex dv_qp_attr = {
 		.qp_context = qp_attr->qp_context,
-		.send_cq = qp_attr->send_cq,
-		.recv_cq = qp_attr->recv_cq,
+		.send_cq = qp_attr->cq,
+		.recv_cq = qp_attr->cq,
 		.srq = qp_attr->srq,
 		.cap = qp_attr->cap,
 		.qp_type = IBV_QPT_RC,

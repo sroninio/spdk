@@ -751,8 +751,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	}
 
 	attr.stats =		rqpair->poller ? &rqpair->poller->stats.rdma_stats : NULL;
-	attr.send_cq		= rqpair->cq;
-	attr.recv_cq		= rqpair->cq;
+	attr.cq			= rqpair->cq;
 	attr.cap.max_send_wr	= rqpair->num_entries; /* SEND operations */
 	if (rqpair->srq) {
 		attr.srq	= rqpair->srq->srq;

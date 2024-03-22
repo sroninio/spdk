@@ -1044,8 +1044,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 	qp_init_attr.qp_context	= rqpair;
 	qp_init_attr.pd		= device->pd;
-	qp_init_attr.send_cq	= rqpair->poller->cq;
-	qp_init_attr.recv_cq	= rqpair->poller->cq;
+	qp_init_attr.cq		= rqpair->poller->cq;
 
 	if (rqpair->srq) {
 		qp_init_attr.srq		= rqpair->srq->srq;
