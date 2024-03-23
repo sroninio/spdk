@@ -572,8 +572,6 @@ spdk_accel_submit_crc32cv(struct spdk_io_channel *ch, uint32_t *crc_dst,
 
 	accel_task = _get_task(accel_ch, cb_fn, cb_arg);
 	if (spdk_unlikely(accel_task == NULL)) {
-		SPDK_ERRLOG("no memory\n");
-		assert(0);
 		return -ENOMEM;
 	}
 
@@ -645,8 +643,6 @@ spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst,
 
 	accel_task = _get_task(accel_ch, cb_fn, cb_arg);
 	if (spdk_unlikely(accel_task == NULL)) {
-		SPDK_ERRLOG("no memory\n");
-		assert(0);
 		return -ENOMEM;
 	}
 
@@ -725,8 +721,6 @@ spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc,
 
 	accel_task = _get_task(accel_ch, cb_fn, cb_arg);
 	if (accel_task == NULL) {
-		SPDK_ERRLOG("no memory\n");
-		assert(0);
 		return -ENOMEM;
 	}
 
