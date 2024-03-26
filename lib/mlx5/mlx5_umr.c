@@ -310,9 +310,9 @@ mlx5_umr_configure_full_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_
 	bsf = (struct mlx5_crypto_bsf_seg *)klm;
 	set_umr_crypto_bsf_seg(bsf, crypto_attr, umr_attr->umr_len, dv_qp->aes_xts_inc_64);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -373,9 +373,9 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	bsf = (struct mlx5_sig_bsf_seg *)klm;
 	set_umr_sig_bsf_seg(bsf, sig_attr);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -447,9 +447,9 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_
 	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size,
 					dv_qp->aes_xts_inc_64);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -503,9 +503,9 @@ mlx5_umr_configure_full(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_attr *u
 		klm = klm + 1;
 	}
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -559,9 +559,9 @@ mlx5_umr_configure_with_wrap_around_crypto(struct spdk_mlx5_qp *dv_qp,
 
 	set_umr_crypto_bsf_seg(bsf, crypto_attr, umr_attr->umr_len, dv_qp->aes_xts_inc_64);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -616,9 +616,9 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 
 	set_umr_sig_bsf_seg(bsf, sig_attr);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -687,9 +687,9 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp,
 	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size,
 					dv_qp->aes_xts_inc_64);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -737,9 +737,9 @@ mlx5_umr_configure_with_wrap_around(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5
 	klm = mlx5_qp_get_next_wqbb(hw, &to_end, mkey);
 	mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(dv_qp->tx_available >= umr_wqe_n_bb);
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
@@ -780,7 +780,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
 		return -E2BIG;
 	}
 
@@ -832,7 +832,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
 		return -E2BIG;
 	}
 
@@ -886,7 +886,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
 		return -E2BIG;
 	}
 
@@ -936,7 +936,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
 		return -E2BIG;
 	}
 
@@ -987,8 +987,8 @@ spdk_mlx5_set_psv(struct spdk_mlx5_qp *dv_qp, uint32_t psv_index, uint32_t crc_s
 	psv->psv_index = htobe32(psv_index);
 	psv->transient_signature = htobe64(transient_signature);
 
-	mlx5_qp_wqe_submit(dv_qp, ctrl, wqe_n_bb, pi);
-	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, wqe_n_bb);
+	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, wqe_n_bb, pi);
+	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, wqe_n_bb);
 	assert(dv_qp->tx_available >= wqe_n_bb);
 	dv_qp->tx_available -= wqe_n_bb;
 

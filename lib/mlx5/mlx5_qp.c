@@ -108,8 +108,8 @@ mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 	if (qp->verbs_qp) {
 		ibv_destroy_qp(qp->verbs_qp);
 	}
-	if (qp->completions) {
-		free(qp->completions);
+	if (qp->sq_completions) {
+		free(qp->sq_completions);
 	}
 }
 
@@ -185,9 +185,10 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	 */
 	qp->hw.sq_tx_db_nc = dv_qp.bf.size == 0;
 	qp->tx_available = qp->hw.sq_wqe_cnt;
-	qp->max_sge = attr->cap.max_send_sge;
+	qp->max_send_sge = attr->cap.max_send_sge;
 	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
-	rc = posix_memalign((void **)&qp->completions, 4096, qp->hw.sq_wqe_cnt * sizeof(*qp->completions));
+	rc = posix_memalign((void **)&qp->sq_completions, 4096,
+			    qp->hw.sq_wqe_cnt * sizeof(*qp->sq_completions));
 	if (rc) {
 		ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to alloc completions\n");

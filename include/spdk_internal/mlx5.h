@@ -172,7 +172,7 @@ struct spdk_mlx5_qp_attr {
 	bool siglast;
 };
 
-struct mlx5_qp_completion {
+struct mlx5_qp_sq_completion {
 	uint64_t wr_id;
 	/* Number of unsignaled completions before this one. Used to track qp overflow */
 	uint32_t completions;
@@ -189,12 +189,12 @@ enum spdk_mlx5_qp_sig_mode {
 
 struct spdk_mlx5_qp {
 	struct spdk_mlx5_hw_qp hw;
-	struct mlx5_qp_completion *completions;
+	struct mlx5_qp_sq_completion *sq_completions;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct spdk_mlx5_cq *cq;
 	struct ibv_qp *verbs_qp;
 	uint16_t nonsignaled_outstanding;
-	uint16_t max_sge;
+	uint16_t max_send_sge;
 	uint16_t tx_available;
 	uint16_t last_pi;
 	uint8_t sigmode;

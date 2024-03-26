@@ -151,19 +151,19 @@ mlx5_qp_get_next_wqbb(struct spdk_mlx5_hw_qp *qp, uint32_t *to_end, void *cur)
 }
 
 static inline void
-mlx5_qp_set_comp(struct spdk_mlx5_qp *dv_qp, uint16_t pi,
-		 uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
+mlx5_qp_set_sq_comp(struct spdk_mlx5_qp *dv_qp, uint16_t pi,
+		    uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
 {
-	dv_qp->completions[pi].wr_id = wr_id;
+	dv_qp->sq_completions[pi].wr_id = wr_id;
 	if ((fm_ce_se & SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) != SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) {
 		/* non-signaled WQE, accumulate it in outstanding */
 		dv_qp->nonsignaled_outstanding += n_bb;
-		dv_qp->completions[pi].completions = 0;
+		dv_qp->sq_completions[pi].completions = 0;
 		return;
 	}
 
 	/* Store number of previous nonsignaled WQEs */
-	dv_qp->completions[pi].completions = dv_qp->nonsignaled_outstanding + n_bb;
+	dv_qp->sq_completions[pi].completions = dv_qp->nonsignaled_outstanding + n_bb;
 	dv_qp->nonsignaled_outstanding = 0;
 }
 
@@ -224,16 +224,16 @@ mlx5_ring_tx_db(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl)
 }
 
 #ifdef DEBUG
-void mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
+void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
 #else
-#define mlx5_qp_dump_wqe(...) do { } while (0)
+#define mlx5_qp_dump_sq_wqe(...) do { } while (0)
 #endif
 
 static inline void
-mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb,
-		   uint16_t ctrlr_pi)
+mlx5_qp_submit_sq_wqe(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb,
+		      uint16_t ctrlr_pi)
 {
-	mlx5_qp_dump_wqe(qp, n_wqe_bb);
+	mlx5_qp_dump_sq_wqe(qp, n_wqe_bb);
 
 	qp->hw.sq_pi += n_wqe_bb;
 	qp->last_pi = ctrlr_pi;
