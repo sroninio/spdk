@@ -41,7 +41,8 @@ static struct spdk_app_opts g_opts = {};
 static const char *g_crypto_key_name;
 static struct spdk_accel_crypto_key *g_crypto_key;
 static uint32_t g_block_size = 512;
-bool g_inplace = true;
+static bool g_inplace = true;
+static bool g_crc_error = false;
 
 struct worker_thread;
 static void accel_done(void *ref, int status);
@@ -204,10 +205,17 @@ dump_user_config(void)
 	printf("Accel Perf Configuration:\n");
 	printf("Workload Type:  %s\n", g_workload_type);
 	if (g_workload_selection == SPDK_ACCEL_OPC_CRC32C ||
-	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C) {
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 		printf("CRC-32C seed:   %u\n", g_crc32c_seed);
-	} else if (g_workload_selection == SPDK_ACCEL_OPC_ENCRYPT ||
-		   g_workload_selection == SPDK_ACCEL_OPC_DECRYPT) {
+	}
+	if (g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
+		printf("Inject CRC-32C error:   %u\n", g_crc_error);
+	}
+	if (g_workload_selection == SPDK_ACCEL_OPC_ENCRYPT ||
+	    g_workload_selection == SPDK_ACCEL_OPC_DECRYPT) {
 		printf("Crypto key:   %s\n", g_crypto_key_name);
 		printf("Block size:   %u\n", g_block_size);
 		printf("Inplace op:   %s\n", g_inplace ? "true" : "false");
@@ -228,12 +236,13 @@ usage(void)
 	printf("\t[-T number of threads per core\n");
 	printf("\t[-n number of channels]\n");
 	printf("\t[-t time in seconds]\n");
-	printf("\t[-w workload type must be one of these: crc32c, copy_crc32c, encrypt, decrypt\n");
+	printf("\t[-w workload type must be one of these: crc32c, copy_crc32c, check_crc32c, copy_check_crc32c, encrypt, decrypt\n");
 	printf("\t[-a tasks to allocate per core (default: same value as -q)]\n");
 	printf("\t\tCan be used to spread operations across a wider range of memory.\n");
 	printf("\t[-K crypto key name (used by crypto)]\n");
 	printf("\t[-I inplace task if 1 (both src and dst buffers are used), out-of-place if 0 (only src is used)]\n");
 	printf("\t[-b crypto block size]\n");
+	printf("\t[-f inject crc error]\n");
 }
 
 static int
@@ -266,6 +275,9 @@ parse_args(int argc, char *argv)
 	case 'b':
 		g_block_size = argval;
 		break;
+	case 'f':
+		g_crc_error = true;
+		break;
 	case 'I':
 		g_inplace = !!argval;
 		break;
@@ -284,6 +296,10 @@ parse_args(int argc, char *argv)
 			g_workload_selection = SPDK_ACCEL_OPC_CRC32C;
 		} else if (!strcmp(g_workload_type, "copy_crc32c")) {
 			g_workload_selection = SPDK_ACCEL_OPC_COPY_CRC32C;
+		} else if (!strcmp(g_workload_type, "check_crc32c")) {
+			g_workload_selection = SPDK_ACCEL_OPC_CHECK_CRC32C;
+		} else if (!strcmp(g_workload_type, "copy_check_crc32c")) {
+			g_workload_selection = SPDK_ACCEL_OPC_COPY_CHECK_CRC32C;
 		} else if (!strcmp(g_workload_type, "encrypt")) {
 			g_workload_selection = SPDK_ACCEL_OPC_ENCRYPT;
 		} else if (!strcmp(g_workload_type, "decrypt")) {
@@ -340,7 +356,8 @@ _get_crc_task_data_bufs(struct ap_task *task)
 	task->src = spdk_dma_zmalloc(MAX_XFER_SIZE, 0, NULL);
 	memset(task->src, DATA_PATTERN, MAX_XFER_SIZE);
 
-	if (g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C) {
+	if (g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 		task->dst_iovcnt = MAX_IOVS;
 		task->dst_iovs = calloc(task->dst_iovcnt, sizeof(struct iovec));
 		if (!task->dst_iovs) {
@@ -509,6 +526,45 @@ _submit_single(struct worker_thread *worker, struct ap_task *task)
 						   g_crc32c_seed, NULL, NULL);
 		cb = accel_done;
 		break;
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+		task->test = &ap_tests[task->test_idx];
+		set_src_iov(task, true);
+		*task->crc_dst = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
+
+		if (g_crc_error) {
+			*task->crc_dst ^= 1;
+		}
+
+		task->test_idx++;
+		if (task->test_idx >= (int)SPDK_COUNTOF(ap_tests)) {
+			task->test_idx = 0;
+		}
+		cb = accel_done;
+		rc = spdk_accel_append_check_crc32c(&seq, worker->ch, task->crc_dst, task->src_iovs,
+						    task->src_iovcnt,
+						    NULL, NULL, g_crc32c_seed, NULL, NULL);
+		break;
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+		task->test = &ap_tests[task->test_idx];
+		set_src_iov(task, true);
+		set_dst_iov(task, true);
+		*task->crc_dst = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
+
+		if (g_crc_error) {
+			*task->crc_dst ^= 1;
+		}
+
+		task->test_idx++;
+		if (task->test_idx >= (int)SPDK_COUNTOF(ap_tests)) {
+			task->test_idx = 0;
+		}
+
+		rc = spdk_accel_append_copy_check_crc32c(&seq, worker->ch, task->crc_dst,
+				task->dst_iovs, task->dst_iovcnt, NULL, NULL,
+				task->src_iovs, task->src_iovcnt, NULL, NULL,
+				g_crc32c_seed, NULL, NULL);
+		cb = accel_done;
+		break;
 	case SPDK_ACCEL_OPC_ENCRYPT:
 		if (task->test_idx < (int)(SPDK_COUNTOF(ap_tests))) {
 			task->test = &ap_tests[task->test_idx];
@@ -597,6 +653,27 @@ accel_done(void *arg1, int status)
 					       sw_crc32c);
 				worker->xfer_failed++;
 			}
+
+			src_len = 0;
+			for (i = 0; i < task->src_iovcnt; i++) {
+				src_len += task->src_iovs[i].iov_len;
+			}
+			dst_len = 0;
+			for (i = 0; i < task->dst_iovcnt; i++) {
+				dst_len += task->dst_iovs[i].iov_len;
+			}
+			if (src_len != dst_len || memcmp(task->dst, task->src, dst_len)) {
+				SPDK_NOTICELOG("Data miscompare\n");
+				worker->xfer_failed++;
+			}
+			break;
+		case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+			if (g_crc_error) {
+				SPDK_NOTICELOG("CHECK_CRC32 didn't fail on error injected\n");
+				worker->xfer_failed++;
+				break;
+			}
+
 			src_len = 0;
 			for (i = 0; i < task->src_iovcnt; i++) {
 				src_len += task->src_iovs[i].iov_len;
@@ -618,6 +695,12 @@ accel_done(void *arg1, int status)
 				worker->xfer_failed++;
 			}
 			break;
+		case SPDK_ACCEL_OPC_CHECK_CRC32C:
+			if (g_crc_error) {
+				SPDK_NOTICELOG("CHECK_CRC32 didn't fail on error injected\n");
+				worker->xfer_failed++;
+			}
+			break;
 		case SPDK_ACCEL_OPC_ENCRYPT:
 			if (worker->is_draining) {
 				break;
@@ -634,6 +717,37 @@ accel_done(void *arg1, int status)
 			break;
 		default:
 			assert(false);
+			break;
+		}
+	} else {
+		switch (worker->workload) {
+		case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+			if (g_crc_error) {
+				/* Task is expected to fail */
+				status = 0;
+			}
+
+			/* Check that copy was done */
+			src_len = 0;
+			for (i = 0; i < task->src_iovcnt; i++) {
+				src_len += task->src_iovs[i].iov_len;
+			}
+			dst_len = 0;
+			for (i = 0; i < task->dst_iovcnt; i++) {
+				dst_len += task->dst_iovs[i].iov_len;
+			}
+			if (src_len != dst_len || memcmp(task->dst, task->src, dst_len)) {
+				SPDK_NOTICELOG("Data miscompare\n");
+				worker->xfer_failed++;
+			}
+			break;
+		case SPDK_ACCEL_OPC_CHECK_CRC32C:
+			if (g_crc_error) {
+				/* Task is expected to fail */
+				status = 0;
+			}
+			break;
+		default:
 			break;
 		}
 	}
@@ -814,6 +928,8 @@ _init_thread(void *arg1)
 		switch (g_workload_selection) {
 		case SPDK_ACCEL_OPC_CRC32C:
 		case SPDK_ACCEL_OPC_COPY_CRC32C:
+		case SPDK_ACCEL_OPC_CHECK_CRC32C:
+		case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
 			rc = _get_crc_task_data_bufs(task);
 			break;
 		case SPDK_ACCEL_OPC_ENCRYPT:
@@ -871,6 +987,8 @@ accel_perf_prep(void *arg1)
 	switch (g_workload_selection) {
 	case SPDK_ACCEL_OPC_CRC32C:
 	case SPDK_ACCEL_OPC_COPY_CRC32C:
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
 		break;
 	case SPDK_ACCEL_OPC_ENCRYPT:
 	case SPDK_ACCEL_OPC_DECRYPT:
@@ -926,7 +1044,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&g_opts, sizeof(g_opts));
 	g_opts.name = "accel_test";
 	g_opts.reactor_mask = "0x1";
-	if (spdk_app_parse_args(argc, argv, &g_opts, "a:b:q:I:K:t:T:w:", NULL, parse_args,
+	if (spdk_app_parse_args(argc, argv, &g_opts, "a:b:fq:I:K:t:T:w:", NULL, parse_args,
 				usage) != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		g_rc = -1;
 		goto cleanup;

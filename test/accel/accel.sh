@@ -97,6 +97,10 @@ run_test "accel_copy" accel_test -t 1 -w copy -y
 run_test "accel_fill" accel_test -t 1 -w fill -f 128 -q 64 -a 64 -y
 run_test "accel_copy_crc32c" accel_test -t 1 -w copy_crc32c -y
 run_test "accel_copy_crc32c_C2" accel_test -t 1 -w copy_crc32c -y -C 2
+run_test "accel_check_crc32c" accel_test -t 1 -w check_crc32c -y
+run_test "accel_check_crc32c_C2" accel_test -t 1 -w check_crc32c -y -C 2
+run_test "accel_copy_check_crc32c" accel_test -t 1 -w copy_check_crc32c -y
+run_test "accel_copy_check_crc32c_C2" accel_test -t 1 -w copy_check_crc32c -y -C 2
 run_test "accel_dualcast" accel_test -t 1 -w dualcast -y
 run_test "accel_compare" accel_test -t 1 -w compare -y
 run_test "accel_xor" accel_test -t 1 -w xor -y

@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2020 Intel Corporation.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -126,7 +127,9 @@ dump_user_config(void)
 	printf("Accel Perf Configuration:\n");
 	printf("Workload Type:  %s\n", g_workload_type);
 	if (g_workload_selection == SPDK_ACCEL_OPC_CRC32C ||
-	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C) {
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 		printf("CRC-32C seed:   %u\n", g_crc32c_seed);
 	} else if (g_workload_selection == SPDK_ACCEL_OPC_FILL) {
 		printf("Fill pattern:   0x%x\n", g_fill_pattern);
@@ -136,6 +139,7 @@ dump_user_config(void)
 		printf("Source buffers: %u\n", g_xor_src_count);
 	}
 	if (g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_VERIFY ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE_COPY) {
@@ -172,7 +176,7 @@ usage(void)
 	printf("\t[-T number of threads per core\n");
 	printf("\t[-o transfer size in bytes (default: 4KiB. For compress/decompress, 0 means the input file size)]\n");
 	printf("\t[-t time in seconds]\n");
-	printf("\t[-w workload type must be one of these: copy, fill, crc32c, copy_crc32c, compare, compress, decompress, dualcast, xor,\n");
+	printf("\t[-w workload type must be one of these: copy, fill, crc32c, copy_crc32c, check_crc32c, copy_check_crc32c, compare, compress, decompress, dualcast, xor,\n");
 	printf("\t[                                       dif_verify, , dif_generate, dif_generate_copy\n");
 	printf("\t[-M assign module to the operation, not compatible with accel_assign_opc RPC\n");
 	printf("\t[-l for compress/decompress workloads, name of uncompressed input file\n");
@@ -259,6 +263,10 @@ parse_args(int ch, char *arg)
 			g_workload_selection = SPDK_ACCEL_OPC_CRC32C;
 		} else if (!strcmp(g_workload_type, "copy_crc32c")) {
 			g_workload_selection = SPDK_ACCEL_OPC_COPY_CRC32C;
+		} else if (!strcmp(g_workload_type, "check_crc32c")) {
+			g_workload_selection = SPDK_ACCEL_OPC_CHECK_CRC32C;
+		} else if (!strcmp(g_workload_type, "copy_check_crc32c")) {
+			g_workload_selection = SPDK_ACCEL_OPC_COPY_CHECK_CRC32C;
 		} else if (!strcmp(g_workload_type, "compare")) {
 			g_workload_selection = SPDK_ACCEL_OPC_COMPARE;
 		} else if (!strcmp(g_workload_type, "dualcast")) {
@@ -425,6 +433,8 @@ _get_task_data_bufs(struct ap_task *task)
 
 	if (g_workload_selection == SPDK_ACCEL_OPC_CRC32C ||
 	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_VERIFY ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE ||
 	    g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE_COPY) {
@@ -436,7 +446,8 @@ _get_task_data_bufs(struct ap_task *task)
 			return -ENOMEM;
 		}
 
-		if (g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C) {
+		if (g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+		    g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C) {
 			dst_buff_len = g_xfer_size_bytes * g_chained_count;
 		}
 
@@ -483,6 +494,7 @@ _get_task_data_bufs(struct ap_task *task)
 	}
 
 	if (g_workload_selection != SPDK_ACCEL_OPC_CRC32C &&
+	    g_workload_selection != SPDK_ACCEL_OPC_CHECK_CRC32C &&
 	    g_workload_selection != SPDK_ACCEL_OPC_DIF_VERIFY &&
 	    g_workload_selection != SPDK_ACCEL_OPC_DIF_GENERATE &&
 	    g_workload_selection != SPDK_ACCEL_OPC_DIF_GENERATE_COPY) {
@@ -584,6 +596,17 @@ _submit_single(struct worker_thread *worker, struct ap_task *task)
 	case SPDK_ACCEL_OPC_COPY_CRC32C:
 		rc = spdk_accel_submit_copy_crc32cv(worker->ch, task->dst, task->src_iovs, task->src_iovcnt,
 						    &task->crc_dst, g_crc32c_seed, accel_done, task);
+		break;
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+		task->crc_dst = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
+		rc = spdk_accel_submit_check_crc32cv(worker->ch, &task->crc_dst,
+						     task->src_iovs, task->src_iovcnt, g_crc32c_seed,
+						     accel_done, task);
+		break;
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+		task->crc_dst = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
+		rc = spdk_accel_submit_copy_check_crc32cv(worker->ch, task->dst, task->src_iovs, task->src_iovcnt,
+				&task->crc_dst, g_crc32c_seed, accel_done, task);
 		break;
 	case SPDK_ACCEL_OPC_COMPARE:
 		random_num = rand() % 100;
@@ -739,6 +762,14 @@ accel_done(void *arg1, int status)
 				SPDK_NOTICELOG("Data miscompare\n");
 				worker->xfer_failed++;
 			}
+			break;
+		case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+			if (_vector_memcmp(task->dst, task->src_iovs, task->src_iovcnt)) {
+				SPDK_NOTICELOG("Data miscompare\n");
+				worker->xfer_failed++;
+			}
+			break;
+		case SPDK_ACCEL_OPC_CHECK_CRC32C:
 			break;
 		case SPDK_ACCEL_OPC_CRC32C:
 			sw_crc32c = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
@@ -1361,6 +1392,8 @@ main(int argc, char **argv)
 
 	if ((g_workload_selection == SPDK_ACCEL_OPC_CRC32C ||
 	     g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+	     g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
+	     g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C ||
 	     g_workload_selection == SPDK_ACCEL_OPC_DIF_VERIFY ||
 	     g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE) &&
 	    g_chained_count == 0) {
