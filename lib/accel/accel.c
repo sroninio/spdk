@@ -688,12 +688,12 @@ spdk_accel_submit_check_crc32c(struct spdk_io_channel *ch, uint32_t *crc,
 	accel_task->s.iovs[0].iov_base = src;
 	accel_task->s.iovs[0].iov_len = nbytes;
 	accel_task->s.iovcnt = 1;
+	accel_task->nbytes = nbytes;
 	accel_task->crc_dst = crc;
 	accel_task->seed = seed;
 	accel_task->op_code = SPDK_ACCEL_OPC_CHECK_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	accel_task->step_cb_fn = NULL;
 
 	return module->submit_tasks(module_ch, accel_task);
 }
@@ -726,12 +726,12 @@ spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc,
 
 	accel_task->s.iovs = iov;
 	accel_task->s.iovcnt = iov_cnt;
+	accel_task->nbytes = accel_get_iovlen(iov, iov_cnt);
 	accel_task->crc_dst = crc;
 	accel_task->seed = seed;
 	accel_task->op_code = SPDK_ACCEL_OPC_CHECK_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	accel_task->step_cb_fn = NULL;
 
 	return module->submit_tasks(module_ch, accel_task);
 }
@@ -1479,7 +1479,6 @@ spdk_accel_append_check_crc32c(struct spdk_accel_sequence **pseq,
 	task->src_domain_ctx = src_domain_ctx;
 	task->dst_domain = NULL;
 	task->dst_domain_ctx = NULL;
-	task->dst_domain = NULL;
 	task->s.iovs = src_iovs;
 	task->s.iovcnt = src_iovcnt;
 	task->nbytes = accel_get_iovlen(src_iovs, src_iovcnt);
