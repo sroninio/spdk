@@ -68,7 +68,7 @@ struct spdk_xlio_sock {
 	STAILQ_HEAD(, xlio_sock_packet)	received_packets;
 
 	struct xlio_packets_pool	*xlio_packets_pool;
-	struct spdk_xlio_sock_group_impl *group_impl;
+	struct nvme_tcp_poll_group	*group;
 	struct ibv_pd			*pd;
 
 	xlio_socket_t			xlio_sock;
@@ -87,20 +87,6 @@ struct spdk_xlio_sock {
 	};
 
 	/* "Cold" data starts here */
-};
-
-struct spdk_xlio_sock_group_impl {
-	xlio_poll_group_t		group;
-	TAILQ_HEAD(pending_recv_head, spdk_xlio_sock)	pending_recv;
-	struct xlio_packets_pool	*xlio_packets_pool;
-	struct spdk_sock_impl_opts	impl_opts;
-	union {
-		struct {
-			uint8_t		pp_handler_registered: 1;
-			uint8_t		reserved: 7;
-		} flags;
-		uint8_t			raw;
-	};
 };
 
 /* xlio packets pool for each core */
@@ -241,8 +227,20 @@ struct nvme_tcp_req {
 };
 
 struct nvme_tcp_poll_group {
-	struct spdk_nvme_transport_poll_group group;
-	struct spdk_xlio_sock_group_impl xlio_group;
+	struct spdk_nvme_transport_poll_group		group;
+	xlio_poll_group_t				xgroup;
+
+	TAILQ_HEAD(pending_recv_head, spdk_xlio_sock)	pending_recv;
+	struct xlio_packets_pool			*xlio_packets_pool;
+	struct spdk_sock_impl_opts			impl_opts;
+	union {
+		struct {
+			uint8_t				pp_handler_registered: 1;
+			uint8_t				reserved: 7;
+		} flags;
+		uint8_t					raw;
+	};
+
 	uint32_t completions_per_qpair;
 	int64_t num_completions;
 
@@ -787,7 +785,7 @@ xlio_sock_readv(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 	size_t offset = 0;
 
 	if (STAILQ_EMPTY(&sock->received_packets)) {
-		if (spdk_unlikely(!sock->group_impl)) {
+		if (spdk_unlikely(!sock->group)) {
 			ret = poll_no_group_socket(sock);
 			if (ret < 0) {
 				if (sock->flags.disconnected) {
@@ -902,8 +900,8 @@ xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t 
 	vsock->consumed_packets++;
 
 	/* If the socket does not already have recv pending, add it now */
-	if (spdk_likely(vsock->group_impl) && !vsock->flags.pending_recv) {
-		struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
+	if (spdk_likely(vsock->group) && !vsock->flags.pending_recv) {
+		struct nvme_tcp_poll_group *group = vsock->group;
 
 		vsock->flags.pending_recv = true;
 		TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
@@ -913,9 +911,9 @@ xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t 
 static void
 xlio_batch_pp_handler(void *ctx)
 {
-	struct spdk_xlio_sock_group_impl *group = (struct spdk_xlio_sock_group_impl *)ctx;
+	struct nvme_tcp_poll_group *group = (struct nvme_tcp_poll_group *)ctx;
 
-	xlio_poll_group_flush(group->group);
+	xlio_poll_group_flush(group->xgroup);
 
 	group->flags.pp_handler_registered = false;
 }
@@ -997,9 +995,9 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu,
 		_pdu_write_done(tqpair, pdu, 0);
 	}
 
-	if (group && !group->xlio_group.flags.pp_handler_registered) {
-		group->xlio_group.flags.pp_handler_registered = spdk_thread_post_poller_handler_register(
-					xlio_batch_pp_handler, group) == 0;
+	if (group && !group->flags.pp_handler_registered) {
+		group->flags.pp_handler_registered = spdk_thread_post_poller_handler_register(
+				xlio_batch_pp_handler, group) == 0;
 	} else {
 		vsock->flags.pending_send = true;
 	}
@@ -1027,38 +1025,38 @@ xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 }
 
 static int
-xlio_sock_group_impl_create(struct spdk_xlio_sock_group_impl *group_impl)
+xlio_sock_group_impl_create(struct nvme_tcp_poll_group *group)
 {
-	size_t impl_opts_size = sizeof(group_impl->impl_opts);
+	size_t impl_opts_size = sizeof(group->impl_opts);
 	uint32_t num_packets;
 	uint32_t num_buffers;
 	int rc;
 
-	assert(group_impl);
-	rc = xlio_sock_group_create(&group_impl->group, 0);
+	assert(group);
+	rc = xlio_sock_group_create(&group->xgroup, 0);
 	if (rc) {
 		SPDK_ERRLOG("Failed to create group.\n");
 		return rc;
 	}
 
-	rc = spdk_sock_impl_get_opts("xlio", &group_impl->impl_opts, &impl_opts_size);
+	rc = spdk_sock_impl_get_opts("xlio", &group->impl_opts, &impl_opts_size);
 	if (rc) {
 		return rc;
 	}
-	num_packets = group_impl->impl_opts.packets_pool_size;
-	num_buffers = group_impl->impl_opts.buffers_pool_size;
+	num_packets = group->impl_opts.packets_pool_size;
+	num_buffers = group->impl_opts.buffers_pool_size;
 
-	TAILQ_INIT(&group_impl->pending_recv);
+	TAILQ_INIT(&group->pending_recv);
 
 	if (num_packets) {
-		group_impl->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
-		if (!group_impl->xlio_packets_pool) {
+		group->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
+		if (!group->xlio_packets_pool) {
 			return -ENOMEM;
 		}
 	}
 
 	if (num_buffers && xlio_sock_alloc_buffers_pool(num_buffers)) {
-		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group_impl);
+		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
 		return -ENOMEM;
 	}
 
@@ -1066,14 +1064,14 @@ xlio_sock_group_impl_create(struct spdk_xlio_sock_group_impl *group_impl)
 }
 
 static inline int
-xlio_sock_group_impl_add_sock(struct spdk_xlio_sock_group_impl *group, struct spdk_xlio_sock *vsock)
+xlio_sock_group_impl_add_sock(struct nvme_tcp_poll_group *group, struct spdk_xlio_sock *vsock)
 {
-	vsock->group_impl = group;
+	vsock->group = group;
 	return 0;
 }
 
 static int
-xlio_sock_group_impl_remove_sock(struct spdk_xlio_sock_group_impl *group,
+xlio_sock_group_impl_remove_sock(struct nvme_tcp_poll_group *group,
 				 struct spdk_xlio_sock *vsock)
 {
 	if (vsock->flags.pending_recv) {
@@ -1085,12 +1083,12 @@ xlio_sock_group_impl_remove_sock(struct spdk_xlio_sock_group_impl *group,
 }
 
 static int
-xlio_sock_group_impl_poll(struct spdk_xlio_sock_group_impl *group, int max_events)
+xlio_sock_group_impl_poll(struct nvme_tcp_poll_group *group, int max_events)
 {
 	int num_events;
 	struct spdk_xlio_sock *vsock, *ptmp;
 
-	xlio_poll_group_poll(group->group);
+	xlio_poll_group_poll(group->xgroup);
 
 	num_events = 0;
 	ptmp = TAILQ_LAST(&group->pending_recv, pending_recv_head);
@@ -1115,9 +1113,9 @@ xlio_sock_group_impl_poll(struct spdk_xlio_sock_group_impl *group, int max_event
 }
 
 static inline int
-xlio_sock_group_impl_close(struct spdk_xlio_sock_group_impl *group)
+xlio_sock_group_impl_close(struct nvme_tcp_poll_group *group)
 {
-	int rc = xlio_poll_group_destroy(group->group);
+	int rc = xlio_poll_group_destroy(group->xgroup);
 	if (rc) {
 		SPDK_ERRLOG("Failed to destroy group: rc %d errno %d (%s)\n",
 			    rc, errno, spdk_strerror(errno));
@@ -1131,7 +1129,7 @@ xlio_sock_group_impl_close(struct spdk_xlio_sock_group_impl *group)
 static ssize_t
 xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_buf **sock_buf)
 {
-	struct spdk_xlio_sock_group_impl *group = vsock->group_impl;
+	struct nvme_tcp_poll_group *group = vsock->group;
 	struct xlio_sock_buf *prev_buf = NULL;
 	int ret;
 
@@ -1139,7 +1137,7 @@ xlio_sock_recv_zcopy(struct spdk_xlio_sock *vsock, size_t len, struct spdk_sock_
 	*sock_buf = NULL;
 
 	if (STAILQ_EMPTY(&vsock->received_packets)) {
-		if (spdk_unlikely(!vsock->group_impl)) {
+		if (spdk_unlikely(!vsock->group)) {
 			ret = poll_no_group_socket(vsock);
 			if (ret < 0) {
 				if (vsock->flags.disconnected) {
@@ -4662,7 +4660,7 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	} else {
 		struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
 		assert(group != NULL);
-		xgroup = group->xlio_group.group;
+		xgroup = group->xgroup;
 	}
 	assert(xgroup != 0);
 
@@ -5071,7 +5069,7 @@ nvme_tcp_poll_group_create(void)
 		}
 	}
 
-	rc = xlio_sock_group_impl_create(&group->xlio_group);
+	rc = xlio_sock_group_impl_create(group);
 	if (rc) {
 		SPDK_ERRLOG("Unable to allocate sock group.\n");
 		goto fail;
@@ -5094,7 +5092,7 @@ nvme_tcp_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair)
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 	struct spdk_xlio_sock *vsock = &tqpair->sock;
 
-	if (xlio_sock_group_impl_add_sock(&group->xlio_group, vsock)) {
+	if (xlio_sock_group_impl_add_sock(group, vsock)) {
 		return -EPROTO;
 	}
 	return 0;
@@ -5111,7 +5109,7 @@ nvme_tcp_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair)
 		tqpair->flags.needs_poll = false;
 	}
 
-	if (xlio_sock_group_impl_remove_sock(&group->xlio_group, &tqpair->sock)) {
+	if (xlio_sock_group_impl_remove_sock(group, &tqpair->sock)) {
 		return -EPROTO;
 	}
 	return 0;
@@ -5174,7 +5172,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	group->num_completions = 0;
 	group->stats.polls++;
 
-	num_events = xlio_sock_group_impl_poll(&group->xlio_group, MAX_EVENTS_PER_POLL);
+	num_events = xlio_sock_group_impl_poll(group, MAX_EVENTS_PER_POLL);
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
 		tqpair = nvme_tcp_qpair(qpair);
@@ -5230,7 +5228,7 @@ nvme_tcp_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 		return -EBUSY;
 	}
 
-	rc = xlio_sock_group_impl_close(&group->xlio_group);
+	rc = xlio_sock_group_impl_close(group);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to close the sock group for a tcp poll group.\n");
 		assert(false);
