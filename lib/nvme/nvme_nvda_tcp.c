@@ -1013,7 +1013,7 @@ xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 }
 
 static int
-xlio_sock_group_impl_create(struct nvme_tcp_poll_group *group)
+xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 {
 	size_t impl_opts_size = sizeof(group->impl_opts);
 	uint32_t num_packets;
@@ -1046,25 +1046,6 @@ xlio_sock_group_impl_create(struct nvme_tcp_poll_group *group)
 	if (num_buffers && xlio_sock_alloc_buffers_pool(num_buffers)) {
 		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
 		return -ENOMEM;
-	}
-
-	return 0;
-}
-
-static inline int
-xlio_sock_group_impl_add_sock(struct nvme_tcp_poll_group *group, struct nvme_tcp_qpair *tqpair)
-{
-	tqpair->group = group;
-	return 0;
-}
-
-static int
-xlio_sock_group_impl_remove_sock(struct nvme_tcp_poll_group *group,
-				 struct nvme_tcp_qpair *tqpair)
-{
-	if (tqpair->flags.pending_recv) {
-		TAILQ_REMOVE(&group->pending_recv, tqpair, link);
-		tqpair->flags.pending_recv = false;
 	}
 
 	return 0;
@@ -5060,7 +5041,7 @@ nvme_tcp_poll_group_create(void)
 		}
 	}
 
-	rc = xlio_sock_group_impl_create(group);
+	rc = xlio_sock_poll_group_create(group);
 	if (rc) {
 		SPDK_ERRLOG("Unable to allocate sock group.\n");
 		goto fail;
@@ -5082,9 +5063,7 @@ nvme_tcp_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair)
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 
-	if (xlio_sock_group_impl_add_sock(group, tqpair)) {
-		return -EPROTO;
-	}
+	tqpair->group = group;
 	return 0;
 }
 
@@ -5099,9 +5078,11 @@ nvme_tcp_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair)
 		tqpair->flags.needs_poll = false;
 	}
 
-	if (xlio_sock_group_impl_remove_sock(group, tqpair)) {
-		return -EPROTO;
+	if (tqpair->flags.pending_recv) {
+		TAILQ_REMOVE(&group->pending_recv, tqpair, link);
+		tqpair->flags.pending_recv = false;
 	}
+
 	return 0;
 }
 
