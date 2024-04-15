@@ -649,7 +649,7 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts)
 	 */
 	min_pool_size = opts->fsdev_io_cache_size * (spdk_thread_get_count() + 1);
 	if (opts->fsdev_io_pool_size < min_pool_size) {
-		SPDK_ERRLOG("fsdev_io_pool_size %" PRIu32 " is not compatible with bdev_io_cache_size %" PRIu32
+		SPDK_ERRLOG("fsdev_io_pool_size %" PRIu32 " is not compatible with fsdev_io_cache_size %" PRIu32
 			    " and %" PRIu32 " threads\n", opts->fsdev_io_pool_size, opts->fsdev_io_cache_size,
 			    spdk_thread_get_count());
 		SPDK_ERRLOG("fsdev_io_pool_size must be at least %" PRIu32 "\n", min_pool_size);
@@ -1049,7 +1049,7 @@ spdk_fsdev_unregister(struct spdk_fsdev *fsdev, spdk_fsdev_unregister_cb cb_fn, 
 	pthread_mutex_unlock(&fsdev->internal.mutex);
 	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
 
-	/* @todo: bdev aborts IOs on all channels here. */
+	/* @todo: fsdev aborts IOs on all channels here. */
 	fsdev_unregister(fsdev, fsdev, 0);
 }
 
