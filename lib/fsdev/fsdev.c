@@ -104,6 +104,8 @@ struct spdk_fsdev_shared_resource {
 	TAILQ_ENTRY(spdk_fsdev_shared_resource) link;
 };
 
+#define FSDEV_CH_RESET_IN_PROGRESS	(1 << 0)
+
 struct spdk_fsdev_channel {
 	struct spdk_fsdev	*fsdev;
 
@@ -123,6 +125,9 @@ struct spdk_fsdev_channel {
 	 * List of all submitted I/Os.
 	 */
 	fsdev_io_tailq_t	io_submitted;
+
+	/* Channel flags */
+	uint32_t		flags;
 };
 
 struct spdk_fsdev_desc {
@@ -456,6 +461,11 @@ fsdev_channel_get_io(struct spdk_fsdev_channel *channel)
 {
 	struct spdk_fsdev_mgmt_channel *ch = channel->shared_resource->mgmt_ch;
 	struct spdk_fsdev_io *fsdev_io;
+
+	if (spdk_unlikely(channel->flags & FSDEV_CH_RESET_IN_PROGRESS)) {
+		SPDK_DEBUGLOG(fsdev, "Reset in progress: no IO allowed\n");
+		return NULL;
+	}
 
 	if (ch->per_thread_cache_count > 0) {
 		fsdev_io = STAILQ_FIRST(&ch->per_thread_cache);
@@ -857,6 +867,183 @@ spdk_fsdev_for_each_channel(struct spdk_fsdev *fsdev, spdk_fsdev_for_each_channe
 
 	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_each_channel_msg,
 			      iter, fsdev_each_channel_cpl);
+}
+
+struct fsdev_reset_ctx {
+	struct spdk_fsdev_desc *desc;
+	spdk_fsdev_reset_completion_cb cb;
+	void *cb_arg;
+	bool success;
+};
+
+static void
+fsdev_reset_done(struct fsdev_reset_ctx *ctx)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+
+	__atomic_clear(&fsdev->internal.reset_in_progress, __ATOMIC_RELAXED);
+	ctx->cb(ctx->desc, ctx->success, ctx->cb_arg);
+	free(ctx);
+}
+
+static void
+fsdev_reset_unfreeze_channel_msg_cb(struct spdk_io_channel_iter *i)
+{
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	ch->flags &= ~FSDEV_CH_RESET_IN_PROGRESS;
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_reset_unfreeze_channel_cpl_cb(struct spdk_io_channel_iter *i, int status)
+{
+	struct fsdev_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+
+	if (status) {
+		SPDK_ERRLOG("%s: channels unfreeze failed with %d\n", spdk_fsdev_get_name(fsdev), status);
+		ctx->success = false;
+	}
+
+	fsdev_reset_done(ctx);
+}
+
+static void
+fsdev_reset_finalize(struct fsdev_reset_ctx *ctx)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+
+	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_reset_unfreeze_channel_msg_cb, ctx,
+				fsdev_reset_unfreeze_channel_cpl_cb);
+}
+
+static void
+fsdev_reset_purge_channel_msg_cb(struct spdk_io_channel_iter *i)
+{
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct fsdev_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	if (ch->io_outstanding) {
+		struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+		SPDK_WARNLOG("%s: %s: still has %" PRIu64 " uncompleted IOs. Purging them...\n",
+			     spdk_fsdev_get_name(fsdev), spdk_thread_get_name(spdk_get_thread()), ch->io_outstanding);
+		/* Force the remained outstanding IOs */
+		while (!TAILQ_EMPTY(&ch->io_submitted)) {
+			struct spdk_fsdev_io *fsdev_io = TAILQ_FIRST(&ch->io_submitted);
+			spdk_fsdev_io_complete(fsdev_io, ECANCELED);
+		}
+	}
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_reset_purge_channel_cpl_cb(struct spdk_io_channel_iter *i, int status)
+{
+	struct fsdev_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+
+	if (status) {
+		SPDK_ERRLOG("%s: channels purge failed with %d\n", spdk_fsdev_get_name(fsdev), status);
+	} else {
+		SPDK_DEBUGLOG(fsdev, "%s: channels purge succeeded\n", spdk_fsdev_get_name(fsdev));
+		ctx->success = true;
+	}
+
+	fsdev_reset_finalize(ctx);
+}
+
+static void
+fsdev_module_reset_done_cb(void *cb_arg, int rc)
+{
+	struct fsdev_reset_ctx *ctx = cb_arg;
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+
+	if (rc) {
+		/* Module's reset failed */
+		SPDK_ERRLOG("%s: module reset failed with %d\n", spdk_fsdev_get_name(fsdev), rc);
+		fsdev_reset_finalize(ctx);
+		return;
+	}
+
+	/* Now we sweep the remaining IOs (theoretically there should be none) */
+	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_reset_purge_channel_msg_cb, ctx,
+			      fsdev_reset_purge_channel_cpl_cb);
+}
+
+static void
+fsdev_reset_freeze_channel_msg_cb(struct spdk_io_channel_iter *i)
+{
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	ch->flags |= FSDEV_CH_RESET_IN_PROGRESS;
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_reset_freeze_channel_cpl_cb(struct spdk_io_channel_iter *i, int status)
+{
+	struct fsdev_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
+	int res;
+
+	if (status) {
+		SPDK_ERRLOG("%s: channels freeze failed with %d\n", spdk_fsdev_get_name(fsdev), status);
+		fsdev_reset_finalize(ctx);
+		return;
+	}
+
+	/* Then we give the module an opportunity to complete all the outstanding IOs and reset itself */
+	res = fsdev->fn_table->reset(fsdev->ctxt, fsdev_module_reset_done_cb, ctx);
+	if (res) {
+		SPDK_ERRLOG("%s: module reset failed with %d\n", spdk_fsdev_get_name(fsdev), res);
+		fsdev_reset_finalize(ctx);
+	}
+}
+
+int
+spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
+	struct fsdev_reset_ctx *ctx;
+
+	if (!spdk_fsdev_reset_supported(fsdev)) {
+		return -EOPNOTSUPP;
+	}
+
+	if (__atomic_test_and_set(&fsdev->internal.reset_in_progress, __ATOMIC_RELAXED)) {
+		SPDK_ERRLOG("Previous reset is in progress\n");
+		return -EINPROGRESS;
+	}
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx) {
+		SPDK_ERRLOG("Failed to allocate memory for reset context\n");
+		return -ENOMEM;
+	}
+
+	ctx->desc = desc;
+	ctx->cb = cb;
+	ctx->cb_arg = cb_arg;
+	ctx->success = false;
+
+	/* First we freeze the channels */
+	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_reset_freeze_channel_msg_cb, ctx,
+			      fsdev_reset_freeze_channel_cpl_cb);
+
+	return 0;
+}
+
+bool
+spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev)
+{
+	return fsdev->fn_table->reset ? true : false;
 }
 
 const char *

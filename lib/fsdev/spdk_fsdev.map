@@ -23,6 +23,8 @@
 	spdk_fsdev_get_memory_domains;
 	spdk_fsdev_for_each_channel;
 	spdk_fsdev_for_each_channel_continue;
+	spdk_fsdev_reset;
+	spdk_fsdev_reset_supported;
 	spdk_fsdev_op_init;
 	spdk_fsdev_op_cleanup;
 	spdk_fsdev_op_lookup;

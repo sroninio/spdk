@@ -76,6 +76,8 @@ struct spdk_fsdev_module {
 
 typedef void (*spdk_fsdev_unregister_cb)(void *cb_arg, int rc);
 
+typedef void (*spdk_fsdev_reset_done_cb)(void *cb_arg, int rc);
+
 /**
  * Function table for a filesystem device backend.
  *
@@ -116,6 +118,16 @@ struct spdk_fsdev_fn_table {
 	 * Vfsdev module must inspect types of memory domains returned by base fsdev and report only those
 	 * memory domains that it can work with. */
 	int (*get_memory_domains)(void *ctx, struct spdk_memory_domain **domains, int array_size);
+
+	/**
+	 * Perform an asynchronous device reset. Optional - may be NULL. NULL means that the device cannot be reset.
+	 *
+	 * Resets all the IOs associated with the fsdev.
+	 * This will pass a message to every other thread associated with the fsdev for which an I/O channel exists for the fsdev.
+	 * Regardless of device type, all outstanding I/Os to the filesystem device will be completed prior to the reset completing.
+	 * Moreover, the module must guarantee to complete all pending IOs, and not depend on existence of remote services which may be down.
+	 */
+	int (*reset)(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg);
 };
 
 /**
@@ -183,6 +195,9 @@ struct spdk_fsdev {
 
 		/** Fsdev name used for quick lookup */
 		struct spdk_fsdev_name fsdev_name;
+
+		/** true if fsdev reset is in progress */
+		bool reset_in_progress;
 	} internal;
 };
 

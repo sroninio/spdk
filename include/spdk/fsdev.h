@@ -343,6 +343,37 @@ void spdk_fsdev_for_each_channel_continue(struct spdk_fsdev_channel_iter *i, int
 void spdk_fsdev_for_each_channel(struct spdk_fsdev *fsdev, spdk_fsdev_for_each_channel_msg fn,
 				 void *ctx, spdk_fsdev_for_each_channel_done cpl);
 
+/**
+ * Filesystem device reset completion callback.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param success True if reset completed successfully or false if it failed.
+ * \param cb_arg Callback argument specified upon reset operation.
+ */
+typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, bool success,
+		void *cb_arg);
+
+/**
+ * Issue reset operation to the fsdev.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param cb Called when the reset is complete.
+ * \param cb_arg Argument passed to cb.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ */
+int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
+
+/**
+ * Check whether the Filesystem device supports reset.
+ *
+ * \param fsdev Filesystem device to check.
+ * \return true if support, false otherwise.
+ */
+bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
+
 /* 'to_set' flags in spdk_fsdev_op_setattr */
 #define FSDEV_SET_ATTR_MODE	(1 << 0)
 #define FSDEV_SET_ATTR_UID	(1 << 1)

@@ -5,6 +5,8 @@
 #include "spdk/stdinc.h"
 #include "spdk/fsdev.h"
 #include "spdk/fsdev_module.h"
+#include "spdk/log.h"
+#include "spdk/likely.h"
 #include "fsdev_internal.h"
 
 #define CALL_USR_CLB(_fsdev_io, ch, type, ...) \
