@@ -286,6 +286,10 @@ static bool ut_listxattr_size_only;
 static uint64_t ut_readdir_offset;
 static uint64_t ut_readdir_num_entries;
 static uint64_t ut_readdir_num_entry_cb_calls;
+static int ut_reset_desired_err;
+static bool ut_reset_leak_io;
+static bool ut_complete_next_request = true;
+static struct spdk_fsdev_io *ut_oustanding_io = NULL;
 
 static void
 ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
@@ -546,7 +550,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 
 	ut_call_record_end();
 
-	spdk_fsdev_io_complete(fsdev_io, utfsdev->desired_io_status);
+	if (ut_complete_next_request) {
+		spdk_fsdev_io_complete(fsdev_io, utfsdev->desired_io_status);
+	} else {
+		ut_oustanding_io = fsdev_io;
+		ut_complete_next_request = true;
+	}
 }
 
 static struct spdk_io_channel *
@@ -578,6 +587,24 @@ ut_fsdev_get_memory_domains(void *ctx, struct spdk_memory_domain **domains,
 	return 0;
 }
 
+static int
+ut_fsdev_reset(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
+{
+	ut_call_record_simple_param_ptr(ut_fsdev_reset, ctx);
+
+	if (!ut_reset_leak_io) {
+		spdk_fsdev_io_complete(ut_oustanding_io, ESTALE);
+		ut_oustanding_io = NULL;
+	}
+
+	if (!ut_reset_desired_err) {
+		/* The callback should only be called in case of success */
+		cb(cb_arg, ut_reset_desired_err);
+	}
+
+	return ut_reset_desired_err;
+}
+
 static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.destruct		= ut_fsdev_destruct,
 	.submit_request		= ut_fsdev_submit_request,
@@ -585,6 +612,7 @@ static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.negotiate_opts		= ut_fsdev_negotiate_opts,
 	.write_config_json	= ut_fsdev_write_config_json,
 	.get_memory_domains	= ut_fsdev_get_memory_domains,
+	.reset			= ut_fsdev_reset,
 };
 
 static void
@@ -861,6 +889,113 @@ ut_fsdev_test_get_io_channel(void)
 	spdk_fsdev_close(fsdev_desc);
 
 	ut_fsdev_destroy(utfsdev);
+}
+
+static void
+ut_fsdev_reset_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	ut_call_record_begin(ut_fsdev_reset_flush_cpl_cb);
+	ut_call_record_param_ptr(cb_arg);
+	ut_call_record_param_int(status);
+	ut_call_record_end();
+
+}
+
+static void
+ut_fsdev_reset_cpl_cb(struct spdk_fsdev_desc *desc, bool success, void *cb_arg)
+{
+	ut_call_record_begin(ut_fsdev_reset_cpl_cb);
+	ut_call_record_param_ptr(desc);
+	ut_call_record_param_int(success);
+	ut_call_record_param_ptr(cb_arg);
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_io_channel *ch;
+	struct spdk_fsdev_desc *fsdev_desc;
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	CU_ASSERT(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_desc != NULL);
+	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+
+	ch = spdk_fsdev_get_io_channel(fsdev_desc);
+	CU_ASSERT(ch != NULL);
+
+	ut_calls_reset();
+	ut_complete_next_request = false; /* Make sure the flush IO won't be completed */
+	rc =  spdk_fsdev_op_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				  ut_fsdev_reset_flush_cpl_cb, utfsdev);
+	CU_ASSERT(rc == 0);
+
+	poll_thread(0);
+
+	ut_reset_desired_err = fail_module_reset ? ENOSR : 0;
+	ut_reset_leak_io = leak_io;
+
+	ut_calls_reset();
+
+	rc = spdk_fsdev_reset(fsdev_desc, ut_fsdev_reset_cpl_cb, utfsdev);
+	CU_ASSERT(rc == 0);
+
+	poll_thread(0);
+
+	/* IO must be completed either by the module (if it doesn't leak IOs) or by the fsdev core (if it does) */
+	CU_ASSERT(ut_calls_get_call_count() == fail_module_reset ? 2 : 3);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_reset);
+	CU_ASSERT(ut_calls_get_param_count(0) == 1);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_get_func(1) == ut_fsdev_reset_flush_cpl_cb);
+	CU_ASSERT(ut_calls_get_param_count(1) == 2);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == utfsdev);
+	/* fsdev core completes with ECANCELED while ut_fsdev_reset completes with ESTALE */
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == leak_io ? ECANCELED : ESTALE);
+
+	if (!fail_module_reset) {
+		/* The reset completion callback is only called if the module's reset suceeds */
+		CU_ASSERT(ut_calls_get_func(2) == ut_fsdev_reset_cpl_cb);
+		CU_ASSERT(ut_calls_get_param_count(2) == 3);
+		CU_ASSERT(ut_calls_param_get_ptr(2, 0) == fsdev_desc);
+		CU_ASSERT(ut_calls_param_get_int(2, 1) == !ut_reset_desired_err);
+		CU_ASSERT(ut_calls_param_get_ptr(2, 2) == utfsdev);
+	}
+
+	ut_calls_reset();
+	spdk_put_io_channel(ch);
+	poll_thread(0);
+
+	spdk_fsdev_close(fsdev_desc);
+
+	ut_fsdev_destroy(utfsdev);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_succeeds(void)
+{
+	/* Test with a module that succeeds to reset and doesn't leak the IO (i.e. confirms it) */
+	ut_fsdev_do_test_reset(false, false);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_leaks_io(void)
+{
+	/* Test with a module that succeeds to reset and leaks the IO (i.e. doesn't confirm it, so fsdev should) */
+	ut_fsdev_do_test_reset(false, true);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_fails(void)
+{
+	/* Test with a module that fails to reset */
+	ut_fsdev_do_test_reset(true, false);
 }
 
 typedef int (*execute_op_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
@@ -2042,6 +2177,9 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_set_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_set_device_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_get_io_channel);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_fails);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_lookup_ok);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_lookup_err);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_forget);
