@@ -138,6 +138,13 @@ struct spdk_fsdev_desc {
 	TAILQ_ENTRY(spdk_fsdev_desc)	link;
 };
 
+struct spdk_fsdev_channel_iter {
+	spdk_fsdev_for_each_channel_msg fn;
+	spdk_fsdev_for_each_channel_done cpl;
+	struct spdk_io_channel_iter *i;
+	void *ctx;
+};
+
 #define __fsdev_to_io_dev(fsdev)	(((char *)fsdev) + 1)
 #define __fsdev_from_io_dev(io_dev)	((struct spdk_fsdev *)(((char *)io_dev) - 1))
 #define __io_ch_to_fsdev_mgmt_ch(io_ch)	((struct spdk_fsdev_mgmt_channel *)spdk_io_channel_get_ctx(io_ch))
@@ -790,6 +797,66 @@ spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_domai
 	}
 
 	return 0;
+}
+
+void
+spdk_fsdev_for_each_channel_continue(struct spdk_fsdev_channel_iter *iter, int status)
+{
+	spdk_for_each_channel_continue(iter->i, status);
+}
+
+static struct spdk_fsdev *
+io_channel_iter_get_fsdev(struct spdk_io_channel_iter *i)
+{
+	void *io_device = spdk_io_channel_iter_get_io_device(i);
+
+	return __fsdev_from_io_dev(io_device);
+}
+
+static void
+fsdev_each_channel_msg(struct spdk_io_channel_iter *i)
+{
+	struct spdk_fsdev_channel_iter *iter = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = io_channel_iter_get_fsdev(i);
+	struct spdk_io_channel *ch = spdk_io_channel_iter_get_channel(i);
+
+	iter->i = i;
+	iter->fn(iter, fsdev, ch, iter->ctx);
+}
+
+static void
+fsdev_each_channel_cpl(struct spdk_io_channel_iter *i, int status)
+{
+	struct spdk_fsdev_channel_iter *iter = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = io_channel_iter_get_fsdev(i);
+
+	iter->i = i;
+	iter->cpl(fsdev, iter->ctx, status);
+
+	free(iter);
+}
+
+void
+spdk_fsdev_for_each_channel(struct spdk_fsdev *fsdev, spdk_fsdev_for_each_channel_msg fn,
+			    void *ctx, spdk_fsdev_for_each_channel_done cpl)
+{
+	struct spdk_fsdev_channel_iter *iter;
+
+	assert(fsdev != NULL && fn != NULL && ctx != NULL);
+
+	iter = calloc(1, sizeof(struct spdk_fsdev_channel_iter));
+	if (iter == NULL) {
+		SPDK_ERRLOG("Unable to allocate iterator\n");
+		assert(false);
+		return;
+	}
+
+	iter->fn = fn;
+	iter->cpl = cpl;
+	iter->ctx = ctx;
+
+	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_each_channel_msg,
+			      iter, fsdev_each_channel_cpl);
 }
 
 const char *

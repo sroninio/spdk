@@ -289,6 +289,59 @@ int spdk_fsdev_get_device_opts(const struct spdk_fsdev *fsdev,
 int spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_domain **domains,
 				  int array_size);
 
+/**
+ * \brief SPDK fsdev channel iterator.
+ *
+ * This is a virtual representation of a fsdev channel iterator.
+ */
+struct spdk_fsdev_channel_iter;
+
+/**
+ * Called on the appropriate thread for each channel associated with the given fsdev.
+ *
+ * \param i fsdev channel iterator.
+ * \param fsdev filesystem device.
+ * \param ch I/O channel.
+ * \param ctx context of the fsdev channel iterator.
+ */
+typedef void (*spdk_fsdev_for_each_channel_msg)(struct spdk_fsdev_channel_iter *i,
+		struct spdk_fsdev *fsdev, struct spdk_io_channel *ch, void *ctx);
+
+/**
+ * spdk_fsdev_for_each_channel() function's final callback with the given fsdev.
+ *
+ * \param fsdev filesystem device.
+ * \param ctx context of the fsdev channel iterator.
+ * \param status 0 if it completed successfully, or negative errno if it failed.
+ */
+typedef void (*spdk_fsdev_for_each_channel_done)(struct spdk_fsdev *fsdev, void *ctx, int status);
+
+/**
+ * Helper function to iterate the next channel for spdk_fsdev_for_each_channel().
+ *
+ * \param i fsdev channel iterator.
+ * \param status Status for the fsdev channel iterator;
+ * for non 0 status remaining iterations are terminated.
+ */
+void spdk_fsdev_for_each_channel_continue(struct spdk_fsdev_channel_iter *i, int status);
+
+/**
+ * Call 'fn' on each channel associated with the given fsdev.
+ *
+ * This happens asynchronously, so fn may be called after spdk_fsdev_for_each_channel
+ * returns. 'fn' will be called for each channel serially, such that two calls
+ * to 'fn' will not overlap in time. After 'fn' has been called, call
+ * spdk_fsdev_for_each_channel_continue() to continue iterating. Note that the
+ * spdk_fsdev_for_each_channel_continue() function can be called asynchronously.
+ *
+ * \param fsdev 'fn' will be called on each channel associated with this given fsdev.
+ * \param fn Called on the appropriate thread for each channel associated with the given fsdev.
+ * \param ctx Context for the caller.
+ * \param cpl Called on the thread that spdk_fsdev_for_each_channel was initially called
+ * from when 'fn' has been called on each channel.
+ */
+void spdk_fsdev_for_each_channel(struct spdk_fsdev *fsdev, spdk_fsdev_for_each_channel_msg fn,
+				 void *ctx, spdk_fsdev_for_each_channel_done cpl);
 
 /* 'to_set' flags in spdk_fsdev_op_setattr */
 #define FSDEV_SET_ATTR_MODE	(1 << 0)
