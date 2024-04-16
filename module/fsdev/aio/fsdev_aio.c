@@ -2176,12 +2176,149 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_object_end(w);
 }
 
+struct fsdev_aio_reset_ctx {
+	struct aio_fsdev *vfsdev;
+	spdk_fsdev_reset_done_cb cb;
+	void *cb_arg;
+	struct spdk_poller *poller;
+	bool has_outstanding_ios;
+};
+
+static void
+fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
+{
+	ctx->cb(ctx->cb_arg, status);
+
+	spdk_poller_unregister(&ctx->poller);
+
+	free(ctx);
+}
+
+static void
+fsdev_aio_reset_check_outstanding_io_msg_cb(struct spdk_fsdev_channel_iter *i,
+		struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch, void *_ctx)
+{
+	struct fsdev_aio_reset_ctx *ctx = _ctx;
+	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+
+	if (!TAILQ_EMPTY(&ch->ios_in_progress)) {
+		__atomic_test_and_set(&ctx->has_outstanding_ios, __ATOMIC_RELAXED);
+	}
+
+	spdk_fsdev_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_aio_reset_check_outstanding_io_done_cb(struct spdk_fsdev *fsdev, void *_ctx, int status)
+{
+	struct fsdev_aio_reset_ctx *ctx = _ctx;
+	bool has_outstanding_ios;
+
+	if (status) {
+		SPDK_ERRLOG("%s: outstanding IOs check failed with %d\n", spdk_fsdev_get_name(fsdev), status);
+		fsdev_aio_reset_done(ctx, status);
+		return;
+	}
+
+	/* Get the has_outstanding_ios and reset it so the poller can set it again if resumed */
+	has_outstanding_ios = __atomic_exchange_n(&ctx->has_outstanding_ios, 0, __ATOMIC_RELAXED);
+	if (has_outstanding_ios) {
+		/* We still have uncompleted IOs, so resume the poller */
+		SPDK_DEBUGLOG(fsdev_aio, "%s: some IOs are still uncompleted\n", spdk_fsdev_get_name(fsdev));
+		spdk_poller_resume(ctx->poller);
+		return;
+	}
+
+	/* All IOs have been completed -> finish the reset */
+	SPDK_DEBUGLOG(fsdev_aio, "%s: all IOs have been completed. Reset is done!\n",
+		      spdk_fsdev_get_name(fsdev));
+
+	fsdev_aio_reset_done(ctx, 0);
+}
+
+static int
+fsdev_aio_reset_poller_cb(void *_ctx)
+{
+	struct fsdev_aio_reset_ctx *ctx = _ctx;
+
+	spdk_poller_pause(ctx->poller); /* We'll pause the poller until the current check is done */
+
+	/* Check whether all the IOs has been completed */
+	spdk_fsdev_for_each_channel(&ctx->vfsdev->fsdev, fsdev_aio_reset_check_outstanding_io_msg_cb, ctx,
+				    fsdev_aio_reset_check_outstanding_io_done_cb);
+
+	return SPDK_POLLER_BUSY;
+}
+
+static void
+fsdev_aio_reset_msg_cb(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *fsdev,
+		       struct spdk_io_channel *_ch, void *_ctx)
+{
+	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct aio_fsdev_io *vfsdev_io;
+
+	/* The IO is currently in the kernel. All we can is to try to cancel it. */
+	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
+		spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+	}
+
+	spdk_fsdev_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_aio_reset_done_cb(struct spdk_fsdev *fsdev, void *_ctx, int status)
+{
+	struct fsdev_aio_reset_ctx *ctx = _ctx;
+
+	if (status) {
+		SPDK_ERRLOG("%s: IO cancellation failed with %d\n", spdk_fsdev_get_name(fsdev), status);
+		fsdev_aio_reset_done(ctx, status);
+		return;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "%s: all the outstanding IOs have been cancelled\n",
+		      spdk_fsdev_get_name(fsdev));
+
+	/* Resume the poller, so it'll wait until the completion of all the IOs */
+	spdk_poller_resume(ctx->poller);
+}
+
+static int
+fsdev_aio_reset(void *_ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
+{
+	struct aio_fsdev *vfsdev = _ctx;
+	struct fsdev_aio_reset_ctx *ctx;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (!ctx) {
+		SPDK_ERRLOG("Cannot allocate the reset object\n");
+		return -ENOMEM;
+	}
+
+	ctx->vfsdev = vfsdev;
+	ctx->cb = cb;
+	ctx->cb_arg = cb_arg;
+	ctx->poller = SPDK_POLLER_REGISTER(fsdev_aio_reset_poller_cb, ctx, 0);
+	if (!ctx->poller) {
+		free(ctx);
+		SPDK_ERRLOG("Cannot register reset poller\n");
+		return -ENOMEM;
+	}
+
+	spdk_poller_pause(ctx->poller); /* We'll start it once the IOs are cancelled */
+
+	/* First, we'll cancel all the async IOs */
+	spdk_fsdev_for_each_channel(&vfsdev->fsdev, fsdev_aio_reset_msg_cb, ctx, fsdev_aio_reset_done_cb);
+	return 0;
+}
+
 static const struct spdk_fsdev_fn_table aio_fn_table = {
 	.destruct		= fsdev_aio_destruct,
 	.submit_request		= fsdev_aio_submit_request,
 	.get_io_channel		= fsdev_aio_get_io_channel,
 	.negotiate_opts		= fsdev_aio_negotiate_opts,
 	.write_config_json	= fsdev_aio_write_config_json,
+	.reset			= fsdev_aio_reset,
 };
 
 static int
