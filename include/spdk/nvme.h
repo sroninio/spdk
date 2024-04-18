@@ -343,6 +343,7 @@ struct spdk_nvme_accel_fn_table {
 	/** The accelerated crc32c function. */
 	void (*submit_accel_crc32c)(void *ctx, uint32_t *dst, struct iovec *iov,
 				    uint32_t iov_cnt, uint32_t seed, spdk_nvme_accel_completion_cb cb_fn, void *cb_arg);
+
 	/** Get accel IO channel */
 	struct spdk_io_channel *(*get_accel_channel)(void *ctx);
 
@@ -362,6 +363,27 @@ struct spdk_nvme_accel_fn_table {
 	int (*append_crc32c)(void *ctx, void **seq, uint32_t *dst, struct iovec *iovs, uint32_t iovcnt,
 			     struct spdk_memory_domain *memory_domain, void *domain_ctx,
 			     uint32_t seed, spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
+
+	int (*append_copy_crc32c)(void *ctx, void **seq,
+				  uint32_t *crc_dst, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+				  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				  struct iovec *src_iovs, uint32_t src_iovcnt,
+				  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				  uint32_t seed, spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
+
+	int (*append_copy)(void *ctx, void **seq,
+			   struct iovec *dst_iovs, uint32_t dst_iovcnt,
+			   struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+			   struct iovec *src_iovs, uint32_t src_iovcnt,
+			   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+			   int flags, spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
+
+	int (*append_check_crc32c)(void *ctx, void **seq,
+				   uint32_t *crc,
+				   struct iovec *src_iovs, uint32_t src_iovcnt,
+				   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				   uint32_t seed,
+				   spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
 };
 
 /**

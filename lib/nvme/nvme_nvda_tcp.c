@@ -30,7 +30,6 @@
 #include "spdk/trace.h"
 #include "spdk/bit_pool.h"
 #include "spdk/dma.h"
-#include "spdk/accel.h"
 #include "spdk/util.h"
 
 #include "spdk_internal/nvme_nvda_tcp.h"
@@ -2719,17 +2718,16 @@ nvme_tcp_handle_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 		ddgst = (uint32_t *)((uint8_t *)tcp_req->iobuf_iov.iov_base + req->payload_size);
 
 		if (!skip_copy) {
-			rc = spdk_accel_append_copy_crc32c(&accel_seq, accel_ch,
-							   ddgst,
-							   &tcp_req->iobuf_iov, 1, NULL, NULL,
-							   pdu->iovs, pdu->data_iovcnt,
-							   req->payload.opts->memory_domain,
-							   req->payload.opts->memory_domain_ctx,
-							   0, NULL, NULL);
+			rc = group->accel_fn_table.append_copy_crc32c(accel_ch, (void **)&accel_seq, ddgst,
+					&tcp_req->iobuf_iov, 1, NULL, NULL,
+					pdu->iovs, pdu->data_iovcnt,
+					req->payload.opts->memory_domain,
+					req->payload.opts->memory_domain_ctx,
+					0, NULL, NULL);
 			skip_copy = true;
 		} else {
-			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch, ddgst,
-						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
+			rc = group->accel_fn_table.append_crc32c(accel_ch, (void **)&accel_seq, ddgst,
+					&tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
 			if (rc != -ENOMEM) {
@@ -2743,9 +2741,10 @@ nvme_tcp_handle_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 	}
 
 	if (!skip_copy) {
-		rc = spdk_accel_append_copy(&accel_seq, accel_ch, &tcp_req->iobuf_iov, 1, NULL, NULL, pdu->iovs,
-					    pdu->data_iovcnt, req->payload.opts->memory_domain,
-					    req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
+		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, &tcp_req->iobuf_iov, 1, NULL,
+						       NULL, pdu->iovs,
+						       pdu->data_iovcnt, req->payload.opts->memory_domain,
+						       req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
@@ -3031,9 +3030,10 @@ end:
 	if (tcp_req->ordering.bits.needs_accel_seq) {
 		assert(tcp_req->req.accel_sequence);
 		tcp_req->ordering.bits.in_progress_accel = 1;
-		/* TODO: finish accel sequence and send capsule simultaneously */
-		spdk_accel_sequence_finish(tcp_req->req.accel_sequence, _nvme_tcp_accel_finished_in_capsule,
-					   tcp_req);
+		tqpair->qpair.poll_group->group->accel_fn_table.finish_sequence(
+			tcp_req->req.accel_sequence,
+			_nvme_tcp_accel_finished_in_capsule,
+			tcp_req);
 		return 0;
 	}
 
@@ -3346,12 +3346,12 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 			}
 		}
 		if (!skip_copy) {
-			rc = spdk_accel_append_copy(&accel_seq, accel_ch,
-						    tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
-						    req->payload.opts->memory_domain,
-						    req->payload.opts->memory_domain_ctx,
-						    req->zcopy.iovs, req->zcopy.iovcnt,
-						    NULL, NULL, 0, NULL, NULL);
+			rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq,
+							       tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
+							       req->payload.opts->memory_domain,
+							       req->payload.opts->memory_domain_ctx,
+							       req->zcopy.iovs, req->zcopy.iovcnt,
+							       NULL, NULL, 0, NULL, NULL);
 			if (spdk_unlikely(rc)) {
 				SPDK_ERRLOG("Failed to append copy accel task, rc %d\n", rc);
 				spdk_nvme_request_put_zcopy_iovs(&req->zcopy);
@@ -3359,9 +3359,9 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 			}
 
 		}
-		spdk_accel_sequence_reverse(accel_seq);
+		group->accel_fn_table.reverse_sequence(accel_seq);
 		tcp_req->ordering.bits.in_progress_accel = 1;
-		spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_cb, tcp_req);
+		group->accel_fn_table.finish_sequence(accel_seq, nvme_tcp_req_accel_seq_complete_cb, tcp_req);
 		return;
 	}
 
@@ -3793,9 +3793,10 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 		}
 	}
 	if (!skip_copy && !tcp_req->ordering.bits.c2h_accel_copy) {
-		rc = spdk_accel_append_copy(&accel_seq, accel_ch, tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
-					    req->payload.opts->memory_domain, req->payload.opts->memory_domain_ctx,
-					    req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
+		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, tcp_req->pdu.iovs,
+						       tcp_req->pdu.data_iovcnt,
+						       req->payload.opts->memory_domain, req->payload.opts->memory_domain_ctx,
+						       req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			if (rc == -ENOMEM) {
 				SPDK_WARNLOG("no task for copy\n");
@@ -3817,8 +3818,9 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 		tcp_req->ordering.bits.c2h_accel_copy = 1;
 	}
 
-	rc = spdk_accel_append_check_crc32c(&accel_seq, accel_ch, &pdu->data_digest_crc32, req->zcopy.iovs,
-					    req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
+	rc = group->accel_fn_table.append_check_crc32c(accel_ch, (void **)&accel_seq,
+			&pdu->data_digest_crc32, req->zcopy.iovs,
+			req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
 	if (spdk_unlikely(rc)) {
 		if (rc == -ENOMEM) {
 			SPDK_DEBUGLOG(nvme, "pdu %p, tqpair %p: no task for check_crc32c\n", pdu, tqpair);
@@ -3838,14 +3840,15 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 		goto abort_sequence;
 	}
 
-	spdk_accel_sequence_reverse(accel_seq);
+	group->accel_fn_table.reverse_sequence(accel_seq);
 	tcp_req->ordering.bits.in_progress_accel = 1;
-	spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb, tcp_req);
+	group->accel_fn_table.finish_sequence(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb,
+					      tcp_req);
 
 	return 0;
 abort_sequence:
 	if (!req->accel_sequence) {
-		spdk_accel_sequence_abort(accel_seq);
+		group->accel_fn_table.abort_sequence(accel_seq);
 	}
 	return rc;
 }
@@ -4346,17 +4349,17 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 		ddgst = (uint32_t *)((uint8_t *)tcp_req->iobuf_iov.iov_base + tcp_req->req.payload_size);
 
 		if (!skip_copy) {
-			rc = spdk_accel_append_copy_crc32c(&accel_seq, accel_ch,
-							   ddgst,
-							   &tcp_req->iobuf_iov, 1, NULL, NULL,
-							   tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
-							   req->payload.opts->memory_domain,
-							   req->payload.opts->memory_domain_ctx,
-							   0, NULL, NULL);
+			rc = group->accel_fn_table.append_copy_crc32c(accel_ch, (void **)&accel_seq,
+					ddgst,
+					&tcp_req->iobuf_iov, 1, NULL, NULL,
+					tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
+					req->payload.opts->memory_domain,
+					req->payload.opts->memory_domain_ctx,
+					0, NULL, NULL);
 			skip_copy = true;
 		} else {
-			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch, ddgst,
-						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
+			rc = group->accel_fn_table.append_crc32c(accel_ch, (void **)&accel_seq, ddgst,
+					&tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
 			if (rc != -ENOMEM) {
@@ -4370,16 +4373,17 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 	}
 
 	if (!skip_copy) {
-		rc = spdk_accel_append_copy(&accel_seq, accel_ch, &tcp_req->iobuf_iov, 1, NULL, NULL,
-					    tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt, req->payload.opts->memory_domain,
-					    req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
+		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, &tcp_req->iobuf_iov, 1, NULL,
+						       NULL,
+						       tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt, req->payload.opts->memory_domain,
+						       req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
 	}
 
 	tcp_req->ordering.bits.in_progress_accel = 1;
-	spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
+	group->accel_fn_table.finish_sequence(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
 
 	return rc;
 }
