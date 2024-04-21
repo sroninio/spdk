@@ -2051,16 +2051,9 @@ fsdev_aio_initialize(void)
 }
 
 static void
-_fsdev_aio_finish_cb(void *arg)
-{
-	/* @todo: handle async module fini */
-	/* spdk_fsdev_module_fini_done(); */
-}
-
-static void
 fsdev_aio_finish(void)
 {
-	spdk_io_device_unregister(&g_aio_fsdev_head, _fsdev_aio_finish_cb);
+	spdk_io_device_unregister(&g_aio_fsdev_head, NULL);
 }
 
 static int
@@ -2202,6 +2195,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 static struct spdk_io_channel *
 fsdev_aio_get_io_channel(void *ctx)
 {
+	/* We don't create an spdk_io_channel per aio_fsdev. Rather we share it among all the aio fsdevs. */
 	return spdk_get_io_channel(&g_aio_fsdev_head);
 }
 
@@ -2259,23 +2253,36 @@ fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
 }
 
 static void
-fsdev_aio_reset_check_outstanding_io_msg_cb(struct spdk_fsdev_channel_iter *i,
-		struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch, void *_ctx)
+fsdev_aio_reset_check_outstanding_io_msg_cb(struct spdk_io_channel_iter *i)
 {
-	struct fsdev_aio_reset_ctx *ctx = _ctx;
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct aio_fsdev_io *vfsdev_io;
+	bool ios_in_progress = false;
 
-	if (!TAILQ_EMPTY(&ch->ios_in_progress)) {
+	/* Check whether some IOs remained in progress */
+	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
+		/* We only check the IOs which belong to our aio_fsdev. */
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
+			ios_in_progress = true;
+			break;
+		}
+	}
+
+	if (ios_in_progress) {
 		__atomic_test_and_set(&ctx->has_outstanding_ios, __ATOMIC_RELAXED);
 	}
 
-	spdk_fsdev_for_each_channel_continue(i, 0);
+	spdk_for_each_channel_continue(i, 0);
 }
 
 static void
-fsdev_aio_reset_check_outstanding_io_done_cb(struct spdk_fsdev *fsdev, void *_ctx, int status)
+fsdev_aio_reset_check_outstanding_io_done_cb(struct spdk_io_channel_iter *i, int status)
 {
-	struct fsdev_aio_reset_ctx *ctx = _ctx;
+	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = &ctx->vfsdev->fsdev;
 	bool has_outstanding_ios;
 
 	if (status) {
@@ -2308,31 +2315,37 @@ fsdev_aio_reset_poller_cb(void *_ctx)
 	spdk_poller_pause(ctx->poller); /* We'll pause the poller until the current check is done */
 
 	/* Check whether all the IOs has been completed */
-	spdk_fsdev_for_each_channel(&ctx->vfsdev->fsdev, fsdev_aio_reset_check_outstanding_io_msg_cb, ctx,
-				    fsdev_aio_reset_check_outstanding_io_done_cb);
+	spdk_for_each_channel(&g_aio_fsdev_head, fsdev_aio_reset_check_outstanding_io_msg_cb, ctx,
+			      fsdev_aio_reset_check_outstanding_io_done_cb);
 
 	return SPDK_POLLER_BUSY;
 }
 
 static void
-fsdev_aio_reset_msg_cb(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *fsdev,
-		       struct spdk_io_channel *_ch, void *_ctx)
+fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 {
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
 	struct aio_fsdev_io *vfsdev_io;
 
 	/* The IO is currently in the kernel. All we can is to try to cancel it. */
 	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
-		spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+		/* We only must cancel the IOs which belong to our aio_fsdev. */
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
+			spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+		}
 	}
 
-	spdk_fsdev_for_each_channel_continue(i, 0);
+	spdk_for_each_channel_continue(i, 0);
 }
 
 static void
-fsdev_aio_reset_done_cb(struct spdk_fsdev *fsdev, void *_ctx, int status)
+fsdev_aio_reset_done_cb(struct spdk_io_channel_iter *i, int status)
 {
-	struct fsdev_aio_reset_ctx *ctx = _ctx;
+	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fsdev *fsdev = &ctx->vfsdev->fsdev;
 
 	if (status) {
 		SPDK_ERRLOG("%s: IO cancellation failed with %d\n", spdk_fsdev_get_name(fsdev), status);
@@ -2372,7 +2385,7 @@ fsdev_aio_reset(void *_ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	spdk_poller_pause(ctx->poller); /* We'll start it once the IOs are cancelled */
 
 	/* First, we'll cancel all the async IOs */
-	spdk_fsdev_for_each_channel(&vfsdev->fsdev, fsdev_aio_reset_msg_cb, ctx, fsdev_aio_reset_done_cb);
+	spdk_for_each_channel(&g_aio_fsdev_head, fsdev_aio_reset_msg_cb, ctx, fsdev_aio_reset_done_cb);
 	return 0;
 }
 
