@@ -24,9 +24,10 @@
 #define UT_AVALUE "xattr1.val"
 #define UT_NUM_LOOKUPS 11
 #define UT_DATA_SIZE 22
+#define UT_NUM_THREADS 3
 
 
-#define UT_CALL_REC_MAX_CALLS 5
+#define UT_CALL_REC_MAX_CALLS (UT_NUM_THREADS * 5)
 #define UT_CALL_REC_MAX_PARAMS 15
 #define UT_CALL_REC_MAX_STR_SIZE 255
 
@@ -875,6 +876,148 @@ ut_fsdev_test_get_io_channel(void)
 	spdk_fsdev_close(fsdev_desc);
 
 	ut_fsdev_destroy(utfsdev);
+}
+
+static void
+ut_fsdev_for_each_msg_cb(struct spdk_fsdev_channel_iter *i,
+			 struct spdk_fsdev *fsdev, struct spdk_io_channel *ch, void *ctx)
+{
+	uint64_t *desired_res = ctx;
+
+	ut_call_record_begin(ut_fsdev_for_each_msg_cb);
+
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ch);
+	ut_call_record_param_ptr(ctx);
+
+	ut_call_record_end();
+
+	spdk_fsdev_for_each_channel_continue(i, (int)*desired_res);
+}
+
+static void
+ut_fsdev_for_each_done_cb(struct spdk_fsdev *fsdev, void *ctx, int status)
+{
+	ut_call_record_begin(ut_fsdev_for_each_done_cb);
+
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(status);
+
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_test_for_each_channel(uint64_t desired_res)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_io_channel *ch[UT_NUM_THREADS];
+	struct ut_io_channel *ut_ch[UT_NUM_THREADS];
+	struct spdk_fsdev_desc *fsdev_desc;
+	int rc, i;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	CU_ASSERT(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_desc != NULL);
+	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+
+	ut_calls_reset();
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		set_thread(i);
+
+		ch[i] = spdk_fsdev_get_io_channel(fsdev_desc);
+		CU_ASSERT(ch[i] != NULL);
+	}
+
+	CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS * 2);
+
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		int j = i * 2;
+		CU_ASSERT(ut_calls_get_func(j) == ut_fsdev_get_io_channel);
+		CU_ASSERT(ut_calls_get_param_count(j) == 1);
+		CU_ASSERT(ut_calls_param_get_ptr(j, 0) == utfsdev);
+
+		CU_ASSERT(ut_calls_get_func(j + 1) == ut_fsdev_io_channel_create_cb);
+		CU_ASSERT(ut_calls_get_param_count(j + 1) == 1);
+		ut_ch[i] = (struct ut_io_channel *)ut_calls_param_get_ptr(j + 1, 0);
+	}
+
+	set_thread(0);
+	ut_calls_reset();
+	spdk_fsdev_for_each_channel(&utfsdev->fsdev, ut_fsdev_for_each_msg_cb, &desired_res,
+				    ut_fsdev_for_each_done_cb);
+	poll_threads();
+	set_thread(0);
+	poll_thread(0);
+
+	if (!desired_res) {
+		CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS + 1);
+
+		for (i = 0; i < UT_NUM_THREADS; i++) {
+			CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_msg_cb);
+			CU_ASSERT(ut_calls_get_param_count(i) == 3);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 1) != NULL);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 2) == &desired_res);
+		}
+	} else {
+		/* we failed the 1st ut_fsdev_for_each_msg_cb, so it should be called only once */
+
+		CU_ASSERT(ut_calls_get_call_count() == 2);
+
+		i = 0;
+		CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_msg_cb);
+		CU_ASSERT(ut_calls_get_param_count(i) == 3);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 1) != NULL);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 2) == &desired_res);
+
+		i = 1;
+	}
+
+	CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_done_cb);
+	CU_ASSERT(ut_calls_get_param_count(i) == 3);
+	CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(i, 1) == &desired_res);
+	CU_ASSERT(ut_calls_param_get_int(i, 2) == desired_res);
+
+	ut_calls_reset();
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		set_thread(i);
+		spdk_put_io_channel(ch[i]);
+	}
+
+	poll_threads();
+	set_thread(0);
+
+	CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS);
+
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_io_channel_destroy_cb);
+		CU_ASSERT(ut_calls_get_param_count(i) == 1);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 0) == ut_ch[i]);
+	}
+
+	set_thread(0);
+	spdk_fsdev_close(fsdev_desc);
+
+	ut_fsdev_destroy(utfsdev);
+}
+
+
+static void
+ut_fsdev_test_for_each_channel_ok(void)
+{
+	ut_fsdev_test_for_each_channel(0);
+}
+
+static void
+ut_fsdev_test_for_each_channel_err(void)
+{
+	ut_fsdev_test_for_each_channel(ENOSR);
 }
 
 static void
@@ -2148,13 +2291,11 @@ ut_fsdev_test_op_copy_file_range(void)
 			 ut_fsdev_op_copy_file_range_check_op_clb);
 }
 
-int
-main(int argc, char **argv)
+static int
+fsdev_ut(int argc, char **argv)
 {
 	CU_pSuite		suite = NULL;
 	unsigned int		num_failures;
-
-	CU_initialize_registry();
 
 	suite = CU_add_suite("fsdev", ut_fsdev_setup, ut_fsdev_teardown);
 
@@ -2205,12 +2346,49 @@ main(int argc, char **argv)
 	set_thread(0);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
-	CU_cleanup_registry();
 
 	poll_thread(0);
 
 	free_threads();
 	free_cores();
 
+	return num_failures;
+}
+
+static int
+fsdev_mt_ut(int argc, char **argv)
+{
+	CU_pSuite		suite = NULL;
+	unsigned int		num_failures;
+
+	suite = CU_add_suite("fsdev_mt", ut_fsdev_setup, ut_fsdev_teardown);
+
+	CU_ADD_TEST(suite, ut_fsdev_test_for_each_channel_ok);
+	CU_ADD_TEST(suite, ut_fsdev_test_for_each_channel_err);
+
+	allocate_cores(UT_NUM_THREADS);
+	allocate_threads(UT_NUM_THREADS);
+	set_thread(0);
+
+	num_failures = spdk_ut_run_tests(argc, argv, NULL);
+
+	poll_threads();
+
+	free_threads();
+	free_cores();
+
+	return num_failures;
+}
+
+int
+main(int argc, char **argv)
+{
+	unsigned int		num_failures;
+
+	CU_initialize_registry();
+
+	num_failures = fsdev_ut(argc, argv) + fsdev_mt_ut(argc, argv);
+
+	CU_cleanup_registry();
 	return num_failures;
 }
