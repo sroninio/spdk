@@ -5,6 +5,7 @@
 #include "mlx5_priv.h"
 #include "infiniband/mlx5dv.h"
 #include "mlx5_ifc.h"
+#include "spdk/string.h"
 #include "spdk/log.h"
 #include "spdk/util.h"
 #include "spdk/likely.h"
@@ -539,6 +540,54 @@ spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp)
 	}
 
 	return mlx5_qp_loopback_conn(qp, &conn_caps);
+}
+
+int
+spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *mlx5_qp, struct rdma_cm_id *cm_id)
+{
+	struct ibv_qp_attr qp_attr;
+	int qp_attr_mask, rc;
+
+	qp_attr.qp_state = IBV_QPS_INIT;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_INIT, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_INIT) failed, rc %d\n", rc);
+		return rc;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTR;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_RTR, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_RTR) failed, rc %d\n", rc);
+		return rc;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTS;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_RTR, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_RTS) failed, rc %d\n", rc);
+	}
+
+	return rc;
+
 }
 
 static void

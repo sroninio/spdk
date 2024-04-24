@@ -292,6 +292,15 @@ int spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
  */
 int spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp);
 
+/**
+ * Connect QP using RDMA CM
+ *
+ * \param qp QP created with \ref spdk_mlx5_qp_create
+ * \param cm_id RDMA CM id to be used to connect QP
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *qp, struct rdma_cm_id *cm_id);
+
 int spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp);
 
 /**
