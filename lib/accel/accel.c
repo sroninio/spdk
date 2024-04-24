@@ -2234,6 +2234,30 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 
 	switch (task->op_code) {
 	case SPDK_ACCEL_OPC_COPY:
+		if (next->op_code == SPDK_ACCEL_OPC_CRC32C) {
+			if (task->dst_domain != next->src_domain) {
+				break;
+			}
+
+			/* We can merge a copy with a CRC if the CRC source matches either the source or
+			 * destination of the copy. */
+			if (!accel_compare_iovs(task->d.iovs, task->d.iovcnt, next->s.iovs, next->s.iovcnt) &&
+			    !accel_compare_iovs(task->s.iovs, task->s.iovcnt, next->s.iovs, next->s.iovcnt)) {
+				break;
+			}
+
+			/* Copy followed by CRC is special because the framework actually has a dedicated
+			 * COPY_CRC32C operation. */
+			task->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
+			task->crc_dst = next->crc_dst;
+			task->seed = next->seed;
+
+			/* We're removing next_task from the tasks queue, so we need to update its pointer,
+			* so that the TAILQ_FOREACH_SAFE() loop below works correctly */
+			*next_task = TAILQ_NEXT(next, seq_link);
+			accel_sequence_complete_task(seq, next);
+			break;
+		}
 		/* We only allow changing src of operations that actually have a src, e.g. we never
 		 * do it for fill.  Theoretically, it is possible, but we'd have to be careful to
 		 * change the src of the operation after fill (which in turn could also be a fill).
@@ -2263,7 +2287,6 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 	case SPDK_ACCEL_OPC_FILL:
 	case SPDK_ACCEL_OPC_ENCRYPT:
 	case SPDK_ACCEL_OPC_DECRYPT:
-	case SPDK_ACCEL_OPC_CRC32C:
 	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		/* We can only merge tasks when one of them is a copy */
 		if (next->op_code != SPDK_ACCEL_OPC_COPY) {
@@ -2276,6 +2299,40 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 		 * so that the TAILQ_FOREACH_SAFE() loop below works correctly */
 		*next_task = TAILQ_NEXT(next, seq_link);
 		accel_sequence_complete_task(seq, next);
+		break;
+	case SPDK_ACCEL_OPC_CRC32C:
+		/* We can only merge tasks when one of them is a copy */
+		if (next->op_code != SPDK_ACCEL_OPC_COPY) {
+			break;
+		}
+
+		/* First try to ellide the copy */
+		if (accel_task_set_dstbuf(task, next)) {
+			/* We're removing next_task from the tasks queue, so we need to update its pointer,
+			 * so that the TAILQ_FOREACH_SAFE() loop below works correctly */
+			*next_task = TAILQ_NEXT(next, seq_link);
+			accel_sequence_complete_task(seq, next);
+			break;
+		}
+
+		/* We can't eliminate the copy, but if the copy starts from the same data
+		 * as the CRC, we can merge. */
+		if (task->src_domain != next->src_domain) {
+			break;
+		}
+
+		if (!accel_compare_iovs(task->s.iovs, task->s.iovcnt,
+					next->s.iovs, next->s.iovcnt)) {
+			break;
+		}
+
+		/* Copy followed by CRC is special because the framework actually has a dedicated
+		 * COPY_CRC32C operation. */
+		next->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
+		next->crc_dst = task->crc_dst;
+		next->seed = task->seed;
+
+		accel_sequence_complete_task(seq, task);
 		break;
 	default:
 		assert(0 && "bad opcode");

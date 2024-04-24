@@ -3913,8 +3913,7 @@ test_sequence_crc32(void)
 	CU_ASSERT_EQUAL(crc, spdk_crc32c_update(buf, sizeof(buf), ~0u));
 	g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count = 0;
 
-	/* Now check copy+crc - This should not remove the copy. Otherwise the data does not
-	 * end up where the user expected it to be. */
+	/* Now check copy+crc - This should be converted into a single copy_crc32c command */
 	seq = NULL;
 	completed = 0;
 	crc = 0;
@@ -3943,14 +3942,16 @@ test_sequence_crc32(void)
 	CU_ASSERT_EQUAL(completed, 2);
 	CU_ASSERT(ut_seq.complete);
 	CU_ASSERT_EQUAL(ut_seq.status, 0);
-	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count, 1);
-	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY].count, 1);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY_CRC32C].count, 1);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count, 0);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY].count, 0);
 	CU_ASSERT_EQUAL(memcmp(buf, tmp[0], sizeof(buf)), 0);
 	CU_ASSERT_EQUAL(crc, spdk_crc32c_update(buf, sizeof(buf), ~0u));
+	g_seq_operations[SPDK_ACCEL_OPC_COPY_CRC32C].count = 0;
 	g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count = 0;
 	g_seq_operations[SPDK_ACCEL_OPC_COPY].count = 0;
 
-	/* Check crc+copy - Again, the copy cannot be removed. */
+	/* Check crc+copy - Again, we expect this to be converted to a single copy_crc32c command */
 	seq = NULL;
 	completed = 0;
 	crc = 0;
@@ -3979,10 +3980,12 @@ test_sequence_crc32(void)
 	CU_ASSERT_EQUAL(completed, 2);
 	CU_ASSERT(ut_seq.complete);
 	CU_ASSERT_EQUAL(ut_seq.status, 0);
-	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count, 1);
-	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY].count, 1);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY_CRC32C].count, 1);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count, 0);
+	CU_ASSERT_EQUAL(g_seq_operations[SPDK_ACCEL_OPC_COPY].count, 0);
 	CU_ASSERT_EQUAL(crc, spdk_crc32c_update(tmp[0], sizeof(tmp[0]), ~0u));
 	CU_ASSERT_EQUAL(memcmp(buf, tmp[0], sizeof(buf)), 0);
+	g_seq_operations[SPDK_ACCEL_OPC_COPY_CRC32C].count = 0;
 	g_seq_operations[SPDK_ACCEL_OPC_CRC32C].count = 0;
 	g_seq_operations[SPDK_ACCEL_OPC_COPY].count = 0;
 
