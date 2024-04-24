@@ -429,3 +429,52 @@ spdk_rdma_accel_sequence_release(struct spdk_rdma_qp *qp, void *_rdma_io_ctx)
 
 	return 0;
 }
+
+struct spdk_rdma_cq *
+spdk_rdma_cq_create(struct spdk_rdma_cq_init_attr *cq_attr)
+{
+	struct spdk_rdma_cq *rdma_cq;
+
+	rdma_cq = calloc(1, sizeof(*rdma_cq));
+	if (!rdma_cq) {
+		SPDK_ERRLOG("CQ memory allocation failed\n");
+		return NULL;
+	}
+
+	rdma_cq->cq = ibv_create_cq(cq_attr->pd->context, cq_attr->cqe, cq_attr->cq_context,
+				    cq_attr->comp_channel,
+				    cq_attr->comp_vector);
+	if (!rdma_cq->cq) {
+		SPDK_ERRLOG("Unable to create completion queue: errno %d: %s\n", errno, spdk_strerror(errno));
+		free(rdma_cq);
+		return NULL;
+	}
+
+	return rdma_cq;
+}
+
+void
+spdk_rdma_cq_destroy(struct spdk_rdma_cq *rdma_cq)
+{
+	assert(rdma_cq);
+
+	ibv_destroy_cq(rdma_cq->cq);
+	free(rdma_cq);
+}
+
+int
+spdk_rdma_cq_resize(struct spdk_rdma_cq *rdma_cq, int cqe)
+{
+	assert(rdma_cq);
+
+	return ibv_resize_cq(rdma_cq->cq, cqe);
+}
+
+int
+spdk_rdma_cq_poll(struct spdk_rdma_cq *rdma_cq, int num_entries, struct ibv_wc *wc)
+{
+	assert(rdma_cq);
+	assert(wc);
+
+	return ibv_poll_cq(rdma_cq->cq, num_entries, wc);
+}

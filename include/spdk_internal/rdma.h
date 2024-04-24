@@ -70,6 +70,18 @@ struct spdk_rdma_srq {
 	bool shared_stats;
 };
 
+struct spdk_rdma_cq_init_attr {
+	int				cqe;
+	int				comp_vector;
+	void			       *cq_context;
+	struct ibv_comp_channel	       *comp_channel;
+	struct ibv_pd		       *pd;
+};
+
+struct spdk_rdma_cq {
+	struct ibv_cq *cq;
+};
+
 struct spdk_rdma_memory_translation_ctx {
 	void *addr;
 	size_t length;
@@ -191,6 +203,40 @@ bool spdk_rdma_qp_queue_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_r
  * \return 0 on succes, errno on failure
  */
 int spdk_rdma_qp_flush_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_recv_wr **bad_wr);
+
+/**
+ * Create RDMA provider specific CQ
+ *
+ * \param cq_attr Pointer to CQ init attributes
+ * \return Pointer to a newly created CQ on success or NULL on failure
+ */
+struct spdk_rdma_cq *spdk_rdma_cq_create(struct spdk_rdma_cq_init_attr *cq_attr);
+
+/**
+ * Destroy RDMA provider specific CQ
+ *
+ * \param rdma_cq Pointer to SPDK RDMA CQ to be destroyed
+ */
+void spdk_rdma_cq_destroy(struct spdk_rdma_cq *rdma_cq);
+
+/**
+ * Resize Completion Queue
+ *
+ * \param rdma_cq CQ to be resized
+ * \param cqe New CQ size
+ * \return 0 on succes, errno on failure
+ */
+int spdk_rdma_cq_resize(struct spdk_rdma_cq *rdma_cq, int cqe);
+
+/**
+ * Poll Completion Queue, save up to \b num_entries into \b wc array
+ *
+ * \param cq Completion Queue
+ * \param num_entries Maximum number of completions to be polled
+ * \param wc Array of work completions to be filled by this function
+ * \return number of polled completions on succes, negated errno on failure
+ */
+int spdk_rdma_cq_poll(struct spdk_rdma_cq *rdma_cq, int num_entries, struct ibv_wc *wc);
 
 struct spdk_accel_sequence;
 
