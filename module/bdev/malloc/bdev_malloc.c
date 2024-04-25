@@ -325,7 +325,7 @@ bdev_malloc_readv(struct malloc_disk *mdisk, struct spdk_io_channel *ch,
 				     bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
 				     bdev_io->u.bdev.memory_domain,
 				     bdev_io->u.bdev.memory_domain_ctx,
-				     &task->iov, 1, NULL, NULL, 0, NULL, NULL);
+				     &task->iov, 1, NULL, NULL, NULL, NULL);
 	if (spdk_unlikely(res != 0)) {
 		malloc_sequence_fail(task, res);
 		return;
@@ -346,7 +346,7 @@ bdev_malloc_readv(struct malloc_disk *mdisk, struct spdk_io_channel *ch,
 
 	task->num_outstanding++;
 	res = spdk_accel_submit_copy(ch, bdev_io->u.bdev.md_buf, mdisk->malloc_md_buf + md_offset,
-				     md_len, 0, malloc_done, task);
+				     md_len, malloc_done, task);
 	if (res != 0) {
 		malloc_done(task, res);
 	}
@@ -381,7 +381,7 @@ bdev_malloc_writev(struct malloc_disk *mdisk, struct spdk_io_channel *ch,
 	res = spdk_accel_append_copy(&bdev_io->u.bdev.accel_sequence, ch, &task->iov, 1, NULL, NULL,
 				     bdev_io->u.bdev.iovs, bdev_io->u.bdev.iovcnt,
 				     bdev_io->u.bdev.memory_domain,
-				     bdev_io->u.bdev.memory_domain_ctx, 0, NULL, NULL);
+				     bdev_io->u.bdev.memory_domain_ctx, NULL, NULL);
 	if (spdk_unlikely(res != 0)) {
 		malloc_sequence_fail(task, res);
 		return;
@@ -401,7 +401,7 @@ bdev_malloc_writev(struct malloc_disk *mdisk, struct spdk_io_channel *ch,
 
 	task->num_outstanding++;
 	res = spdk_accel_submit_copy(ch, mdisk->malloc_md_buf + md_offset, bdev_io->u.bdev.md_buf,
-				     md_len, 0, malloc_done, task);
+				     md_len, malloc_done, task);
 	if (res != 0) {
 		malloc_done(task, res);
 	}
@@ -418,7 +418,7 @@ bdev_malloc_unmap(struct malloc_disk *mdisk,
 	task->num_outstanding = 1;
 
 	return spdk_accel_submit_fill(ch, mdisk->malloc_buf + offset, 0,
-				      byte_count, 0, malloc_done, task);
+				      byte_count, malloc_done, task);
 }
 
 static void
@@ -436,7 +436,7 @@ bdev_malloc_copy(struct malloc_disk *mdisk, struct spdk_io_channel *ch,
 	task->status = SPDK_BDEV_IO_STATUS_SUCCESS;
 	task->num_outstanding = 1;
 
-	res = spdk_accel_submit_copy(ch, dst, src, len, 0, malloc_done, task);
+	res = spdk_accel_submit_copy(ch, dst, src, len, malloc_done, task);
 	if (res != 0) {
 		malloc_done(task, res);
 	}

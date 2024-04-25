@@ -376,7 +376,7 @@ struct spdk_nvme_accel_fn_table {
 			   struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			   struct iovec *src_iovs, uint32_t src_iovcnt,
 			   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			   int flags, spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
+			   spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
 
 	int (*append_check_crc32c)(void *ctx, void **seq,
 				   uint32_t *crc,

@@ -260,7 +260,7 @@ DEFINE_STUB(spdk_accel_append_copy, int, (struct spdk_accel_sequence **seq,
 		struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 		struct iovec *src_iovs, uint32_t src_iovcnt,
 		struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-		int flags, spdk_accel_step_cb cb_fn, void *cb_arg), 0);
+		spdk_accel_step_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB_V(spdk_accel_sequence_finish,
 	      (struct spdk_accel_sequence *seq, spdk_accel_completion_cb cb_fn, void *cb_arg));
 DEFINE_STUB_V(spdk_accel_sequence_abort, (struct spdk_accel_sequence *seq));

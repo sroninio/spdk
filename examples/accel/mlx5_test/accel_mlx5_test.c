@@ -528,7 +528,7 @@ _submit_single(struct worker_thread *worker, struct ap_task *task)
 					       g_inplace ? task->src_iovs : task->dst_iovs, g_inplace ? task->src_iovcnt : task->dst_iovcnt, NULL,
 					       NULL,
 					       task->src_iovs, task->src_iovcnt, NULL, NULL,
-					       task->iv, g_block_size, 0, NULL, NULL, NULL);
+					       task->iv, g_block_size, NULL, NULL, NULL);
 		cb = encrypt_done;
 		break;
 	default:
@@ -662,7 +662,7 @@ encrypt_done(void *arg1, int status)
 				       task->src_iovs, task->src_iovcnt, NULL, NULL,
 				       g_inplace ? task->src_iovs : task->dst_iovs, g_inplace ? task->src_iovcnt : task->dst_iovcnt, NULL,
 				       NULL,
-				       task->iv, g_block_size, 0, NULL, NULL, NULL);
+				       task->iv, g_block_size, NULL, NULL, NULL);
 	if (rc) {
 		accel_done(arg1, rc);
 	}

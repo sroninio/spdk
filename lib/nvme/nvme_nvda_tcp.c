@@ -2744,7 +2744,7 @@ nvme_tcp_handle_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, &tcp_req->iobuf_iov, 1, NULL,
 						       NULL, pdu->iovs,
 						       pdu->data_iovcnt, req->payload.opts->memory_domain,
-						       req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
+						       req->payload.opts->memory_domain_ctx, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
@@ -3351,7 +3351,7 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 							       req->payload.opts->memory_domain,
 							       req->payload.opts->memory_domain_ctx,
 							       req->zcopy.iovs, req->zcopy.iovcnt,
-							       NULL, NULL, 0, NULL, NULL);
+							       NULL, NULL, NULL, NULL);
 			if (spdk_unlikely(rc)) {
 				SPDK_ERRLOG("Failed to append copy accel task, rc %d\n", rc);
 				spdk_nvme_request_put_zcopy_iovs(&req->zcopy);
@@ -3796,7 +3796,7 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, tcp_req->pdu.iovs,
 						       tcp_req->pdu.data_iovcnt,
 						       req->payload.opts->memory_domain, req->payload.opts->memory_domain_ctx,
-						       req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
+						       req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			if (rc == -ENOMEM) {
 				SPDK_WARNLOG("no task for copy\n");
@@ -4376,7 +4376,7 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 		rc = group->accel_fn_table.append_copy(accel_ch, (void **)&accel_seq, &tcp_req->iobuf_iov, 1, NULL,
 						       NULL,
 						       tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt, req->payload.opts->memory_domain,
-						       req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
+						       req->payload.opts->memory_domain_ctx, NULL, NULL);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}

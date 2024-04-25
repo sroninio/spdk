@@ -387,26 +387,10 @@ do {										\
         (task)->has_aux = true;							\
 } while (0)
 
-SPDK_LOG_DEPRECATION_REGISTER(accel_flags,
-			      "The flags parameter is unused and deprecated",
-			      "v24.05", 0);
-
-/* \b `flags` is int in API, since it is not used anywahere. we narrowed it down to uint8_t internally
- * To prevent possible problems in the future, add a macro which checks that the value of `flags` passed in the API
- * doesn't exceed 1 byte. */
-#define ACCEL_ASSIGN_FLAGS(task, flags)							\
-do {											\
-	assert(((flags) & (~0xff)) == 0 && "task::flags needs to be extended");		\
-	(task)->flags = (uint8_t)(flags);						\
-	if ((task)->flags) {								\
-		SPDK_LOG_DEPRECATED(accel_flags);					\
-	}										\
-} while (0)										\
-
 /* Accel framework public API for copy function */
 int
 spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src,
-		       uint64_t nbytes, int flags, spdk_accel_completion_cb cb_fn, void *cb_arg)
+		       uint64_t nbytes, spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *accel_task;
@@ -430,7 +414,6 @@ spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src,
 	accel_task->op_code = SPDK_ACCEL_OPC_COPY;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -438,7 +421,7 @@ spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src,
 /* Accel framework public API for dual cast copy function */
 int
 spdk_accel_submit_dualcast(struct spdk_io_channel *ch, void *dst1,
-			   void *dst2, void *src, uint64_t nbytes, int flags,
+			   void *dst2, void *src, uint64_t nbytes,
 			   spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -472,7 +455,6 @@ spdk_accel_submit_dualcast(struct spdk_io_channel *ch, void *dst1,
 	accel_task->op_code = SPDK_ACCEL_OPC_DUALCAST;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -506,7 +488,6 @@ spdk_accel_submit_compare(struct spdk_io_channel *ch, void *src1,
 	accel_task->op_code = SPDK_ACCEL_OPC_COMPARE;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	accel_task->flags = 0;
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -514,7 +495,7 @@ spdk_accel_submit_compare(struct spdk_io_channel *ch, void *src1,
 /* Accel framework public API for fill function */
 int
 spdk_accel_submit_fill(struct spdk_io_channel *ch, void *dst,
-		       uint8_t fill, uint64_t nbytes, int flags,
+		       uint8_t fill, uint64_t nbytes,
 		       spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -536,7 +517,6 @@ spdk_accel_submit_fill(struct spdk_io_channel *ch, void *dst,
 	accel_task->op_code = SPDK_ACCEL_OPC_FILL;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -567,7 +547,6 @@ spdk_accel_submit_crc32c(struct spdk_io_channel *ch, uint32_t *crc_dst,
 	accel_task->op_code = SPDK_ACCEL_OPC_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	accel_task->flags = 0;
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -606,7 +585,6 @@ spdk_accel_submit_crc32cv(struct spdk_io_channel *ch, uint32_t *crc_dst,
 	accel_task->op_code = SPDK_ACCEL_OPC_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	accel_task->flags = 0;
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -615,7 +593,7 @@ spdk_accel_submit_crc32cv(struct spdk_io_channel *ch, uint32_t *crc_dst,
 int
 spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst,
 			      void *src, uint32_t *crc_dst, uint32_t seed, uint64_t nbytes,
-			      int flags, spdk_accel_completion_cb cb_fn, void *cb_arg)
+			      spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *accel_task;
@@ -641,7 +619,6 @@ spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst,
 	accel_task->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -650,7 +627,7 @@ spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst,
 int
 spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst,
 			       struct iovec *src_iovs, uint32_t iov_cnt, uint32_t *crc_dst,
-			       uint32_t seed, int flags, spdk_accel_completion_cb cb_fn, void *cb_arg)
+			       uint32_t seed, spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *accel_task;
@@ -689,7 +666,6 @@ spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst,
 	accel_task->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -768,7 +744,7 @@ spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc,
 
 int
 spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst, uint64_t nbytes,
-			   struct iovec *src_iovs, size_t src_iovcnt, uint32_t *output_size, int flags,
+			   struct iovec *src_iovs, size_t src_iovcnt, uint32_t *output_size,
 			   spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -792,7 +768,6 @@ spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst, uint64_t nbyte
 	accel_task->op_code = SPDK_ACCEL_OPC_COMPRESS;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -800,7 +775,7 @@ spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst, uint64_t nbyte
 int
 spdk_accel_submit_decompress(struct spdk_io_channel *ch, struct iovec *dst_iovs,
 			     size_t dst_iovcnt, struct iovec *src_iovs, size_t src_iovcnt,
-			     uint32_t *output_size, int flags, spdk_accel_completion_cb cb_fn,
+			     uint32_t *output_size, spdk_accel_completion_cb cb_fn,
 			     void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -820,7 +795,6 @@ spdk_accel_submit_decompress(struct spdk_io_channel *ch, struct iovec *dst_iovs,
 	accel_task->op_code = SPDK_ACCEL_OPC_DECOMPRESS;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -829,7 +803,7 @@ int
 spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_key *key,
 			  struct iovec *dst_iovs, uint32_t dst_iovcnt,
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
-			  uint64_t iv, uint32_t block_size, int flags,
+			  uint64_t iv, uint32_t block_size,
 			  spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -855,7 +829,6 @@ spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_k
 	accel_task->op_code = SPDK_ACCEL_OPC_ENCRYPT;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -864,7 +837,7 @@ int
 spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_key *key,
 			  struct iovec *dst_iovs, uint32_t dst_iovcnt,
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
-			  uint64_t iv, uint32_t block_size, int flags,
+			  uint64_t iv, uint32_t block_size,
 			  spdk_accel_completion_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -890,7 +863,6 @@ spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_k
 	accel_task->op_code = SPDK_ACCEL_OPC_DECRYPT;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
-	ACCEL_ASSIGN_FLAGS(accel_task, flags);
 
 	return accel_submit_task(accel_ch, accel_task);
 }
@@ -1103,7 +1075,7 @@ spdk_accel_append_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel
 		       struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 		       struct iovec *src_iovs, uint32_t src_iovcnt,
 		       struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-		       int flags, spdk_accel_step_cb cb_fn, void *cb_arg)
+		       spdk_accel_step_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *task;
@@ -1136,7 +1108,6 @@ spdk_accel_append_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel
 	task->s.iovcnt = src_iovcnt;
 	task->nbytes = accel_get_iovlen(src_iovs, src_iovcnt);
 	task->op_code = SPDK_ACCEL_OPC_COPY;
-	ACCEL_ASSIGN_FLAGS(task, flags);
 
 	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
 	*pseq = seq;
@@ -1148,7 +1119,7 @@ int
 spdk_accel_append_fill(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
 		       void *buf, uint64_t len,
 		       struct spdk_memory_domain *domain, void *domain_ctx, uint8_t pattern,
-		       int flags, spdk_accel_step_cb cb_fn, void *cb_arg)
+		       spdk_accel_step_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *task;
@@ -1196,7 +1167,6 @@ spdk_accel_append_fill(struct spdk_accel_sequence **pseq, struct spdk_io_channel
 	task->dst_domain = domain;
 	task->dst_domain_ctx = domain_ctx;
 	task->op_code = SPDK_ACCEL_OPC_FILL;
-	ACCEL_ASSIGN_FLAGS(task, flags);
 
 	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
 	*pseq = seq;
@@ -1210,7 +1180,7 @@ spdk_accel_append_decompress(struct spdk_accel_sequence **pseq, struct spdk_io_c
 			     struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			     struct iovec *src_iovs, size_t src_iovcnt,
 			     struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			     int flags, spdk_accel_step_cb cb_fn, void *cb_arg)
+			     spdk_accel_step_cb cb_fn, void *cb_arg)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *task;
@@ -1245,7 +1215,6 @@ spdk_accel_append_decompress(struct spdk_accel_sequence **pseq, struct spdk_io_c
 	task->s.iovcnt = src_iovcnt;
 	task->nbytes = accel_get_iovlen(src_iovs, src_iovcnt);
 	task->op_code = SPDK_ACCEL_OPC_DECOMPRESS;
-	ACCEL_ASSIGN_FLAGS(task, flags);
 
 	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
 	*pseq = seq;
@@ -1260,7 +1229,7 @@ spdk_accel_append_encrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 			  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
 			  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			  uint64_t iv, uint32_t block_size, int flags,
+			  uint64_t iv, uint32_t block_size,
 			  spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -1300,7 +1269,6 @@ spdk_accel_append_encrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 	task->iv = iv;
 	task->block_size = block_size;
 	task->op_code = SPDK_ACCEL_OPC_ENCRYPT;
-	ACCEL_ASSIGN_FLAGS(task, flags);
 
 	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
 	*pseq = seq;
@@ -1315,7 +1283,7 @@ spdk_accel_append_decrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 			  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
 			  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			  uint64_t iv, uint32_t block_size, int flags,
+			  uint64_t iv, uint32_t block_size,
 			  spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
@@ -1355,7 +1323,6 @@ spdk_accel_append_decrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 	task->iv = iv;
 	task->block_size = block_size;
 	task->op_code = SPDK_ACCEL_OPC_DECRYPT;
-	ACCEL_ASSIGN_FLAGS(task, flags);
 
 	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
 	*pseq = seq;

@@ -126,14 +126,13 @@ struct spdk_accel_crypto_key *spdk_accel_crypto_key_get(const char *name);
  * \param dst Destination to copy to.
  * \param src Source to copy from.
  * \param nbytes Length in bytes to copy.
- * \param flags Accel framework flags for operations.
  * \param cb_fn Called when this copy operation completes.
  * \param cb_arg Callback argument.
  *
  * \return 0 on success, negative errno on failure.
  */
 int spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src, uint64_t nbytes,
-			   int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+			   spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Submit a dual cast copy request.
@@ -143,14 +142,13 @@ int spdk_accel_submit_copy(struct spdk_io_channel *ch, void *dst, void *src, uin
  * \param dst2 Second destination to copy to (must be 4K aligned).
  * \param src Source to copy from.
  * \param nbytes Length in bytes to copy.
- * \param flags Accel framework flags for operations.
  * \param cb_fn Called when this copy operation completes.
  * \param cb_arg Callback argument.
  *
  * \return 0 on success, negative errno on failure.
  */
 int spdk_accel_submit_dualcast(struct spdk_io_channel *ch, void *dst1, void *dst2, void *src,
-			       uint64_t nbytes, int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+			       uint64_t nbytes, spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Submit a compare request.
@@ -176,14 +174,13 @@ int spdk_accel_submit_compare(struct spdk_io_channel *ch, void *src1, void *src2
  * \param dst Destination to fill.
  * \param fill Constant byte to fill to the destination.
  * \param nbytes Length in bytes to fill.
- * \param flags Accel framework flags for operations.
  * \param cb_fn Called when this fill operation completes.
  * \param cb_arg Callback argument.
  *
  * \return 0 on success, negative errno on failure.
  */
 int spdk_accel_submit_fill(struct spdk_io_channel *ch, void *dst, uint8_t fill, uint64_t nbytes,
-			   int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+			   spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Submit a CRC-32C calculation request.
@@ -233,14 +230,13 @@ int spdk_accel_submit_crc32cv(struct spdk_io_channel *ch, uint32_t *crc_dst, str
  * \param crc_dst Destination to write the CRC-32C to.
  * \param seed Four byte seed value.
  * \param nbytes Length in bytes.
- * \param flags Accel framework flags for operations.
  * \param cb_fn Called when this CRC-32C operation completes.
  * \param cb_arg Callback argument.
  *
  * \return 0 on success, negative errno on failure.
  */
 int spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst, void *src,
-				  uint32_t *crc_dst, uint32_t seed, uint64_t nbytes, int flags,
+				  uint32_t *crc_dst, uint32_t seed, uint64_t nbytes,
 				  spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
@@ -254,7 +250,6 @@ int spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst, void *s
  * \param iovcnt The size of the io vectors.
  * \param crc_dst Destination to write the CRC-32C to.
  * \param seed Four byte seed value.
- * \param flags Accel framework flags for operations.
  * \param cb_fn Called when this CRC-32C operation completes.
  * \param cb_arg Callback argument.
  *
@@ -262,7 +257,7 @@ int spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst, void *s
  */
 int spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst, struct iovec *src_iovs,
 				   uint32_t iovcnt, uint32_t *crc_dst, uint32_t seed,
-				   int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+				   spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Submit a CRC-32C checking request.
@@ -314,7 +309,6 @@ int spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc, s
  * \param src_iovs The io vector array which stores the src data and len.
  * \param src_iovcnt The size of the src io vectors.
  * \param output_size The size of the compressed data (may be NULL if not desired)
- * \param flags Flags, optional flags that can vary per operation.
  * \param cb_fn Callback function which will be called when the request is complete.
  * \param cb_arg Opaque value which will be passed back as the arg parameter in
  * the completion callback.
@@ -323,7 +317,7 @@ int spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc, s
  */
 int spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst,
 			       uint64_t nbytes, struct iovec *src_iovs,
-			       size_t src_iovcnt, uint32_t *output_size, int flags,
+			       size_t src_iovcnt, uint32_t *output_size,
 			       spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
@@ -337,7 +331,6 @@ int spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst,
  * \param src_iovs The io vector array which stores the src data and len.
  * \param src_iovcnt The size of the src io vectors.
  * \param output_size The size of the compressed data (may be NULL if not desired)
- * \param flags Flags, optional flags that can vary per operation.
  * \param cb_fn Callback function which will be called when the request is complete.
  * \param cb_arg Opaque value which will be passed back as the arg parameter in
  * the completion callback.
@@ -346,7 +339,7 @@ int spdk_accel_submit_compress(struct spdk_io_channel *ch, void *dst,
  */
 int spdk_accel_submit_decompress(struct spdk_io_channel *ch, struct iovec *dst_iovs,
 				 size_t dst_iovcnt, struct iovec *src_iovs,
-				 size_t src_iovcnt, uint32_t *output_size, int flags,
+				 size_t src_iovcnt, uint32_t *output_size,
 				 spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
@@ -383,7 +376,6 @@ int spdk_accel_submit_xor(struct spdk_io_channel *ch, void *dst, void **sources,
  * \param iv Initialization vector (tweak) used for encryption
  * \param block_size Logical block size, if src contains more than 1 logical block, subsequent
  *        logical blocks will be encrypted with incremented \b iv
- * \param flags Accel framework flags for operations.
  * \param cb_fn Callback function which will be called when the request is complete.
  * \param cb_arg Opaque value which will be passed back as the arg parameter in the completion
  *        callback.
@@ -393,7 +385,7 @@ int spdk_accel_submit_xor(struct spdk_io_channel *ch, void *dst, void **sources,
 int spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_key *key,
 			      struct iovec *dst_iovs, uint32_t dst_iovcnt,
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
-			      uint64_t iv, uint32_t block_size, int flags,
+			      uint64_t iv, uint32_t block_size,
 			      spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
@@ -415,7 +407,6 @@ int spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_cryp
  *        encryption of a data block
  * \param block_size Logical block size, if src contains more than 1 logical block, subsequent
  *        logical blocks will be decrypted with incremented \b iv
- * \param flags Accel framework flags for operations.
  * \param cb_fn Callback function which will be called when the request is complete.
  * \param cb_arg Opaque value which will be passed back as the arg parameter in the completion
  *        callback.
@@ -425,7 +416,7 @@ int spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_cryp
 int spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_key *key,
 			      struct iovec *dst_iovs, uint32_t dst_iovcnt,
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
-			      uint64_t iv, uint32_t block_size, int flags,
+			      uint64_t iv, uint32_t block_size,
 			      spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
@@ -530,7 +521,6 @@ typedef void (*spdk_accel_step_cb)(void *cb_arg);
  * \param src_iovcnt Size of the `src_iovs` array.
  * \param src_domain Memory domain to which the source buffers belong.
  * \param src_domain_ctx Source buffer domain context.
- * \param flags Accel operation flags.
  * \param cb_fn Callback to be executed once this operation is completed.
  * \param cb_arg Argument to be passed to `cb_fn`.
  *
@@ -541,7 +531,7 @@ int spdk_accel_append_copy(struct spdk_accel_sequence **seq, struct spdk_io_chan
 			   struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			   struct iovec *src_iovs, uint32_t src_iovcnt,
 			   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			   int flags, spdk_accel_step_cb cb_fn, void *cb_arg);
+			   spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Append a fill operation to a sequence.
@@ -553,7 +543,6 @@ int spdk_accel_append_copy(struct spdk_accel_sequence **seq, struct spdk_io_chan
  * \param domain Memory domain to which the data buffer belongs.
  * \param domain_ctx Buffer domain context.
  * \param pattern Pattern to fill the buffer with.
- * \param flags Accel operation flags.
  * \param cb_fn Callback to be executed once this operation is completed.
  * \param cb_arg Argument to be passed to `cb_fn`.
  *
@@ -562,7 +551,7 @@ int spdk_accel_append_copy(struct spdk_accel_sequence **seq, struct spdk_io_chan
 int spdk_accel_append_fill(struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
 			   void *buf, uint64_t len,
 			   struct spdk_memory_domain *domain, void *domain_ctx, uint8_t pattern,
-			   int flags, spdk_accel_step_cb cb_fn, void *cb_arg);
+			   spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Append a decompress operation to a sequence.
@@ -577,7 +566,6 @@ int spdk_accel_append_fill(struct spdk_accel_sequence **seq, struct spdk_io_chan
  * \param src_iovcnt Size of the `src_iovs` array.
  * \param src_domain Memory domain to which the source buffers belong.
  * \param src_domain_ctx Source buffer domain context.
- * \param flags Accel operation flags.
  * \param cb_fn Callback to be executed once this operation is completed.
  * \param cb_arg Argument to be passed to `cb_fn`.
  *
@@ -588,7 +576,7 @@ int spdk_accel_append_decompress(struct spdk_accel_sequence **seq, struct spdk_i
 				 struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 				 struct iovec *src_iovs, size_t src_iovcnt,
 				 struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-				 int flags, spdk_accel_step_cb cb_fn, void *cb_arg);
+				 spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Append an encrypt operation to a sequence.
@@ -612,7 +600,6 @@ int spdk_accel_append_decompress(struct spdk_accel_sequence **seq, struct spdk_i
  * \param iv Initialization vector (tweak) used for encryption
  * \param block_size Logical block size, if src contains more than 1 logical block, subsequent
  *        logical blocks will be encrypted with incremented `iv`.
- * \param flags Accel operation flags.
  * \param cb_fn Callback to be executed once this operation is completed.
  * \param cb_arg Argument to be passed to `cb_fn`.
  *
@@ -624,7 +611,7 @@ int spdk_accel_append_encrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			      uint64_t iv, uint32_t block_size, int flags,
+			      uint64_t iv, uint32_t block_size,
 			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
 
 /**
@@ -650,7 +637,6 @@ int spdk_accel_append_encrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
  *        encryption of a data block.
  * \param block_size Logical block size, if src contains more than 1 logical block, subsequent
  *        logical blocks will be decrypted with incremented `iv`.
- * \param flags Accel operation flags.
  * \param cb_fn Callback to be executed once this operation is completed.
  * \param cb_arg Argument to be passed to `cb_fn`.
  *
@@ -662,7 +648,7 @@ int spdk_accel_append_decrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-			      uint64_t iv, uint32_t block_size, int flags,
+			      uint64_t iv, uint32_t block_size,
 			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
 
 /**
