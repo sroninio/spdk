@@ -2092,7 +2092,7 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 }
 
 static void
-fsdev_free_leafs(struct spdk_fsdev_file_object *fobject)
+fsdev_free_leafs(struct spdk_fsdev_file_object *fobject, bool unref_fobject)
 {
 	while (!TAILQ_EMPTY(&fobject->handles)) {
 		struct spdk_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
@@ -2114,10 +2114,11 @@ fsdev_free_leafs(struct spdk_fsdev_file_object *fobject)
 
 	while (!TAILQ_EMPTY(&fobject->leafs)) {
 		struct spdk_fsdev_file_object *leaf_fobject = TAILQ_FIRST(&fobject->leafs);
-		fsdev_free_leafs(leaf_fobject);
+		/* We free (unref) the fobject's leafs in any case as the unref_fobject is only related to the fobject */
+		fsdev_free_leafs(leaf_fobject, true);
 	}
 
-	if (fobject->refcount) {
+	if (fobject->refcount && unref_fobject) {
 		/* if still referenced - zero refcount */
 		int res = file_object_unref(fobject, fobject->refcount);
 		assert(res == 0);
@@ -2132,7 +2133,7 @@ fsdev_aio_destruct(void *ctx)
 
 	TAILQ_REMOVE(&g_aio_fsdev_head, vfsdev, tailq);
 
-	fsdev_free_leafs(vfsdev->root);
+	fsdev_free_leafs(vfsdev->root, true);
 	vfsdev->root = NULL;
 
 	pthread_mutex_destroy(&vfsdev->mutex);
@@ -2245,6 +2246,8 @@ struct fsdev_aio_reset_ctx {
 static void
 fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
 {
+	fsdev_free_leafs(ctx->vfsdev->root, false);
+
 	ctx->cb(ctx->cb_arg, status);
 
 	spdk_poller_unregister(&ctx->poller);
