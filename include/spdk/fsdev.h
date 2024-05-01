@@ -1269,9 +1269,11 @@ int spdk_fsdev_op_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
  * \param ch I/O channel.
  * \param name Name of the entry
- * \param fobject File object.
+ * \param fobject File object. NULL for "." and "..".
  * \param attr File attributes.
  * \param offset Offset of the next entry
+ *
+ * \return 0 to continue the enumeration, an error code otherwice.
  */
 typedef int (spdk_fsdev_op_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
