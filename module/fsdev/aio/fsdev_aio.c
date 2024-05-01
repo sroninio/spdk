@@ -662,6 +662,14 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			goto skip_entry;
 		}
 
+		if (is_dot_or_dotdot(name)) {
+			fsdev_io->u_out.readdir.fobject = NULL;
+			memset(&fsdev_io->u_out.readdir.attr, 0, sizeof(fsdev_io->u_out.readdir.attr));
+			fsdev_io->u_out.readdir.attr.ino = fhandle->dir.entry->d_ino;
+			fsdev_io->u_out.readdir.attr.mode = DT_DIR << 12;
+			goto skip_lookup;
+		}
+
 		res = lo_do_lookup(vfsdev, fobject, name, &fsdev_io->u_out.readdir.fobject,
 				   &fsdev_io->u_out.readdir.attr);
 		if (res) {
@@ -669,12 +677,15 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			return res;
 		}
 
+skip_lookup:
 		fsdev_io->u_out.readdir.name = name;
 		fsdev_io->u_out.readdir.offset = nextoff;
 
 		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
 		if (res) {
-			file_object_unref(fsdev_io->u_out.readdir.fobject, 1);
+			if (fsdev_io->u_out.readdir.fobject) {
+				file_object_unref(fsdev_io->u_out.readdir.fobject, 1);
+			}
 			break;
 		}
 
