@@ -389,6 +389,7 @@ struct spdk_fsdev_file_object;
 struct spdk_fsdev_file_handle;
 
 struct spdk_fsdev_file_attr {
+	uint64_t ino;
 	uint64_t size;
 	uint64_t blocks;
 	uint64_t atime;

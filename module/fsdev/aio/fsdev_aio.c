@@ -318,6 +318,7 @@ file_object_fill_attr(struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_
 
 	memset(attr, 0, sizeof(*attr));
 
+	attr->ino = stbuf.st_ino;
 	attr->size = stbuf.st_size;
 	attr->blocks = stbuf.st_blocks;
 	attr->atime = stbuf.st_atime;
