@@ -1373,7 +1373,6 @@ if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then
 	fi
 fi
 
-
 # For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
 if [[ "${CONFIG[DEBUG]}" = "y" && $arch = aarch64* && "$CC_TYPE" = "gcc" ]]; then
 	GCC_VERSION=$($CC -dumpfullversion)
