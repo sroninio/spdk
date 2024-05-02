@@ -88,7 +88,7 @@ DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
-DEPDIRS-fsdev := log util
+DEPDIRS-fsdev := log thread util $(JSON_LIBS) notify
 
 # ------------------------------------------------------------------------
 # Start module/ directory - This section extends the organizational pattern from
@@ -99,7 +99,8 @@ DEPDIRS-fsdev := log util
 BDEV_DEPS = log util $(JSON_LIBS) bdev
 BDEV_DEPS_THREAD = $(BDEV_DEPS) thread
 
-FSDEV_DEPS = log util fsdev
+FSDEV_DEPS = log util $(JSON_LIBS) fsdev
+FSDEV_DEPS_THREAD = $(FSDEV_DEPS) thread
 
 # module/blob
 DEPDIRS-blob_bdev := log thread bdev
@@ -169,7 +170,7 @@ DEPDIRS-bdev_zone_block := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_xnvme := $(BDEV_DEPS_THREAD)
 
 # module/fsdev
-DEPDIRS-fsdev_aio := $(FSDEV_DEPS)
+DEPDIRS-fsdev_aio := $(FSDEV_DEPS_THREAD)
 
 # module/event
 
