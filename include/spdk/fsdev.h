@@ -190,7 +190,7 @@ struct spdk_fsdev *spdk_fsdev_get_by_name(const char *fsdev_name);
  * \return 0 if operation is successful, suitable errno value otherwise
  */
 int spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
-		    void *event_ctx, struct spdk_fsdev_desc **_desc);
+		    void *event_ctx, struct spdk_fsdev_desc **desc);
 
 /**
  * Close a previously opened filesystem device.
@@ -862,7 +862,7 @@ int spdk_fsdev_op_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel 
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param size Size of an extended attribute list.
- * \param size_only true if buffer was NULL or size was 0 upon the @spdk_fsdev_op_listxattr call
+ * \param size_only true if buffer was NULL or size was 0 upon the \ref spdk_fsdev_op_listxattr call
  */
 typedef void (spdk_fsdev_op_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		size_t size, bool size_only);
@@ -875,7 +875,7 @@ typedef void (spdk_fsdev_op_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_chann
  * \param unique Unique I/O id.
  * \param fobject File object.
  * \param buffer Buffer to to be used for the attribute names.
- * \param size Size of the @buffer.
+ * \param size Size of the \b buffer.
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1112,7 +1112,7 @@ typedef void (spdk_fsdev_op_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  * \param offs Offset to read from.
  * \param flags Operation flags.
  * \param iov Array of iovec to be used for the data.
- * \param iovcnt Size of the @iov array.
+ * \param iovcnt Size of the \b iov array.
  * \param opts Optional structure with extended File Operation options. If set, this structure must be
  * valid until the operation is completed. `size` member of this structure is used for ABI compatibility and
  * must be set to sizeof(struct spdk_fsdev_ext_op_opts).
@@ -1153,7 +1153,7 @@ typedef void (spdk_fsdev_op_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * \param offs Offset to read from.
  * \param flags Operation flags.
  * \param iov Array of iovec to where the data is stored.
- * \param iovcnt Size of the @iov array.
+ * \param iovcnt Size of the \b iov array.
  * \param opts Optional structure with extended File Operation options. If set, this structure must be
  * valid until the operation is completed. `size` member of this structure is used for ABI compatibility and
  * must be set to sizeof(struct spdk_fsdev_ext_op_opts).
