@@ -318,6 +318,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_str(fsdev_io->u_in.lookup.name);
 		ut_call_record_param_ptr(fsdev_io->u_in.lookup.parent_fobject);
 		fsdev_io->u_out.lookup.fobject = &ut_fsdev_fobject;
+		fsdev_io->u_out.lookup.attr = ut_fsdev_attr;
 		break;
 	case SPDK_FSDEV_OP_FORGET:
 		ut_call_record_param_ptr(fsdev_io->u_in.forget.fobject);
