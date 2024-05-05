@@ -11,9 +11,6 @@
 #include "spdk/thread.h"
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
-#include <sys/syscall.h>
-#include <sys/xattr.h>
-#include <sys/file.h>
 
 #define OP_STATUS_ASYNC INT_MIN
 
@@ -1413,7 +1410,7 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (flags) {
 #ifndef SYS_renameat2
 		SPDK_ERRLOG("flags are not supported\n");
-		return EPROTONSUPOPORT;
+		return ENOTSUP;
 #else
 		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
 			      new_name, flags);
@@ -1558,6 +1555,35 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+#ifndef SPDK_CONFIG_HAVE_XATTR
+static int
+lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
+	return ENOSYS;
+}
+
+static int
+lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
+	return ENOSYS;
+}
+
+static int
+lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
+	return ENOSYS;
+}
+
+static int
+lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
+	return ENOSYS;
+}
+#else
 static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -1778,6 +1804,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	return 0;
 }
+#endif /* SPDK_CONFIG_HAVE_XATTR */
 
 static int
 lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
@@ -2440,6 +2467,14 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		fsdev_aio_free(vfsdev);
 		return rc;
 	}
+
+#ifndef SPDK_CONFIG_HAVE_XATTR
+	if (xattr_enabled == SPDK_AIO_TRUE) {
+		SPDK_ERRLOG("Extended attributes are not supported\n");
+		fsdev_aio_free(vfsdev);
+		return rc;
+	}
+#endif
 
 	vfsdev->xattr_enabled = (xattr_enabled == SPDK_AIO_UNDEFINED) ?
 				DEFAULT_XATTR_ENABLED : !!xattr_enabled;

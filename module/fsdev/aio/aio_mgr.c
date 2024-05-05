@@ -189,7 +189,7 @@ spdk_aio_mgr_create(uint32_t max_aios)
 
 	mgr->reqs.arr = calloc(max_aios * REQS_PER_AIO, sizeof(mgr->reqs.arr[0]));
 	if (!mgr->reqs.arr) {
-		SPDK_ERRLOG("cannot alloc req pool of %" PRIu32 " * %zu\n", max_aios, REQS_PER_AIO);
+		SPDK_ERRLOG("cannot alloc req pool of %" PRIu32 " * %d\n", max_aios, REQS_PER_AIO);
 		free(mgr);
 		return NULL;
 	}

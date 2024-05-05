@@ -67,12 +67,15 @@ extern "C" {
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
+#include <sys/file.h>
 
 /* GNU extension */
 #include <getopt.h>
 
 /* Linux */
 #ifdef __linux__
+#include <sys/xattr.h>
 #include <sys/eventfd.h>
 #include <sched.h>
 #endif
