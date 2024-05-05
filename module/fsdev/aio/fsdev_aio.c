@@ -457,12 +457,17 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	file_handle_delete(fhandle);
 
+	/*
+	 * scan-build doesn't understand that we only print the value of an already
+	 * freed pointer and falsely reports "Use of memory after it is freed" here.
+	 */
+#ifndef __clang_analyzer__
 	SPDK_DEBUGLOG(fsdev_aio, "RELEASEDIR succeded for " FOBJECT_FMT " (fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
+#endif
 
 	return 0;
 }
-
 
 static int
 lo_do_lookup(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fobject,
@@ -1240,7 +1245,12 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_object *
 	if (S_ISDIR(mode)) {
 		res = mkdirat(parent_fobject->fd, name, mode);
 	} else if (S_ISLNK(mode)) {
-		res = symlinkat(link, parent_fobject->fd, name);
+		if (link) {
+			res = symlinkat(link, parent_fobject->fd, name);
+		} else {
+			SPDK_ERRLOG("NULL link pointer\n");
+			errno = EINVAL;
+		}
 	} else {
 		res = mknodat(parent_fobject->fd, name, mode, rdev);
 	}
@@ -1309,7 +1319,8 @@ static int
 lo_do_unlink(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fobject,
 	     const char *name, bool is_dir)
 {
-	struct spdk_fsdev_file_object *fobject;
+	/* fobject must be initialized to avoid a scan-build false positive */
+	struct spdk_fsdev_file_object *fobject = NULL;
 	int res;
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
@@ -1364,7 +1375,8 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, saverr;
-	struct spdk_fsdev_file_object *old_fobject;
+	/* old_fobject must be initialized to avoid a scan-build false positive */
+	struct spdk_fsdev_file_object *old_fobject = NULL;
 	struct spdk_fsdev_file_object *parent_fobject = fsdev_io->u_in.rename.parent_fobject;
 	char *name = fsdev_io->u_in.rename.name;
 	struct spdk_fsdev_file_object *new_parent_fobject = fsdev_io->u_in.rename.new_parent_fobject;
@@ -2065,6 +2077,19 @@ fsdev_free_leafs(struct spdk_fsdev_file_object *fobject)
 	while (!TAILQ_EMPTY(&fobject->handles)) {
 		struct spdk_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
 		file_handle_delete(fhandle);
+#ifdef __clang_analyzer__
+		/*
+		 * scan-build fails to comprehend that file_handle_delete() removes the fhandle
+		 * from the queue, so it thinks it's remained accessible and throws the "Use of
+		 * memory after it is freed" error here.
+		 * The loop below "teaches" the scan-build that the freed fhandle is not on the
+		 * list anymore and supresses the error in this way.
+		 */
+		struct spdk_fsdev_file_handle *tmp;
+		TAILQ_FOREACH(tmp, &fobject->handles, link) {
+			assert(tmp != fhandle);
+		}
+#endif
 	}
 
 	while (!TAILQ_EMPTY(&fobject->leafs)) {
