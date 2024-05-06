@@ -9,6 +9,7 @@
 #include "spdk/fsdev.h"
 #include "spdk/queue.h"
 #include "spdk/tree.h"
+#include "spdk/thread.h"
 #include "spdk/util.h"
 
 #ifdef __cplusplus
@@ -97,7 +98,7 @@ struct spdk_fsdev_fn_table {
 	/**
 	 * Negotiate fsdev device options.
 	 *
-	 * The function validates the desired options and adjust them to reflect it's own capabilities.
+	 * The function validates the desired options and adjust them to reflect it own capabilities.
 	 * The module can only reduce the requested cababilities.
 	 *
 	 * \return 0 on success or Fsdev specific negative error code.
@@ -176,8 +177,8 @@ struct spdk_fsdev {
 	 *  must not read or write to these fields.
 	 */
 	struct __fsdev_internal_fields {
-		/** Mutex protecting fsdev */
-		pthread_mutex_t mutex;
+		/** Lock protecting fsdev */
+		struct spdk_spinlock spinlock;
 
 		/** The fsdev status */
 		enum spdk_fsdev_status status;
@@ -357,7 +358,7 @@ struct spdk_fsdev_io {
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			char *name;
-			char *buffer;
+			void *buffer;
 			size_t size;
 		} getxattr;
 		struct {
@@ -649,7 +650,7 @@ spdk_fsdev_io_get_op(struct spdk_fsdev_io *fsdev_io) {
  * \return I/O unique id
  */
 static inline uint64_t
-spdk_fsdev_io_get_unuqie(struct spdk_fsdev_io *fsdev_io)
+spdk_fsdev_io_get_unique(struct spdk_fsdev_io *fsdev_io)
 {
 	return fsdev_io->internal.unique;
 }

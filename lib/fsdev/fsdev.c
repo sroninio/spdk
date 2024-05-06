@@ -46,7 +46,7 @@ struct spdk_fsdev_mgr {
 	bool init_complete;
 	bool module_init_complete;
 
-	pthread_mutex_t mutex;
+	struct spdk_spinlock spinlock;
 };
 
 static struct spdk_fsdev_mgr g_fsdev_mgr = {
@@ -55,8 +55,15 @@ static struct spdk_fsdev_mgr g_fsdev_mgr = {
 	.fsdev_names = RB_INITIALIZER(g_fsdev_mgr.fsdev_names),
 	.init_complete = false,
 	.module_init_complete = false,
-	.mutex = PTHREAD_MUTEX_INITIALIZER,
 };
+
+static void
+__attribute__((constructor))
+_fsdev_init(void)
+{
+	spdk_spin_init(&g_fsdev_mgr.spinlock);
+}
+
 
 static spdk_fsdev_init_cb	g_init_cb_fn = NULL;
 static void			*g_init_cb_arg = NULL;
@@ -138,7 +145,7 @@ struct spdk_fsdev_desc {
 		void *ctx;
 	}				callback;
 	bool				closed;
-	pthread_mutex_t			mutex;
+	struct spdk_spinlock		spinlock;
 	uint32_t			refs;
 	TAILQ_ENTRY(spdk_fsdev_desc)	link;
 };
@@ -167,18 +174,6 @@ fsdev_get_by_name(const char *fsdev_name)
 	}
 
 	return NULL;
-}
-
-struct spdk_fsdev *
-spdk_fsdev_get_by_name(const char *fsdev_name)
-{
-	struct spdk_fsdev *fsdev;
-
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
-	fsdev = fsdev_get_by_name(fsdev_name);
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
-
-	return fsdev;
 }
 
 static int
@@ -220,7 +215,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 		}
 	}
 
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 
 	TAILQ_FOREACH(fsdev, &g_fsdev_mgr.fsdevs, internal.link) {
 		if (fsdev->fn_table->write_config_json) {
@@ -228,7 +223,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 		}
 	}
 
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 	spdk_json_write_array_end(w);
 }
 
@@ -535,7 +530,7 @@ fsdev_channel_destroy_resource(struct spdk_fsdev_channel *ch)
 static void
 fsdev_desc_free(struct spdk_fsdev_desc *desc)
 {
-	pthread_mutex_destroy(&desc->mutex);
+	spdk_spin_destroy(&desc->spinlock);
 	free(desc);
 }
 
@@ -619,9 +614,9 @@ fsdev_name_add(struct spdk_fsdev_name *fsdev_name, struct spdk_fsdev *fsdev, con
 
 	fsdev_name->fsdev = fsdev;
 
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 	tmp = RB_INSERT(fsdev_name_tree, &g_fsdev_mgr.fsdev_names, fsdev_name);
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 	if (tmp != NULL) {
 		SPDK_ERRLOG("Fsdev name %s already exists\n", name);
 		free(fsdev_name->name);
@@ -1150,7 +1145,7 @@ fsdev_register(struct spdk_fsdev *fsdev)
 
 	free(fsdev_name);
 
-	pthread_mutex_init(&fsdev->internal.mutex, NULL);
+	spdk_spin_init(&fsdev->internal.spinlock);
 
 	SPDK_DEBUGLOG(fsdev, "Inserting fsdev %s into list\n", fsdev->name);
 	TAILQ_INSERT_TAIL(&g_fsdev_mgr.fsdevs, fsdev, internal.link);
@@ -1169,7 +1164,7 @@ fsdev_destroy_cb(void *io_device)
 	cb_fn = fsdev->internal.unregister_cb;
 	cb_arg = fsdev->internal.unregister_ctx;
 
-	pthread_mutex_destroy(&fsdev->internal.mutex);
+	spdk_spin_destroy(&fsdev->internal.spinlock);
 
 	rc = fsdev->fn_table->destruct(fsdev->ctxt);
 	if (rc < 0) {
@@ -1193,11 +1188,11 @@ _remove_notify(void *arg)
 {
 	struct spdk_fsdev_desc *desc = arg;
 
-	pthread_mutex_lock(&desc->mutex);
+	spdk_spin_lock(&desc->spinlock);
 	desc->refs--;
 
 	if (!desc->closed) {
-		pthread_mutex_unlock(&desc->mutex);
+		spdk_spin_unlock(&desc->spinlock);
 		desc->callback.event_fn(SPDK_FSDEV_EVENT_REMOVE, desc->fsdev, desc->callback.ctx);
 		return;
 	} else if (0 == desc->refs) {
@@ -1205,14 +1200,14 @@ _remove_notify(void *arg)
 		 * spdk_fsdev_close() could not free the descriptor since this message was
 		 * in flight, so we free it now using fsdev_desc_free().
 		 */
-		pthread_mutex_unlock(&desc->mutex);
+		spdk_spin_unlock(&desc->spinlock);
 		fsdev_desc_free(desc);
 		return;
 	}
-	pthread_mutex_unlock(&desc->mutex);
+	spdk_spin_unlock(&desc->spinlock);
 }
 
-/* Must be called while holding g_fsdev_mgr.mutex and fsdev->internal.mutex.
+/* Must be called while holding g_fsdev_mgr.mutex and fsdev->internal.spinlock.
  * returns: 0 - fsdev removed and ready to be destructed.
  *          -EBUSY - fsdev can't be destructed yet.  */
 static int
@@ -1224,7 +1219,7 @@ fsdev_unregister_unsafe(struct spdk_fsdev *fsdev)
 	/* Notify each descriptor about hotremoval */
 	TAILQ_FOREACH_SAFE(desc, &fsdev->internal.open_descs, link, tmp) {
 		rc = -EBUSY;
-		pthread_mutex_lock(&desc->mutex);
+		spdk_spin_lock(&desc->spinlock);
 		/*
 		 * Defer invocation of the event_cb to a separate message that will
 		 *  run later on its thread.  This ensures this context unwinds and
@@ -1233,7 +1228,7 @@ fsdev_unregister_unsafe(struct spdk_fsdev *fsdev)
 		 */
 		desc->refs++;
 		spdk_thread_send_msg(desc->thread, _remove_notify, desc);
-		pthread_mutex_unlock(&desc->mutex);
+		spdk_spin_unlock(&desc->spinlock);
 	}
 
 	/* If there are no descriptors, proceed removing the fsdev */
@@ -1252,8 +1247,8 @@ fsdev_unregister(struct spdk_fsdev *fsdev, void *_ctx, int status)
 {
 	int rc;
 
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
-	pthread_mutex_lock(&fsdev->internal.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
+	spdk_spin_lock(&fsdev->internal.spinlock);
 	/*
 	 * Set the status to REMOVING after completing to abort channels. Otherwise,
 	 * the last spdk_fsdev_close() may call spdk_io_device_unregister() while
@@ -1262,8 +1257,8 @@ fsdev_unregister(struct spdk_fsdev *fsdev, void *_ctx, int status)
 	 */
 	fsdev->internal.status = SPDK_FSDEV_STATUS_REMOVING;
 	rc = fsdev_unregister_unsafe(fsdev);
-	pthread_mutex_unlock(&fsdev->internal.mutex);
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 
 	if (rc == 0) {
 		spdk_io_device_unregister(__fsdev_to_io_dev(fsdev), fsdev_destroy_cb);
@@ -1286,22 +1281,22 @@ spdk_fsdev_unregister(struct spdk_fsdev *fsdev, spdk_fsdev_unregister_cb cb_fn, 
 		return;
 	}
 
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 	if (fsdev->internal.status == SPDK_FSDEV_STATUS_UNREGISTERING ||
 	    fsdev->internal.status == SPDK_FSDEV_STATUS_REMOVING) {
-		pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		if (cb_fn) {
 			cb_fn(cb_arg, -EBUSY);
 		}
 		return;
 	}
 
-	pthread_mutex_lock(&fsdev->internal.mutex);
+	spdk_spin_lock(&fsdev->internal.spinlock);
 	fsdev->internal.status = SPDK_FSDEV_STATUS_UNREGISTERING;
 	fsdev->internal.unregister_cb = cb_fn;
 	fsdev->internal.unregister_ctx = cb_arg;
-	pthread_mutex_unlock(&fsdev->internal.mutex);
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 
 	/* @todo: fsdev aborts IOs on all channels here. */
 	fsdev_unregister(fsdev, fsdev, 0);
@@ -1359,15 +1354,15 @@ fsdev_open(struct spdk_fsdev *fsdev, struct spdk_fsdev_desc *desc)
 	desc->fsdev = fsdev;
 	desc->thread = thread;
 
-	pthread_mutex_lock(&fsdev->internal.mutex);
+	spdk_spin_lock(&fsdev->internal.spinlock);
 	if (fsdev->internal.status == SPDK_FSDEV_STATUS_UNREGISTERING ||
 	    fsdev->internal.status == SPDK_FSDEV_STATUS_REMOVING) {
-		pthread_mutex_unlock(&fsdev->internal.mutex);
+		spdk_spin_unlock(&fsdev->internal.spinlock);
 		return -ENODEV;
 	}
 
 	TAILQ_INSERT_TAIL(&fsdev->internal.open_descs, desc, link);
-	pthread_mutex_unlock(&fsdev->internal.mutex);
+	spdk_spin_unlock(&fsdev->internal.spinlock);
 	return 0;
 }
 
@@ -1385,7 +1380,7 @@ fsdev_desc_alloc(struct spdk_fsdev *fsdev, spdk_fsdev_event_cb_t event_cb, void 
 
 	desc->callback.event_fn = event_cb;
 	desc->callback.ctx = event_ctx;
-	pthread_mutex_init(&desc->mutex, NULL);
+	spdk_spin_init(&desc->spinlock);
 	*_desc = desc;
 	return 0;
 }
@@ -1403,18 +1398,18 @@ spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
 		return -EINVAL;
 	}
 
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 
 	fsdev = fsdev_get_by_name(fsdev_name);
 	if (fsdev == NULL) {
 		SPDK_NOTICELOG("Currently unable to find fsdev with name: %s\n", fsdev_name);
-		pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		return -ENODEV;
 	}
 
 	rc = fsdev_desc_alloc(fsdev, event_cb, event_ctx, &desc);
 	if (rc != 0) {
-		pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		return rc;
 	}
 
@@ -1425,7 +1420,7 @@ spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
 	}
 
 	*_desc = desc;
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 	return rc;
 }
 
@@ -1434,28 +1429,28 @@ fsdev_close(struct spdk_fsdev *fsdev, struct spdk_fsdev_desc *desc)
 {
 	int rc;
 
-	pthread_mutex_lock(&fsdev->internal.mutex);
-	pthread_mutex_lock(&desc->mutex);
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	spdk_spin_lock(&desc->spinlock);
 
 	TAILQ_REMOVE(&fsdev->internal.open_descs, desc, link);
 	desc->closed = true;
 	if (0 == desc->refs) {
-		pthread_mutex_unlock(&desc->mutex);
+		spdk_spin_unlock(&desc->spinlock);
 		fsdev_desc_free(desc);
 	} else {
-		pthread_mutex_unlock(&desc->mutex);
+		spdk_spin_unlock(&desc->spinlock);
 	}
 
 	if (fsdev->internal.status == SPDK_FSDEV_STATUS_REMOVING &&
 	    TAILQ_EMPTY(&fsdev->internal.open_descs)) {
 		rc = fsdev_unregister_unsafe(fsdev);
-		pthread_mutex_unlock(&fsdev->internal.mutex);
+		spdk_spin_unlock(&fsdev->internal.spinlock);
 
 		if (rc == 0) {
 			spdk_io_device_unregister(__fsdev_to_io_dev(fsdev), fsdev_destroy_cb);
 		}
 	} else {
-		pthread_mutex_unlock(&fsdev->internal.mutex);
+		spdk_spin_unlock(&fsdev->internal.spinlock);
 	}
 }
 
@@ -1467,9 +1462,9 @@ spdk_fsdev_close(struct spdk_fsdev_desc *desc)
 	SPDK_DEBUGLOG(fsdev, "Closing descriptor %p for fsdev %s on thread %p\n",
 		      desc, fsdev->name, spdk_get_thread());
 	assert(desc->thread == spdk_get_thread());
-	pthread_mutex_lock(&g_fsdev_mgr.mutex);
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 	fsdev_close(fsdev, desc);
-	pthread_mutex_unlock(&g_fsdev_mgr.mutex);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 }
 
 int

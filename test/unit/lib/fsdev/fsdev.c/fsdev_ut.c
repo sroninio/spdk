@@ -297,7 +297,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 	enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
 	struct ut_fsdev *utfsdev = fsdev_to_ut_fsdev(fsdev_io->fsdev);
 	struct ut_io_channel *ch = spdk_io_channel_get_ctx(_ch);
-	uint64_t unique = spdk_fsdev_io_get_unuqie(fsdev_io);
+	uint64_t unique = spdk_fsdev_io_get_unique(fsdev_io);
 	int res, i = 0;
 
 	CU_ASSERT(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
@@ -758,21 +758,6 @@ ut_fsdev_test_open_close(void)
 	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
 
 	spdk_fsdev_close(fsdev_desc);
-
-	ut_fsdev_destroy(utfsdev);
-}
-
-static void
-ut_fsdev_test_get_by_name(void)
-{
-	struct ut_fsdev *utfsdev;
-	struct spdk_fsdev *fsdev;
-
-	utfsdev = ut_fsdev_create("utfsdev0");
-	CU_ASSERT(utfsdev != NULL);
-
-	fsdev = spdk_fsdev_get_by_name("utfsdev0");
-	CU_ASSERT(fsdev == &utfsdev->fsdev);
 
 	ut_fsdev_destroy(utfsdev);
 }
@@ -2174,7 +2159,6 @@ main(int argc, char **argv)
 	suite = CU_add_suite("fsdev", ut_fsdev_setup, ut_fsdev_teardown);
 
 	CU_ADD_TEST(suite, ut_fsdev_test_open_close);
-	CU_ADD_TEST(suite, ut_fsdev_test_get_by_name);
 	CU_ADD_TEST(suite, ut_fsdev_test_set_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_set_device_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_get_io_channel);

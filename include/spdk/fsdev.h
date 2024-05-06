@@ -168,15 +168,6 @@ void spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w);
 const char *spdk_fsdev_get_module_name(const struct spdk_fsdev *fsdev);
 
 /**
- * Get filesystem device by the filesystem device name.
- *
- * \param fsdev_name The name of the filesystem device.
- * \return Filesystem device associated with the name or NULL if no filesysten device with
- * fsdev_name is currently registered.
- */
-struct spdk_fsdev *spdk_fsdev_get_by_name(const char *fsdev_name);
-
-/**
  * Open a filesystem device for I/O operations.
  *
  * \param fsdev_name Filesystem device name to open.
@@ -381,9 +372,9 @@ bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
 #define FSDEV_SET_ATTR_SIZE	(1 << 3)
 #define FSDEV_SET_ATTR_ATIME	(1 << 4)
 #define FSDEV_SET_ATTR_MTIME	(1 << 5)
-#define FSDEV_SET_ATTR_ATIME_NOW	(1 << 7)
-#define FSDEV_SET_ATTR_MTIME_NOW	(1 << 8)
-#define FSDEV_SET_ATTR_CTIME	(1 << 10)
+#define FSDEV_SET_ATTR_ATIME_NOW	(1 << 6)
+#define FSDEV_SET_ATTR_MTIME_NOW	(1 << 7)
+#define FSDEV_SET_ATTR_CTIME	(1 << 8)
 
 struct spdk_fsdev_file_object;
 struct spdk_fsdev_file_handle;
@@ -454,8 +445,6 @@ int spdk_fsdev_op_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *c
 
 /**
  * Look up file operation completion callback
- *
- * NOTE: this operation doesn't have status.
  *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
  * \param ch I/O channel.
@@ -851,7 +840,7 @@ typedef void (spdk_fsdev_op_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channe
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
 int spdk_fsdev_op_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, char *buffer,
+			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, void *buffer,
 			   size_t size, spdk_fsdev_op_getxattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
@@ -1150,7 +1139,7 @@ typedef void (spdk_fsdev_op_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * \param fobject File object.
  * \param fhandle File handle.
  * \param size Number of bytes to write.
- * \param offs Offset to read from.
+ * \param offs Offset to write to.
  * \param flags Operation flags.
  * \param iov Array of iovec to where the data is stored.
  * \param iovcnt Size of the \b iov array.

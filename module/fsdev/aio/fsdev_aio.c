@@ -1648,7 +1648,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int fd = -1;
 	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.getxattr.fobject;
 	char *name = fsdev_io->u_in.getxattr.name;
-	char *buffer = fsdev_io->u_in.getxattr.buffer;
+	void *buffer = fsdev_io->u_in.getxattr.buffer;
 	size_t size = fsdev_io->u_in.getxattr.size;
 
 	if (!vfsdev->xattr_enabled) {
@@ -1692,7 +1692,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
-		      FOBJECT_ARGS(fobject), name, buffer, ret);
+		      FOBJECT_ARGS(fobject), name, (char*)buffer, ret);
 
 	return 0;
 }
@@ -1980,7 +1980,7 @@ lo_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
 		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
-		if (spdk_fsdev_io_get_unuqie(_fsdev_io) == unique_to_abort) {
+		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
 			return 0;
 		}
