@@ -2216,7 +2216,7 @@ fsdev_aio_get_io_channel(void *ctx)
 }
 
 static int
-fsdev_aio_negotiate_opts(void *ctx, struct spdk_fsdev_device_opts *opts)
+fsdev_aio_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
 {
 	struct aio_fsdev *vfsdev = ctx;
 
