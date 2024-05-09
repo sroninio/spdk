@@ -18,7 +18,7 @@
 #define SPDK_FSDEV_IO_POOL_SIZE (64 * 1024 - 1)
 #define SPDK_FSDEV_IO_CACHE_SIZE 256
 
-static struct spdk_fsdev_library_opts g_fsdev_opts = {
+static struct spdk_fsdev_opts g_fsdev_opts = {
 	.fsdev_io_pool_size = SPDK_FSDEV_IO_POOL_SIZE,
 	.fsdev_io_cache_size = SPDK_FSDEV_IO_CACHE_SIZE,
 };
@@ -640,7 +640,7 @@ spdk_fsdev_get_io_channel(struct spdk_fsdev_desc *desc)
 }
 
 int
-spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts)
+spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 {
 	uint32_t min_pool_size;
 
@@ -669,7 +669,7 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts)
 	}
 
 #define SET_FIELD(field) \
-        if (offsetof(struct spdk_fsdev_library_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
+        if (offsetof(struct spdk_fsdev_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
                 g_fsdev_opts.field = opts->field; \
         } \
 
@@ -684,7 +684,7 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts)
 }
 
 int
-spdk_fsdev_get_opts(struct spdk_fsdev_library_opts *opts, size_t opts_size)
+spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 {
 	if (!opts) {
 		SPDK_ERRLOG("opts should not be NULL\n");
@@ -699,7 +699,7 @@ spdk_fsdev_get_opts(struct spdk_fsdev_library_opts *opts, size_t opts_size)
 	opts->opts_size = opts_size;
 
 #define SET_FIELD(field) \
-	if (offsetof(struct spdk_fsdev_library_opts, field) + sizeof(opts->field) <= opts_size) { \
+	if (offsetof(struct spdk_fsdev_opts, field) + sizeof(opts->field) <= opts_size) { \
 		opts->field = g_fsdev_opts.field; \
 	}
 
@@ -708,22 +708,18 @@ spdk_fsdev_get_opts(struct spdk_fsdev_library_opts *opts, size_t opts_size)
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_library_opts) == 12, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 12, "Incorrect size");
 
 #undef SET_FIELD
 	return 0;
 }
 
-int
-spdk_fsdev_set_device_opts(struct spdk_fsdev *fsdev, const struct spdk_fsdev_device_opts *opts)
+static int
+fsdev_set_open_opts(struct spdk_fsdev *fsdev, struct spdk_fsdev_open_opts *opts)
 {
-	struct spdk_fsdev_device_opts module_opts;
 	int res;
 
-	if (!opts) {
-		SPDK_ERRLOG("opts should not be NULL\n");
-		return -EINVAL;
-	}
+	assert(opts);
 
 	if (!opts->opts_size) {
 		SPDK_ERRLOG("opts_size should not be zero value\n");
@@ -735,16 +731,15 @@ spdk_fsdev_set_device_opts(struct spdk_fsdev *fsdev, const struct spdk_fsdev_dev
 		return -ENOTSUP;
 	}
 
-	module_opts = *opts;
-	res = fsdev->fn_table->negotiate_opts(fsdev->ctxt, &module_opts);
+	res = fsdev->fn_table->negotiate_opts(fsdev->ctxt, opts);
 	if (res) {
 		SPDK_ERRLOG("negotiate_opts failed with %d for %s\n", res, spdk_fsdev_get_name(fsdev));
 		return res;
 	}
 
 #define SET_FIELD(field) \
-	if (offsetof(struct spdk_fsdev_device_opts, field) + sizeof(module_opts.field) <= module_opts.opts_size) { \
-		fsdev->opts.field = module_opts.field; \
+	if (offsetof(struct spdk_fsdev_open_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
+		fsdev->opts.field = opts->field; \
 	}
 
 	SET_FIELD(writeback_cache_enabled);
@@ -752,40 +747,9 @@ spdk_fsdev_set_device_opts(struct spdk_fsdev *fsdev, const struct spdk_fsdev_dev
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 		* and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_device_opts) == 9, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_open_opts) == 9, "Incorrect size");
 #undef SET_FIELD
 
-	return 0;
-}
-
-int
-spdk_fsdev_get_device_opts(const struct spdk_fsdev *fsdev, struct spdk_fsdev_device_opts *opts,
-			   size_t opts_size)
-{
-	if (!opts) {
-		SPDK_ERRLOG("opts shouldn't be NULL\n");
-		return -EINVAL;
-	}
-
-	if (!opts_size) {
-		SPDK_ERRLOG("opts_size should not be zero value\n");
-		return -EINVAL;
-	}
-
-	opts->opts_size = opts_size;
-
-#define SET_FIELD(field) \
-	if (offsetof(struct spdk_fsdev_device_opts, field) + sizeof(opts->field) <= opts_size) { \
-		opts->field = fsdev->opts.field; \
-	}
-
-	SET_FIELD(writeback_cache_enabled);
-	SET_FIELD(max_write);
-
-	/* Do not remove this statement, you should always update this statement when you adding a new field,
-	* and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_device_opts) == 9, "Incorrect size");
-#undef SET_FIELD
 	return 0;
 }
 
@@ -1316,7 +1280,7 @@ spdk_fsdev_unregister_by_name(const char *fsdev_name, struct spdk_fsdev_module *
 	struct spdk_fsdev *fsdev;
 	int rc;
 
-	rc = spdk_fsdev_open(fsdev_name, _tmp_fsdev_event_cb, NULL, &desc);
+	rc = spdk_fsdev_open(fsdev_name, _tmp_fsdev_event_cb, NULL, NULL, &desc);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to open fsdev with name: %s\n", fsdev_name);
 		return rc;
@@ -1387,7 +1351,7 @@ fsdev_desc_alloc(struct spdk_fsdev *fsdev, spdk_fsdev_event_cb_t event_cb, void 
 
 int
 spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
-		void *event_ctx, struct spdk_fsdev_desc **_desc)
+		void *event_ctx, struct spdk_fsdev_open_opts *opts, struct spdk_fsdev_desc **_desc)
 {
 	struct spdk_fsdev_desc *desc;
 	struct spdk_fsdev *fsdev;
@@ -1411,6 +1375,17 @@ spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
 	if (rc != 0) {
 		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		return rc;
+	}
+
+	if (opts) {
+		rc = fsdev_set_open_opts(fsdev, opts);
+		if (rc != 0) {
+			SPDK_NOTICELOG("%s: fsdev_set_open_opts failed with %d\n", fsdev_name, rc);
+			fsdev_desc_free(desc);
+			*_desc = NULL;
+			spdk_spin_unlock(&g_fsdev_mgr.spinlock);
+			return rc;
+		}
 	}
 
 	rc = fsdev_open(fsdev, desc);

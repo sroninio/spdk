@@ -12,7 +12,7 @@ static void
 rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
 {
 	struct spdk_json_write_ctx *w;
-	struct spdk_fsdev_library_opts opts = {};
+	struct spdk_fsdev_opts opts = {};
 	int rc;
 
 	if (params) {
@@ -55,7 +55,7 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 		.fsdev_io_cache_size = UINT32_MAX,
 	};
 	int rc;
-	struct spdk_fsdev_library_opts opts = {};
+	struct spdk_fsdev_opts opts = {};
 
 	if (spdk_json_decode_object(params, rpc_fsdev_set_opts_decoders,
 				    SPDK_COUNTOF(rpc_fsdev_set_opts_decoders),

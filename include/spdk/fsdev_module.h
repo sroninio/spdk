@@ -103,7 +103,7 @@ struct spdk_fsdev_fn_table {
 	 *
 	 * \return 0 on success or Fsdev specific negative error code.
 	 */
-	int (*negotiate_opts)(void *ctx, struct spdk_fsdev_device_opts *opts);
+	int (*negotiate_opts)(void *ctx, struct spdk_fsdev_open_opts *opts);
 
 	/**
 	 * Output fsdev-specific RPC configuration to a JSON stream. Optional - may be NULL.
@@ -171,7 +171,7 @@ struct spdk_fsdev {
 	const struct spdk_fsdev_fn_table *fn_table;
 
 	/** Negotiable device ops */
-	struct spdk_fsdev_device_opts opts;
+	struct spdk_fsdev_open_opts opts;
 
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.

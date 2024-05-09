@@ -18,8 +18,6 @@
 	spdk_fsdev_get_opts;
 	spdk_fsdev_set_instance_opts;
 	spdk_fsdev_get_instance_opts;
-	spdk_fsdev_get_device_opts;
-	spdk_fsdev_set_device_opts;
 	spdk_fsdev_get_memory_domains;
 	spdk_fsdev_for_each_channel;
 	spdk_fsdev_for_each_channel_continue;

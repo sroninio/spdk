@@ -53,9 +53,9 @@ enum spdk_fsdev_status {
 };
 
 /** fsdev library options */
-struct spdk_fsdev_library_opts {
+struct spdk_fsdev_opts {
 	/**
-	 * The size of spdk_fsdev_library_opts according to the caller of this library is used for ABI
+	 * The size of spdk_fsdev_opts according to the caller of this library is used for ABI
 	 * compatibility.  The library uses this field to know how many fields in this
 	 * structure are valid. And the library will populate any remaining fields with default values.
 	 * New added fields should be put at the end of the struct.
@@ -70,12 +70,12 @@ struct spdk_fsdev_library_opts {
 	 */
 	uint32_t fsdev_io_cache_size;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_library_opts) == 12, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 12, "Incorrect size");
 
 /** fsdev device options */
-struct spdk_fsdev_device_opts {
+struct spdk_fsdev_open_opts {
 	/**
-	 * The size of spdk_fsdev_device_opts according to the caller of this library is used for ABI
+	 * The size of spdk_fsdev_open_opts according to the caller of this library is used for ABI
 	 * compatibility.  The library uses this field to know how many fields in this
 	 * structure are valid. And the library will populate any remaining fields with default values.
 	 * New added fields should be put at the end of the struct.
@@ -83,21 +83,23 @@ struct spdk_fsdev_device_opts {
 	uint32_t opts_size;
 
 	/**
-	 * Maximum size of the write buffer
+	 * OUT Maximum size of the write buffer
 	 */
 	uint32_t max_write;
 
 	/**
-	 * Indicates that writeback caching should be enabled. This means that
-	 * individual write request may be buffered and merged in the kernel
-	 * before they are send to the filesystem.
+	 * IN/OUT Indicates whether the writeback caching should be enabled.
+	 *
+	 * See FUSE I/O ([1]) doc for more info.
+	 *
+	 * [1] https://www.kernel.org/doc/Documentation/filesystems/fuse-io.txt
 	 *
 	 * This feature is disabled by default.
 	 */
 	uint8_t writeback_cache_enabled;
 
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_device_opts) == 9, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_open_opts) == 9, "Incorrect size");
 
 /**
  * Structure with optional File Operation parameters
@@ -177,11 +179,12 @@ const char *spdk_fsdev_get_module_name(const struct spdk_fsdev *fsdev);
  * the descriptor will have to be manually closed to make the fsdev unregister
  * proceed.
  * \param event_ctx param for event_cb.
+ * \param opts optional open opts.
  * \param desc output parameter for the descriptor when operation is successful
  * \return 0 if operation is successful, suitable errno value otherwise
  */
 int spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
-		    void *event_ctx, struct spdk_fsdev_desc **desc);
+		    void *event_ctx, struct spdk_fsdev_open_opts *opts, struct spdk_fsdev_desc **desc);
 
 /**
  * Close a previously opened filesystem device.
@@ -228,7 +231,7 @@ struct spdk_io_channel *spdk_fsdev_get_io_channel(struct spdk_fsdev_desc *desc);
  * \return 0 on success.
  * \return -EINVAL if the options are invalid.
  */
-int spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts);
+int spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts);
 
 /**
  * Get the options for the fsdev library.
@@ -236,30 +239,7 @@ int spdk_fsdev_set_opts(const struct spdk_fsdev_library_opts *opts);
  * \param opts Output parameter for options.
  * \param opts_size sizeof(*opts)
  */
-int spdk_fsdev_get_opts(struct spdk_fsdev_library_opts *opts, size_t opts_size);
-
-/**
- * Set fsdev device options
- *
- * \param fsdev filesystem device to query.
- * \param opts options to set
- * \return 0 on success.
- * \return -EINVAL if the options are invalid.
- */
-int spdk_fsdev_set_device_opts(struct spdk_fsdev *fsdev,
-			       const struct spdk_fsdev_device_opts *opts);
-
-/**
- * Get fsdev device options
- *
- * \param fsdev filesystem device to query.
- * \param opts Output parameter for options.
- * \param opts_size sizeof(*opts)
- * \return 0 on success.
- * \return -EINVAL if the options are invalid.
- */
-int spdk_fsdev_get_device_opts(const struct spdk_fsdev *fsdev,
-			       struct spdk_fsdev_device_opts *opts, size_t opts_size);
+int spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size);
 
 /**
  * Get SPDK memory domains used by the given fsdev. If fsdev reports that it uses memory domains
