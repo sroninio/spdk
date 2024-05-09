@@ -278,6 +278,7 @@ ut_fsdev_destruct(void *ctx)
 	return 0;
 }
 
+static int ut_negotiate_opts_desired_err;
 static struct spdk_fsdev_file_attr ut_fsdev_attr;
 static struct spdk_fsdev_file_object ut_fsdev_fobject;
 static struct iovec ut_iov[5];
@@ -569,11 +570,19 @@ ut_fsdev_get_io_channel(void *ctx)
 }
 
 static int
-ut_fsdev_negotiate_opts(void *ctx, struct spdk_fsdev_device_opts *opts)
+ut_fsdev_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
 {
-	ut_call_record_simple_param_ptr(ut_fsdev_negotiate_opts, ctx);
+	ut_call_record_begin(ut_fsdev_negotiate_opts);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_ptr(opts);
+	ut_call_record_end();
 
-	return 0;
+	if (!ut_negotiate_opts_desired_err) {
+		opts->max_write = opts->max_write / 2;
+		opts->writeback_cache_enabled = !opts->writeback_cache_enabled;
+	}
+
+	return ut_negotiate_opts_desired_err;
 }
 
 static void
@@ -741,10 +750,11 @@ fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev,
 }
 
 static void
-ut_fsdev_test_open_close(void)
+ut_fsdev_test_open_close(bool with_opts, bool opts_negotiation_fails)
 {
 	struct ut_fsdev *utfsdev;
 	struct spdk_fsdev_desc *fsdev_desc;
+	struct spdk_fsdev_open_opts opts, *popts = NULL;
 	int rc;
 
 	utfsdev = ut_fsdev_create("utfsdev0");
@@ -753,21 +763,70 @@ ut_fsdev_test_open_close(void)
 	CU_ASSERT(!strcmp(spdk_fsdev_get_module_name(&utfsdev->fsdev), ut_fsdev_module.name));
 	CU_ASSERT(!strcmp(spdk_fsdev_get_name(&utfsdev->fsdev), "utfsdev0"));
 
-	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(fsdev_desc != NULL);
-	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+	if (with_opts) {
+		memset(&opts, 0, sizeof(opts));
+		opts.opts_size = sizeof(opts);
+		opts.max_write = UINT32_MAX;
+		opts.writeback_cache_enabled = true;
+		popts = &opts;
+		ut_negotiate_opts_desired_err = opts_negotiation_fails ? ENOSR : 0;
+	} else {
+		ut_negotiate_opts_desired_err = 0;
+	}
 
-	spdk_fsdev_close(fsdev_desc);
+	ut_calls_reset();
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, popts, &fsdev_desc);
+	if (!with_opts || !opts_negotiation_fails) {
+		CU_ASSERT(rc == 0);
+		CU_ASSERT(fsdev_desc != NULL);
+		CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+	} else {
+		CU_ASSERT(rc == ut_negotiate_opts_desired_err);
+		CU_ASSERT(fsdev_desc == NULL);
+	}
+
+	if (with_opts) {
+		CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_negotiate_opts);
+		CU_ASSERT(ut_calls_get_param_count(0) == 2);
+		CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+		CU_ASSERT(ut_calls_param_get_ptr(0, 1) == popts);
+
+		if (!opts_negotiation_fails) {
+			CU_ASSERT(opts.max_write == UINT32_MAX / 2);
+			CU_ASSERT(opts.writeback_cache_enabled == false);
+		}
+	}
+
+	if (fsdev_desc) {
+		spdk_fsdev_close(fsdev_desc);
+	}
 
 	ut_fsdev_destroy(utfsdev);
 }
 
 static void
+ut_fsdev_test_open_close_no_opts(void)
+{
+	ut_fsdev_test_open_close(false, false);
+}
+
+static void
+ut_fsdev_test_open_close_good_opts(void)
+{
+	ut_fsdev_test_open_close(true, false);
+}
+
+static void
+ut_fsdev_test_open_close_bad_opts(void)
+{
+	ut_fsdev_test_open_close(true, true);
+}
+
+static void
 ut_fsdev_test_set_opts(void)
 {
-	struct spdk_fsdev_library_opts old_opts;
-	struct spdk_fsdev_library_opts new_opts;
+	struct spdk_fsdev_opts old_opts;
+	struct spdk_fsdev_opts new_opts;
 	int rc;
 
 	rc = spdk_fsdev_set_opts(NULL);
@@ -794,47 +853,6 @@ ut_fsdev_test_set_opts(void)
 }
 
 static void
-ut_fsdev_test_set_device_opts(void)
-{
-	struct ut_fsdev *utfsdev;
-	struct spdk_fsdev_device_opts old_opts;
-	struct spdk_fsdev_device_opts new_opts;
-	int rc;
-
-	utfsdev = ut_fsdev_create("utfsdev0");
-	CU_ASSERT(utfsdev != NULL);
-
-	rc = spdk_fsdev_set_device_opts(&utfsdev->fsdev, NULL);
-	CU_ASSERT(rc == -EINVAL);
-
-	new_opts.opts_size = 0;
-	rc = spdk_fsdev_set_device_opts(&utfsdev->fsdev, &new_opts);
-	CU_ASSERT(rc == -EINVAL);
-
-	rc = spdk_fsdev_get_device_opts(&utfsdev->fsdev, &old_opts, sizeof(old_opts));
-	CU_ASSERT(rc == 0);
-
-	new_opts.opts_size = sizeof(new_opts);
-	new_opts.max_write = old_opts.max_write * 2;
-	new_opts.writeback_cache_enabled = !old_opts.writeback_cache_enabled;
-	ut_calls_reset();
-	rc = spdk_fsdev_set_device_opts(&utfsdev->fsdev, &new_opts);
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(ut_calls_get_call_count() == 1);
-
-	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_negotiate_opts);
-	CU_ASSERT(ut_calls_get_param_count(0) == 1);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
-
-	rc = spdk_fsdev_get_device_opts(&utfsdev->fsdev, &new_opts, sizeof(new_opts));
-	CU_ASSERT(rc == 0);
-	CU_ASSERT(old_opts.max_write * 2 == new_opts.max_write);
-	CU_ASSERT(old_opts.writeback_cache_enabled != new_opts.writeback_cache_enabled);
-
-	ut_fsdev_destroy(utfsdev);
-}
-
-static void
 ut_fsdev_test_get_io_channel(void)
 {
 	struct ut_fsdev *utfsdev;
@@ -846,7 +864,7 @@ ut_fsdev_test_get_io_channel(void)
 	utfsdev = ut_fsdev_create("utfsdev0");
 	CU_ASSERT(utfsdev != NULL);
 
-	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, NULL, &fsdev_desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(fsdev_desc != NULL);
 	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
@@ -919,7 +937,7 @@ ut_fsdev_test_for_each_channel(uint64_t desired_res)
 	utfsdev = ut_fsdev_create("utfsdev0");
 	CU_ASSERT(utfsdev != NULL);
 
-	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, NULL, &fsdev_desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(fsdev_desc != NULL);
 	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
@@ -1051,7 +1069,7 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 	utfsdev = ut_fsdev_create("utfsdev0");
 	CU_ASSERT(utfsdev != NULL);
 
-	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, NULL, &fsdev_desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(fsdev_desc != NULL);
 	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
@@ -1144,7 +1162,7 @@ ut_fsdev_test_op(enum spdk_fsdev_op op, int desired_io_status, size_t num_priv_p
 	utfsdev = ut_fsdev_create("utfsdev0");
 	CU_ASSERT(utfsdev != NULL);
 
-	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, NULL, &fsdev_desc);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(fsdev_desc != NULL);
 
@@ -2299,9 +2317,10 @@ fsdev_ut(int argc, char **argv)
 
 	suite = CU_add_suite("fsdev", ut_fsdev_setup, ut_fsdev_teardown);
 
-	CU_ADD_TEST(suite, ut_fsdev_test_open_close);
+	CU_ADD_TEST(suite, ut_fsdev_test_open_close_no_opts);
+	CU_ADD_TEST(suite, ut_fsdev_test_open_close_good_opts);
+	CU_ADD_TEST(suite, ut_fsdev_test_open_close_bad_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_set_opts);
-	CU_ADD_TEST(suite, ut_fsdev_test_set_device_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_get_io_channel);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
