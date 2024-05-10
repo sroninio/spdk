@@ -9188,7 +9188,9 @@ bdev_disable_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
 	bdev->internal.qos = NULL;
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
-	bdev_qos_destroy(qos);
+	if (qos != NULL) {
+		bdev_qos_destroy(qos);
+	}
 
 	bdev_set_qos_limit_done(ctx, 0);
 }
