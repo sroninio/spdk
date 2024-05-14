@@ -107,6 +107,13 @@ bdev_qos_limit_rw_queue_io(struct bdev_qos_limit_cache *cache,
 		cache->remaining += bdev_qos_limit_borrow_quota(limit, -cache->remaining);
 	}
 
+	if (cache->remaining < 0) {
+		/* This IO should be queued because overrun is already accounted
+		 * when borrowing slice of quota from the global pool.
+		 */
+		return true;
+	}
+
 	return false;
 }
 
@@ -495,7 +502,10 @@ bdev_qos_limit_borrow_quota(struct bdev_qos_limit *limit, uint32_t min_slice)
 
 	remaining_this_timeslice = __atomic_sub_fetch(&limit->remaining_this_timeslice,
 				   slice, __ATOMIC_RELAXED);
-	if (remaining_this_timeslice >= 0) {
+	if (remaining_this_timeslice + (int64_t)slice > 0) {
+		/* We allow a slight quota overrun here. Such overrun then taken into
+		 * account in the QoS poller, where the next timeslice quota is caculated.
+		 */
 		return slice;
 	}
 
