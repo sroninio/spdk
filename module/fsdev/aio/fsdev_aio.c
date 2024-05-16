@@ -771,7 +771,7 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, flags & ~O_NOFOLLOW);
 	if (fd == -1) {
 		saverr = errno;
-		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 "failed with err=%d)\n",
+		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
 			    vfsdev->proc_self_fd, fobject->fd_str, flags, saverr);
 		return saverr;
 	}
@@ -2452,7 +2452,14 @@ static int
 setup_proc_self_fd(struct aio_fsdev *vfsdev)
 {
 	vfsdev->proc_self_fd = open("/proc/self/fd", O_PATH);
-	return (vfsdev->proc_self_fd != -1) ? 0 : errno;
+	if (vfsdev->proc_self_fd == -1) {
+		int saverr =  errno;
+		SPDK_ERRLOG("Failed to open procfs fd dir with %d\n", saverr);
+		return saverr;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "procfs fd dir opened (fd=%d)\n", vfsdev->proc_self_fd);
+	return 0;
 }
 
 int
