@@ -718,6 +718,40 @@ lo_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+static uint32_t
+update_open_flags(struct aio_fsdev *vfsdev, uint32_t flags)
+{
+	/*
+	 * With writeback cache, kernel may send read requests even
+	 * when userspace opened write-only
+	 */
+	if (vfsdev->fsdev.opts.writeback_cache_enabled && (flags & O_ACCMODE) == O_WRONLY) {
+		flags &= ~O_ACCMODE;
+		flags |= O_RDWR;
+	}
+
+	/*
+	 * With writeback cache, O_APPEND is handled by the kernel.
+	 * This breaks atomicity (since the file may change in the
+	 * underlying filesystem, so that the kernel's idea of the
+	 * end of the file isn't accurate anymore). In this example,
+	 * we just accept that. A more rigorous filesystem may want
+	 * to return an error here
+	 */
+	if (vfsdev->fsdev.opts.writeback_cache_enabled && (flags & O_APPEND)) {
+		flags &= ~O_APPEND;
+	}
+
+	/*
+	 * O_DIRECT in guest should not necessarily mean bypassing page
+	 * cache on host as well. If somebody needs that behavior, it
+	 * probably should be a configuration knob in daemon.
+	 */
+	flags &= ~O_DIRECT;
+
+	return flags;
+}
+
 static int
 lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -732,22 +766,7 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return EINVAL;
 	}
 
-	/* With writeback cache, kernel may send read requests even
-	   when userspace opened write-only */
-	if (vfsdev->fsdev.opts.writeback_cache_enabled && (flags & O_ACCMODE) == O_WRONLY) {
-		flags &= ~O_ACCMODE;
-		flags |= O_RDWR;
-	}
-
-	/* With writeback cache, O_APPEND is handled by the kernel.
-	   This breaks atomicity (since the file may change in the
-	   underlying filesystem, so that the kernel's idea of the
-	   end of the file isn't accurate anymore). In this example,
-	   we just accept that. A more rigorous filesystem may want
-	   to return an error here */
-	if (vfsdev->fsdev.opts.writeback_cache_enabled && (flags & O_APPEND)) {
-		flags &= ~O_APPEND;
-	}
+	flags = update_open_flags(vfsdev, flags);
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, flags & ~O_NOFOLLOW);
 	if (fd == -1) {
@@ -958,11 +977,7 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return err;
 	}
 
-	/* Promote O_WRONLY to O_RDWR. Otherwise later mmap(PROT_WRITE) fails */
-	if ((flags & O_ACCMODE) == O_WRONLY) {
-		flags &= ~O_ACCMODE;
-		flags |= O_RDWR;
-	}
+	flags = update_open_flags(vfsdev, flags);
 
 	fd = openat(parent_fobject->fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, mode);
 	err = fd == -1 ? errno : 0;
@@ -1692,7 +1707,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
-		      FOBJECT_ARGS(fobject), name, (char*)buffer, ret);
+		      FOBJECT_ARGS(fobject), name, (char *)buffer, ret);
 
 	return 0;
 }
