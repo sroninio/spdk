@@ -4318,6 +4318,11 @@ bdev_qos_channel_destroy(void *cb_arg)
 	spdk_put_io_channel(qos->ch);
 	qos->ch = NULL;
 	spdk_poller_unregister(&qos->poller);
+
+	if (TAILQ_EMPTY(&qos->cache_list)) {
+		SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
+		free(qos);
+	}
 }
 
 static struct spdk_bdev_qos *
@@ -9216,7 +9221,14 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 
 	bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
 
-	bdev_ch_unthrottle_qos_queued_io(bdev_ch);
+	if (bdev_ch->qos_cache != NULL) {
+		spdk_spin_lock(&bdev->internal.spinlock);
+		bdev_qos_cache_destroy(bdev_ch->qos_cache);
+		spdk_spin_unlock(&bdev->internal.spinlock);
+		bdev_ch->qos_cache = NULL;
+	}
+
+        bdev_ch_unthrottle_qos_queued_io(bdev_ch);
 
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
