@@ -69,7 +69,10 @@ prepare_submit_request_test(struct spdk_nvme_qpair *qpair,
 static void
 cleanup_submit_request_test(struct spdk_nvme_qpair *qpair)
 {
-	free(qpair->req_buf);
+	spdk_free(qpair->req_buf);
+	qpair->req_buf = NULL;
+	spdk_free(qpair->reserved_req);
+	qpair->reserved_req = NULL;
 }
 
 static void
@@ -277,8 +280,8 @@ test_nvme_qpair_process_completions(void)
 	CU_ASSERT(g_called_transport_process_completions == true);
 	CU_ASSERT(ctrlr.is_failed == false);
 
-	free(qpair.req_buf);
-	free(admin_qp.req_buf);
+	cleanup_submit_request_test(&qpair);
+	cleanup_submit_request_test(&admin_qp);
 }
 
 static void
