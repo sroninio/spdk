@@ -9228,7 +9228,7 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 		bdev_ch->qos_cache = NULL;
 	}
 
-        bdev_ch_unthrottle_qos_queued_io(bdev_ch);
+	bdev_ch_unthrottle_qos_queued_io(bdev_ch);
 
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
