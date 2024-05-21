@@ -3165,7 +3165,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                         siglast=args.siglast,
                                         merge=args.merge,
                                         qp_per_domain=args.qp_per_domain,
-                                        enable_driver=args.enable_driver)
+                                        enable_driver=args.enable_driver,
+                                        enable_module=args.enable_module)
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
@@ -3183,6 +3184,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    help="Use single QP per channel")
     p.add_argument('-e', '--enable-driver', dest='enable_driver', action='store_true', default=None,
                    help="Enable accel mlx5 platform driver")
+    p.add_argument('--disable-module', dest='enable_module', action='store_false', default=None,
+                   help="Disable accel mlx5 module")
     p.set_defaults(func=mlx5_scan_accel_module)
 
     def accel_mlx5_dump_stats(args):

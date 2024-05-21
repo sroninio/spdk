@@ -3904,6 +3904,7 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->siglast = false;
 	attr->enable_driver = false;
 	attr->qp_per_domain = true;
+	attr->enable_module = true;
 }
 
 static void
@@ -4002,7 +4003,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		}
 	}
 
-	g_accel_mlx5.enabled = true;
+	g_accel_mlx5.enabled = attr ? attr->enable_module : true;
 
 	return 0;
 }
@@ -4352,7 +4353,7 @@ accel_mlx5_init(void)
 	bool supports_crypto;
 
 	if (!g_accel_mlx5.enabled) {
-		return -EINVAL;
+		return -ENODEV;
 	}
 
 	spdk_spin_init(&g_accel_mlx5.lock);

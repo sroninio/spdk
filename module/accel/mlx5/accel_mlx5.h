@@ -21,6 +21,8 @@ struct accel_mlx5_attr {
 	bool siglast;
 	bool qp_per_domain;
 	bool enable_driver;
+	/* Enable accel_mlx5 module */
+	bool enable_module;
 };
 
 enum accel_mlx5_dump_state_level {
