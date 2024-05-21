@@ -4743,6 +4743,10 @@ accel_mlx5_dump_stats(struct spdk_json_write_ctx *w, enum accel_mlx5_dump_state_
 		return -EINVAL;
 	}
 
+	if (!g_accel_mlx5.initialized) {
+		return -ENODEV;
+	}
+
 	stat_ctx = calloc(1, sizeof(*stat_ctx));
 	if (!stat_ctx) {
 		return -ENOMEM;

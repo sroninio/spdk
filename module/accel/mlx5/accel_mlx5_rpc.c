@@ -119,9 +119,9 @@ rpc_accel_mlx5_dump_stats(struct spdk_jsonrpc_request *request,
 	ctx->w = spdk_jsonrpc_begin_result(ctx->request);
 	rc = accel_mlx5_dump_stats(ctx->w, level, accel_mlx5_dump_stats_done, ctx);
 	if (rc) {
+		spdk_json_write_null(ctx->w);
+		spdk_jsonrpc_end_result(ctx->request, ctx->w);
 		free(ctx);
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
-						 "failed to start dumping stats");
 	}
 }
 SPDK_RPC_REGISTER("accel_mlx5_dump_stats", rpc_accel_mlx5_dump_stats, SPDK_RPC_RUNTIME)
