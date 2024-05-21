@@ -39,7 +39,7 @@ int spdk_rpc_listen(const char *listen_addr);
 /**
  * Poll the RPC server.
  */
-void spdk_rpc_accept(void);
+int spdk_rpc_accept(void);
 
 /**
  * Stop listening for RPC connections.

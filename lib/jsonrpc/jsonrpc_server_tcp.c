@@ -280,7 +280,7 @@ jsonrpc_server_handle_error(struct spdk_jsonrpc_request *request, int error)
 	spdk_jsonrpc_send_error_response(request, error, msg);
 }
 
-static int
+static ssize_t
 jsonrpc_server_conn_recv(struct spdk_jsonrpc_server_conn *conn)
 {
 	ssize_t rc, offset;
@@ -324,7 +324,7 @@ jsonrpc_server_conn_recv(struct spdk_jsonrpc_server_conn *conn)
 		conn->recv_len -= offset;
 	}
 
-	return 0;
+	return offset;
 }
 
 void
@@ -351,7 +351,7 @@ jsonrpc_server_send_response(struct spdk_jsonrpc_request *request)
 }
 
 
-static int
+static ssize_t
 jsonrpc_server_conn_send(struct spdk_jsonrpc_server_conn *conn)
 {
 	struct spdk_jsonrpc_request *request;
@@ -403,13 +403,14 @@ more:
 		goto more;
 	}
 
-	return 0;
+	return rc;
 }
 
 int
 spdk_jsonrpc_server_poll(struct spdk_jsonrpc_server *server)
 {
-	int rc;
+	ssize_t rc;
+	int busy;
 	struct spdk_jsonrpc_server_conn *conn, *conn_tmp;
 
 	TAILQ_FOREACH_SAFE(conn, &server->conns, link, conn_tmp) {
@@ -428,24 +429,29 @@ spdk_jsonrpc_server_poll(struct spdk_jsonrpc_server *server)
 		jsonrpc_server_accept(server);
 	}
 
+	busy = 0;
 	TAILQ_FOREACH(conn, &server->conns, link) {
 		if (conn->sockfd == -1) {
 			continue;
 		}
 
 		rc = jsonrpc_server_conn_send(conn);
-		if (rc != 0) {
+		if (rc < 0) {
 			jsonrpc_server_conn_close(conn);
 			continue;
+		} else if (rc > 0) {
+			busy = 1;
 		}
 
 		if (!conn->closed) {
 			rc = jsonrpc_server_conn_recv(conn);
-			if (rc != 0) {
+			if (rc < 0) {
 				jsonrpc_server_conn_close(conn);
+			} else if (rc > 0) {
+				busy = 1;
 			}
 		}
 	}
 
-	return 0;
+	return busy;
 }

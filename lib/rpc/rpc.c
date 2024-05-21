@@ -207,10 +207,10 @@ spdk_rpc_listen(const char *listen_addr)
 	return 0;
 }
 
-void
+int
 spdk_rpc_accept(void)
 {
-	spdk_jsonrpc_server_poll(g_jsonrpc_server);
+	return spdk_jsonrpc_server_poll(g_jsonrpc_server);
 }
 
 void
