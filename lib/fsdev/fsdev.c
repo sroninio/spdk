@@ -912,7 +912,7 @@ fsdev_reset_finalize(struct fsdev_reset_ctx *ctx)
 	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(ctx->desc);
 
 	spdk_for_each_channel(__fsdev_to_io_dev(fsdev), fsdev_reset_unfreeze_channel_msg_cb, ctx,
-				fsdev_reset_unfreeze_channel_cpl_cb);
+			      fsdev_reset_unfreeze_channel_cpl_cb);
 }
 
 static void
