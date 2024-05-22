@@ -21,6 +21,8 @@ def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None
         qp_per_domain: use dedicated qpair per memory domain per channel (optional)
         enable_driver: enable accel mlx5 platform driver (optional)
         enable_module: enable accel mlx5 module (optional)
+        disable_signature: disable signature operations support (optional)
+        disable_crypto: disable crypto operations support (optional)
     """
     params = {}
 
@@ -45,6 +47,10 @@ def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None
         params['enable_driver'] = enable_driver
     if enable_module is not None:
         params['enable_module'] = enable_module
+    if disable_signature is not None:
+        params['disable_signature'] = disable_signature
+    if disable_crypto is not None:
+        params['disable_crypto'] = disable_crypto
     return client.call('mlx5_scan_accel_module', params)
 
 

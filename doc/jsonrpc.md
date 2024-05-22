@@ -2335,6 +2335,9 @@ allowed-devs            | Optional | string  | Comma separated list of allowed d
 siglast                 | Optional | boolean | Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB
 qp_per_domain           | Optional | boolean | Use dedicated qpair per memory domain per channel
 enable_driver           | Optional | boolean | Enable accel mlx5 platform driver
+enable_module           | Optional | boolean | Enable accel mlx5 module
+disable_signature       | Optional | boolean | Disable signature operations support
+disable_crypto          | Optional | boolean | Disable crypto operations support
 
 #### Example
 

@@ -108,6 +108,8 @@ struct accel_mlx5_module {
 	bool merge;
 	bool initialized;
 	bool enable_driver;
+	bool disable_signature;
+	bool disable_crypto;
 };
 
 struct accel_mlx5_klm {
@@ -3905,6 +3907,8 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->enable_driver = false;
 	attr->qp_per_domain = true;
 	attr->enable_module = true;
+	attr->disable_signature = false;
+	attr->disable_crypto = false;
 }
 
 static void
@@ -3982,6 +3986,8 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.siglast = attr->siglast;
 		g_accel_mlx5.qp_per_domain = attr->qp_per_domain;
 		g_accel_mlx5.enable_driver = attr->enable_driver;
+		g_accel_mlx5.disable_signature = attr->disable_signature;
+		g_accel_mlx5.disable_crypto = attr->disable_crypto;
 
 		if (attr->allowed_devs) {
 			int rc;
@@ -4432,6 +4438,9 @@ accel_mlx5_init(void)
 			       g_accel_mlx5.crc_supported);
 	}
 
+	g_accel_mlx5.crypto_supported &= !g_accel_mlx5.disable_crypto;
+	g_accel_mlx5.crc_supported &= !g_accel_mlx5.disable_signature;
+
 	g_accel_mlx5.devices = calloc(num_devs, sizeof(*g_accel_mlx5.devices));
 	if (!g_accel_mlx5.devices) {
 		SPDK_ERRLOG("Memory allocation failed\n");
@@ -4498,6 +4507,8 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		}
 		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.siglast);
 		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.qp_per_domain);
+		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.disable_signature);
+		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.disable_crypto);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);
 	}
@@ -4800,7 +4811,9 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 	.qp_size = ACCEL_MLX5_QP_SIZE,
 	.cq_size = ACCEL_MLX5_CQ_SIZE,
 	.num_requests = ACCEL_MLX5_NUM_MKEYS,
-	.split_mb_blocks = 0
+	.split_mb_blocks = 0,
+	.disable_signature = false,
+	.disable_crypto = false
 };
 
 static struct spdk_accel_driver g_accel_mlx5_driver = {

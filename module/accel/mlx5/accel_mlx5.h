@@ -23,6 +23,10 @@ struct accel_mlx5_attr {
 	bool enable_driver;
 	/* Enable accel_mlx5 module */
 	bool enable_module;
+	/* Disable signature capabilities */
+	bool disable_signature;
+	/* Disable crypto capabilities */
+	bool disable_crypto;
 };
 
 enum accel_mlx5_dump_state_level {
