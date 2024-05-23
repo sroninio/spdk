@@ -643,17 +643,22 @@ spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5
 
 	rc = mlx5_qp_init(pd, qp_attr, cq->verbs_cq, qp);
 	if (rc) {
-		free(qp);
-		return rc;
+		goto err_free_qp;
 	}
 	qp->cq = cq;
 	rc = mlx5_cq_add_qp(cq, qp);
 	if (rc) {
-		return rc;
+		goto err_destroy_qp;
 	}
 	*qp_out = qp;
 
 	return 0;
+
+err_destroy_qp:
+	mlx5_qp_destroy(qp);
+err_free_qp:
+	free(qp);
+	return rc;
 }
 
 void
