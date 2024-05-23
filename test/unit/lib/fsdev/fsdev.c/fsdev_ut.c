@@ -924,7 +924,7 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 
 	poll_thread(0);
 
-	ut_reset_desired_err = fail_module_reset ? ENOSR : 0;
+	ut_reset_desired_err = fail_module_reset ? EINVAL : 0;
 	ut_reset_leak_io = leak_io;
 
 	ut_calls_reset();
