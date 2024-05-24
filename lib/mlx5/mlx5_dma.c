@@ -129,7 +129,7 @@ mlx5_cqe_err(struct mlx5_cqe64 *cqe)
 		snprintf(info, sizeof(info), "Remote access");
 		break;
 	case MLX5_CQE_SYNDROME_REMOTE_OP_ERR:
-		snprintf(info, sizeof(info), "Remote QP");
+		snprintf(info, sizeof(info), "Remote OP");
 		break;
 	case MLX5_CQE_SYNDROME_TRANSPORT_RETRY_EXC_ERR:
 		snprintf(info, sizeof(info), "Transport retry count exceeded");
