@@ -471,6 +471,11 @@ struct spdk_bdev {
 	 */
 	bool split_on_write_unit;
 
+	/**
+	 * Specifies whether write IO types are disabled for this block device.
+	 */
+	bool write_disabled;
+
 	/** Number of blocks required for write */
 	uint32_t write_unit_size;
 
@@ -1400,6 +1405,14 @@ int spdk_bdev_notify_blockcnt_change(struct spdk_bdev *bdev, uint64_t size);
  * \return 0 on success, negated errno on failure.
  */
 int spdk_bdev_notify_io_channel_weight_change(struct spdk_bdev *bdev);
+
+/**
+ * Sets a bdev to block/allow write IO types
+ *
+ * \param bdev Block device to change.
+ * \new read/write capabilities.
+ */
+int spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled);
 
 /**
  * Translates NVMe status codes to SCSI status information.

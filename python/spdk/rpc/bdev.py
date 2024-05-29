@@ -2040,3 +2040,23 @@ def bdev_groups_get(client, name):
         params['name'] = name
 
     return client.call('bdev_groups_get', params)
+
+
+def bdev_set_ro(client, name):
+    """Set a bdev in a read-only state.
+
+    Args:
+        name: name of the bdev to set
+    """
+    params = {'name': name}
+    return client.call('bdev_set_ro', params)
+
+
+def bdev_set_rw(client, name):
+    """Set a bdev in a read/write state.
+
+    Args:
+        name: name of the bdev to set
+    """
+    params = {'name': name}
+    return client.call('bdev_set_rw', params)

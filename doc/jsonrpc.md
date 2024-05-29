@@ -3085,6 +3085,76 @@ Example response:
 }
 ~~~
 
+### bdev_set_ro {#rpc_bdev_set_ro}
+
+Set a bdev in a read-only state
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_set_ro",
+  "params": {
+    "name": "test_bdev"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_set_rw {#rpc_bdev_set_rw}
+
+Set a bdev in a read-only state
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_set_rw",
+  "params": {
+    "name": "test_bdev"
+  }
+}
+~
+
+Example response:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### bdev_set_qd_sampling_period {#rpc_bdev_set_qd_sampling_period}
 
 Enable queue depth tracking on a specified bdev.

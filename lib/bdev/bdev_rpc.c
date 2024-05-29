@@ -1176,3 +1176,79 @@ cleanup:
 }
 
 SPDK_RPC_REGISTER("bdev_get_histogram", rpc_bdev_get_histogram, SPDK_RPC_RUNTIME)
+
+struct rpc_bdev_set_ro_in {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_bdev_set_ro_decoders[] = {
+	{"name", offsetof(struct rpc_bdev_set_ro_in, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_bdev_set_ro(struct spdk_jsonrpc_request *request,
+		const struct spdk_json_val *params)
+{
+	struct rpc_bdev_set_ro_in attr = {NULL};
+	struct spdk_bdev *bdev;
+
+	if (spdk_json_decode_object(params, rpc_bdev_set_ro_decoders,
+				    SPDK_COUNTOF(rpc_bdev_set_ro_decoders),
+				    &attr)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
+	bdev = spdk_bdev_get_by_name((const char *)attr.name);
+	if (!bdev) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Block device with the requested name doesn't exist");
+		return;
+	}
+
+	spdk_bdev_notify_rw_change(bdev, true);
+
+	spdk_jsonrpc_send_bool_response(request, true);
+	return;
+}
+
+SPDK_RPC_REGISTER("bdev_set_ro", rpc_bdev_set_ro, SPDK_RPC_RUNTIME);
+
+struct rpc_bdev_set_rw_in {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_bdev_set_rw_decoders[] = {
+	{"name", offsetof(struct rpc_bdev_set_rw_in, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_bdev_set_rw(struct spdk_jsonrpc_request *request,
+		const struct spdk_json_val *params)
+{
+	struct rpc_bdev_set_rw_in attr = {NULL};
+	struct spdk_bdev *bdev;
+
+	if (spdk_json_decode_object(params, rpc_bdev_set_rw_decoders,
+				    SPDK_COUNTOF(rpc_bdev_set_rw_decoders),
+				    &attr)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
+	bdev = spdk_bdev_get_by_name((const char *)attr.name);
+	if (!bdev) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Block device with the requested name doesn't exist");
+		return;
+	}
+
+	spdk_bdev_notify_rw_change(bdev, false);
+
+	spdk_jsonrpc_send_bool_response(request, true);
+	return;
+}
+
+SPDK_RPC_REGISTER("bdev_set_rw", rpc_bdev_set_rw, SPDK_RPC_RUNTIME);

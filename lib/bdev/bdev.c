@@ -340,6 +340,7 @@ struct spdk_bdev_desc {
 	}				callback;
 	bool				closed;
 	bool				write;
+	bool				write_orig;
 	bool				memory_domains_supported;
 	bool				accel_sequence_supported[SPDK_BDEV_NUM_IO_TYPES];
 	struct spdk_spinlock		spinlock;
@@ -3556,7 +3557,49 @@ bdev_io_init(struct spdk_bdev_io *bdev_io,
 static bool
 bdev_io_type_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type)
 {
+	if (bdev->write_disabled) {
+		switch (io_type) {
+		case SPDK_BDEV_IO_TYPE_WRITE:
+		case SPDK_BDEV_IO_TYPE_UNMAP:
+		case SPDK_BDEV_IO_TYPE_FLUSH:
+		case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
+		case SPDK_BDEV_IO_TYPE_NVME_IO:
+		case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
+		case SPDK_BDEV_IO_TYPE_WRITE_ZEROES:
+		case SPDK_BDEV_IO_TYPE_ZCOPY:
+		case SPDK_BDEV_IO_TYPE_COMPARE_AND_WRITE:
+		case SPDK_BDEV_IO_TYPE_COPY:
+		case SPDK_BDEV_IO_TYPE_NVME_IOV_MD:
+			return false;
+		default:
+			break;
+		}
+	}
 	return bdev->fn_table->io_type_supported(bdev->ctxt, io_type);
+}
+
+bool
+spdk_bdev_get_read_only(struct spdk_bdev *bdev)
+{
+	if (bdev->write_disabled) {
+		return true;
+	}
+
+	if (spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_UNMAP)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_FLUSH)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_NVME_ADMIN)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_NVME_IO)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_NVME_IO_MD)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_WRITE_ZEROES)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_ZCOPY)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_COMPARE_AND_WRITE)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_COPY)
+	    || spdk_bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_NVME_IOV_MD)) {
+		return false;
+	}
+
+	return true;
 }
 
 bool
@@ -5200,6 +5243,53 @@ spdk_bdev_notify_io_channel_weight_change(struct spdk_bdev *bdev)
 	}
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
+	return 0;
+}
+
+static void
+_io_type_change_notify(void *ctx)
+{
+	struct spdk_bdev_desc *desc = ctx;
+
+	_event_notify(desc, SPDK_BDEV_EVENT_IO_TYPES_CHANGED);
+}
+
+int
+spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled)
+{
+	struct spdk_bdev_desc *desc;
+
+	if (write_disabled == bdev->write_disabled) {
+		return 0;
+	}
+
+	spdk_spin_lock(&bdev->internal.spinlock);
+
+	TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
+		spdk_spin_lock(&desc->spinlock);
+		if (desc->write_orig || write_disabled) {
+			desc->write = !write_disabled;
+		}
+		spdk_spin_unlock(&desc->spinlock);
+	}
+
+	if (bdev->internal.claim_type == SPDK_BDEV_CLAIM_EXCL_WRITE) {
+		spdk_bdev_module_release_bdev(bdev);
+	} else {
+		TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
+			if (desc->claim != NULL) {
+				bdev_desc_release_claims(desc);
+			}
+		}
+	}
+
+	TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
+		event_notify(desc, _io_type_change_notify);
+	}
+
+	bdev->write_disabled = write_disabled;
+
+	spdk_spin_unlock(&bdev->internal.spinlock);
 	return 0;
 }
 
@@ -8089,6 +8179,7 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 	desc->bdev = bdev;
 	desc->thread = thread;
 	desc->write = write;
+	desc->write_orig = write;
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	if (bdev->internal.status == SPDK_BDEV_STATUS_UNREGISTERING ||
@@ -8183,6 +8274,11 @@ bdev_open_ext(const char *bdev_name, bool write, spdk_bdev_event_cb_t event_cb,
 	if (bdev == NULL) {
 		SPDK_NOTICELOG("Currently unable to find bdev with name: %s\n", bdev_name);
 		return -ENODEV;
+	}
+
+	if (bdev->write_disabled == true && write == true) {
+		SPDK_ERRLOG("Write descriptors are disabled for read-only bdev\n");
+		return -EROFS;
 	}
 
 	rc = bdev_desc_alloc(bdev, event_cb, event_ctx, &desc);
@@ -8586,6 +8682,12 @@ spdk_bdev_module_claim_bdev(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 {
 	spdk_spin_lock(&bdev->internal.spinlock);
 
+	if (bdev->write_disabled) {
+		SPDK_ERRLOG("descriptor can't be promoted to write in a read-only bdev\n");
+		spdk_spin_unlock(&bdev->internal.spinlock);
+		return -EINVAL;
+	}
+
 	if (bdev->internal.claim_type != SPDK_BDEV_CLAIM_NONE) {
 		LOG_ALREADY_CLAIMED_ERROR("already claimed", bdev);
 		spdk_spin_unlock(&bdev->internal.spinlock);
@@ -8904,6 +9006,11 @@ spdk_bdev_module_claim_bdev_desc(struct spdk_bdev_desc *desc, enum spdk_bdev_cla
 	}
 
 	bdev = desc->bdev;
+
+	if (bdev->write_disabled && claim_type_promotes_to_write(type)) {
+		SPDK_ERRLOG("descriptor can't be promoted to write in a read-only bdev\n");
+		return -EINVAL;
+	}
 
 	if (_opts == NULL) {
 		spdk_bdev_claim_opts_init(&opts, sizeof(opts));

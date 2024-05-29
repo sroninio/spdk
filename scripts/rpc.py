@@ -3805,6 +3805,20 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
     p.set_defaults(func=bdev_groups_get)
 
+    def bdev_set_ro(args):
+        rpc.bdev.bdev_set_ro(args.client, name=args.name)
+
+    p = subparsers.add_parser('bdev_set_ro', help='Set a bdev in a read-only state.')
+    p.add_argument('-n', '--name', help="Name of the bdev")
+    p.set_defaults(func=bdev_set_ro)
+
+    def bdev_set_rw(args):
+        rpc.bdev.bdev_set_rw(args.client, name=args.name)
+
+    p = subparsers.add_parser('bdev_set_rw', help='Set a bdev in a read/write state.')
+    p.add_argument('-n', '--name', help="Name of the bdev")
+    p.set_defaults(func=bdev_set_rw)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))

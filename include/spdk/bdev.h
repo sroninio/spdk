@@ -43,6 +43,7 @@ enum spdk_bdev_event_type {
 	SPDK_BDEV_EVENT_RESIZE,
 	SPDK_BDEV_EVENT_MEDIA_MANAGEMENT,
 	SPDK_BDEV_EVENT_IO_CHANNEL_WEIGHT_CHANGE,
+	SPDK_BDEV_EVENT_IO_TYPES_CHANGED,
 };
 
 /** Media management event details */
@@ -516,6 +517,14 @@ struct spdk_bdev *spdk_bdev_desc_get_bdev(struct spdk_bdev_desc *desc);
  */
 int spdk_bdev_set_timeout(struct spdk_bdev_desc *desc, uint64_t timeout_in_sec,
 			  spdk_bdev_io_timeout_cb cb_fn, void *cb_arg);
+
+/**
+ * Check whether the block device is read-only, i.e. blocks all write IO types
+ *
+ *\param bdev Block device to check.
+ *\return true if read-only, false otherwise.
+ */
+bool spdk_bdev_get_read_only(struct spdk_bdev *bdev);
 
 /**
  * Check whether the block device supports the I/O type.
