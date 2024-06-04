@@ -1047,7 +1047,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	qp_init_attr.cq		= rqpair->poller->cq;
 
 	if (rqpair->srq) {
-		qp_init_attr.srq		= rqpair->srq->srq;
+		qp_init_attr.srq		= rqpair->srq;
 	} else {
 		qp_init_attr.cap.max_recv_wr	= rqpair->max_queue_depth;
 	}

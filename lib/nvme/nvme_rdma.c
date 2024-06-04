@@ -761,7 +761,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	attr.cq			= rqpair->cq;
 	attr.cap.max_send_wr	= rqpair->num_entries; /* SEND operations */
 	if (rqpair->srq) {
-		attr.srq	= rqpair->srq->srq;
+		attr.srq	= rqpair->srq;
 	} else {
 		attr.cap.max_recv_wr = rqpair->num_entries; /* RECV operations */
 	}

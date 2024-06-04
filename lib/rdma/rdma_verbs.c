@@ -22,7 +22,7 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 		.qp_context = qp_attr->qp_context,
 		.send_cq = qp_attr->cq->cq,
 		.recv_cq = qp_attr->cq->cq,
-		.srq = qp_attr->srq,
+		.srq = qp_attr->srq->srq,
 		.cap = qp_attr->cap,
 		.qp_type = IBV_QPT_RC
 	};
