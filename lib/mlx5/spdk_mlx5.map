@@ -46,6 +46,10 @@
     spdk_mlx5_mkey_pool_get_bulk;
     spdk_mlx5_mkey_pool_put_bulk;
     spdk_mlx5_mkey_pool_find_mkey_by_id;
+    spdk_mlx5_srq_create;
+    spdk_mlx5_srq_destroy;
+    spdk_mlx5_srq_complete_recv;
+    spdk_mlx5_srq_recv;
 
 	local: *;
 };

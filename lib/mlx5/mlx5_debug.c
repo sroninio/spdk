@@ -64,6 +64,33 @@ mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index)
 			be32toh(dseg[0]),  be32toh(dseg[1]),  be32toh(dseg[2]),  be32toh(dseg[3]));
 	}
 }
+
+void
+mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index)
+{
+	uint32_t *wqe;
+	uint32_t dumped_bytes;
+
+	if (!SPDK_LOG_mlx5_wqe_dump.enabled) {
+		return;
+	}
+
+	wqe = mlx5_srq_get_wqe(&srq->hw, index);
+
+	SPDK_DEBUGLOG(mlx5_srq, "SRQ: srqn 0x%" PRIx32 ", wqe_index 0x%" PRIx32 ", addr %p\n",
+		      srq->hw.srqn, srq->hw.head, wqe);
+	for (dumped_bytes = 0; dumped_bytes < srq->hw.stride; dumped_bytes += 64, wqe += 16) {
+		fprintf(stderr,
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n",
+			be32toh(wqe[0]),  be32toh(wqe[1]),  be32toh(wqe[2]),  be32toh(wqe[3]),
+			be32toh(wqe[4]),  be32toh(wqe[5]),  be32toh(wqe[6]),  be32toh(wqe[7]),
+			be32toh(wqe[8]),  be32toh(wqe[9]),  be32toh(wqe[10]), be32toh(wqe[11]),
+			be32toh(wqe[12]), be32toh(wqe[13]), be32toh(wqe[14]), be32toh(wqe[15]));
+	}
+}
 #endif /* DEBUG */
 
 SPDK_LOG_REGISTER_COMPONENT(mlx5_wqe_dump)

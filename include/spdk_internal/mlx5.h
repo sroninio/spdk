@@ -6,6 +6,7 @@
 #ifndef SPDK_MLX5_H
 #define SPDK_MLX5_H
 
+#include "spdk/bit_array.h"
 #include "spdk/likely.h"
 #include "spdk/tree.h"
 
@@ -153,6 +154,24 @@ struct spdk_mlx5_cq_attr {
 	int comp_vector;
 };
 
+struct spdk_mlx5_hw_srq {
+	uint64_t dbrec_addr;
+	uint64_t rq_addr;
+	uint32_t stride;
+	uint32_t head;
+	uint32_t tail;
+	uint16_t wqe_cnt;
+	uint32_t max_wr;
+	uint32_t max_sge;
+	uint32_t srqn;
+};
+
+struct spdk_mlx5_srq {
+	struct spdk_mlx5_hw_srq hw;
+	uint64_t *wr_id;
+	struct ibv_srq *verbs_srq;
+};
+
 struct spdk_mlx5_hw_qp {
 	uint64_t dbr_addr;
 	uint64_t sq_addr;
@@ -169,6 +188,7 @@ struct spdk_mlx5_hw_qp {
 
 struct spdk_mlx5_qp_attr {
 	struct ibv_qp_cap cap;
+	struct spdk_mlx5_srq *srq;
 	void *qp_context;
 	bool sigall;
 	/* If set then CQ_UPDATE will be cleared for every ctrl WQE and only last ctlr WQE before ringing the doorbell
@@ -201,6 +221,7 @@ struct spdk_mlx5_qp {
 	struct mlx5_qp_rq_completion *rq_completions;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct spdk_mlx5_cq *cq;
+	struct spdk_mlx5_srq *srq;
 	struct ibv_qp *verbs_qp;
 	uint16_t nonsignaled_outstanding;
 	uint16_t max_send_sge;
@@ -283,6 +304,25 @@ int spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
  * \param cq CQ created with \ref spdk_mlx5_cq_create
  */
 int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
+
+/**
+ * Create Shared Receive Queue
+ *
+ * \param pd Protection Domain
+ * \param srq_attr Attributes to be used to create SRQ
+ * \param srq_out Pointer created SRQ
+ * \return 0 on success, negated errno on failure. \b srq_out is set only on success result
+ */
+int spdk_mlx5_srq_create(struct ibv_pd *pd, struct ibv_srq_init_attr *srq_attr,
+			 struct spdk_mlx5_srq **srq_out);
+
+/**
+ * Destroy Shared Receive Queue
+ *
+ * \param srq SRQ created with \ref spdk_mlx5_srq_create
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_mlx5_srq_destroy(struct spdk_mlx5_srq *srq);
 
 /**
  * Create qpair suitable for RDMA operations
@@ -489,6 +529,25 @@ int spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num
  * @param qp QP where doorbell record will be updated
  */
 void spdk_mlx5_qp_complete_recv(struct spdk_mlx5_qp *qp);
+
+/**
+ * Write a Receive WR to the SRQ
+ *
+ * @param srq SRQ where WR will be queued
+ * @param sge SGE array that represents a destination for Receive
+ * @param num_sge Size of the sge array
+ * @param wrid Id, that is returned in the Work Completion when WR is executed
+ * @return 0 on success, errno on failure
+ */
+int spdk_mlx5_srq_recv(struct spdk_mlx5_srq *srq, struct ibv_sge *sge, uint32_t num_sge,
+		       uint64_t wrid);
+
+/**
+ * Update receive doorbell record for the given SRQ to start executing WRs written by spdk_mlx5_srq_recv()
+ *
+ * @param srq SRQ where doorbell record will be updated
+ */
+void spdk_mlx5_srq_complete_recv(struct spdk_mlx5_srq *srq);
 
 int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags);

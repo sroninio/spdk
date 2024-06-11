@@ -783,3 +783,165 @@ spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp)
 
 	return ibv_modify_qp(qp->verbs_qp, &attr, IBV_QP_STATE);
 }
+
+static void
+mlx5_srq_fill_buf(struct spdk_mlx5_srq *srq)
+{
+	struct mlx5_wqe_srq_next_seg *srq_next_seg;
+	uint32_t i;
+
+	for (i = srq->hw.head; i < srq->hw.tail; i++) {
+		srq_next_seg = mlx5_srq_get_wqe(&srq->hw, i);
+		srq_next_seg->next_wqe_index = htobe16(i + 1);
+	}
+}
+
+int
+spdk_mlx5_srq_create(struct ibv_pd *pd, struct ibv_srq_init_attr *srq_attr,
+		     struct spdk_mlx5_srq **srq_out)
+{
+	struct spdk_mlx5_srq *srq;
+	struct mlx5dv_srq dv_srq = {
+		.comp_mask = MLX5DV_SRQ_MASK_SRQN
+	};
+	struct mlx5dv_obj dv_obj = {
+		.srq = {
+			.out = &dv_srq
+		}
+	};
+	int rc;
+
+	SPDK_DEBUGLOG(mlx5, "Create SRQ: max_wr %u, max_sge %u\n", srq_attr->attr.max_wr,
+		      srq_attr->attr.max_sge);
+	srq = calloc(1, sizeof(*srq));
+	if (!srq) {
+		return -ENOMEM;
+	}
+
+	srq->verbs_srq = ibv_create_srq(pd, srq_attr);
+	if (!srq->verbs_srq) {
+		SPDK_ERRLOG("Failed to create SRQ, rc %d (%s)\n", errno, spdk_strerror(errno));
+		rc = -errno;
+		goto err_free_srq;
+	}
+
+	dv_obj.srq.in = srq->verbs_srq;
+	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_SRQ);
+	if (rc) {
+		SPDK_ERRLOG("Failed to initialize DV object, rc %d (%s)\n", rc, spdk_strerror(rc));
+		goto err_destroy_srq;
+	}
+
+	srq->hw.dbrec_addr = (uintptr_t)dv_srq.dbrec;
+	srq->hw.rq_addr = (uintptr_t)dv_srq.buf;
+	srq->hw.stride = dv_srq.stride;
+	srq->hw.head = dv_srq.head;
+	srq->hw.tail = dv_srq.tail;
+	/*
+	 * We cannot use srq_attr->attr.max_wr here because the actual SRQ buffer is bigger.
+	 * The below calculation is correct because dv_srq.tail is an index of the last WQE for
+	 * a new SRQ.
+	 */
+	srq->hw.max_wr = dv_srq.tail + 1;
+	srq->hw.max_sge = srq_attr->attr.max_sge;
+	srq->hw.srqn = dv_srq.srqn;
+	SPDK_DEBUGLOG(mlx5, "Create SRQ: srgn 0x%x, dbrec_addr 0x%lx, rq_addr 0x%lx, stride %u,"
+		      " head %u, tail %u, max_wr %u, max_sge %u\n",
+		      srq->hw.srqn, srq->hw.dbrec_addr, srq->hw.rq_addr, srq->hw.stride, srq->hw.head,
+		      srq->hw.tail, srq->hw.max_wr, srq->hw.max_sge);
+
+	srq->wr_id = calloc(srq->hw.max_wr, sizeof(*srq->wr_id));
+	if (!srq->wr_id) {
+		rc = -ENOMEM;
+		SPDK_ERRLOG("Failed to allocate memory for wr_id\n");
+		goto err_destroy_srq;
+	}
+
+	mlx5_srq_fill_buf(srq);
+	*srq_out = srq;
+
+	return 0;
+
+err_destroy_srq:
+	ibv_destroy_srq(srq->verbs_srq);
+err_free_srq:
+	free(srq);
+
+	return rc;
+}
+
+int
+spdk_mlx5_srq_destroy(struct spdk_mlx5_srq *srq)
+{
+	assert(srq);
+	assert(srq->wr_id);
+
+	int rc;
+
+	free(srq->wr_id);
+
+	rc = ibv_destroy_srq(srq->verbs_srq);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy SRQ, rc %d (%s)\n", rc, spdk_strerror(rc));
+	}
+	free(srq);
+
+	return rc;
+}
+
+int
+spdk_mlx5_srq_recv(struct spdk_mlx5_srq *srq, struct ibv_sge *sge, uint32_t num_sge,
+		   uint64_t wrid)
+{
+	struct mlx5_wqe_srq_next_seg *srq_next_seg;
+	struct mlx5_wqe_data_seg *data_seg;
+	uint32_t i;
+
+	if (num_sge > srq->hw.max_sge) {
+		return EINVAL;
+	}
+
+	if (srq->hw.head == srq->hw.tail) {
+		/* SRQ is full */
+		return ENOMEM;
+	}
+
+	srq->wr_id[srq->hw.head] = wrid;
+
+	srq_next_seg = mlx5_srq_get_wqe(&srq->hw, srq->hw.head);
+	data_seg = (struct mlx5_wqe_data_seg *)(srq_next_seg + 1);
+
+	for (i = 0; i < num_sge; i++) {
+		data_seg[i].byte_count	= htobe32(sge[i].length);
+		data_seg[i].lkey	= htobe32(sge[i].lkey);
+		data_seg[i].addr	= htobe64(sge[i].addr);
+	}
+
+	/*
+	 * The SRQ WQE has a fixed size defined in the create SRQ command. When num_sge is
+	 * lower than srq->hw.max_sge, the last entries of the data segment are not used.
+	 * Set lkey to MLX5_INVALID_LKEY for the first unused entry to let the HW recognize
+	 * the end of the data segment.
+	 */
+	if (i < srq->hw.max_sge) {
+		data_seg[i].byte_count	= 0;
+		data_seg[i].lkey	= htobe32(MLX5_INVALID_LKEY);
+		data_seg[i].addr	= 0;
+	}
+
+	mlx5_srq_dump_wqe(srq, srq->hw.head);
+	srq->hw.head = be16toh(srq_next_seg->next_wqe_index);
+	srq->hw.wqe_cnt++;
+
+	return 0;
+}
+
+void
+spdk_mlx5_srq_complete_recv(struct spdk_mlx5_srq *srq)
+{
+	spdk_smp_wmb();
+	*((uint32_t *)(uintptr_t)srq->hw.dbrec_addr) = htobe32(srq->hw.wqe_cnt);
+	spdk_memory_bus_store_fence();
+}
+
+SPDK_LOG_REGISTER_COMPONENT(mlx5_srq)

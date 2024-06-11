@@ -239,9 +239,11 @@ mlx5_ring_rx_db(struct spdk_mlx5_qp *qp)
 #ifdef DEBUG
 void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
 void mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index);
+void mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index);
 #else
 #define mlx5_qp_dump_sq_wqe(...) do { } while (0)
 #define mlx5_qp_dump_rq_wqe(...) do { } while (0)
+#define mlx5_srq_dump_wqe(...) do { } while (0)
 #endif
 
 static inline void
@@ -297,4 +299,23 @@ mlx5_cq_find_qp(struct spdk_mlx5_cq *cq, uint32_t qp_num)
 		return NULL;
 	}
 	return cq->qps[qpn_upper].table[qpn_mask];
+}
+
+static inline void *
+mlx5_srq_get_wqe(struct spdk_mlx5_hw_srq *hw_srq, uint16_t index)
+{
+	assert(hw_srq);
+	assert(index < hw_srq->max_wr);
+
+	return (void *)(uintptr_t)(hw_srq->rq_addr + index * hw_srq->stride);
+}
+
+static inline void
+mlx5_srq_free_wqe(struct spdk_mlx5_hw_srq *hw_srq, uint16_t index)
+{
+	struct mlx5_wqe_srq_next_seg *next;
+
+	next = mlx5_srq_get_wqe(hw_srq, hw_srq->tail);
+	next->next_wqe_index = htobe16(index);
+	hw_srq->tail = index;
 }
