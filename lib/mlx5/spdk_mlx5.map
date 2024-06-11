@@ -12,6 +12,7 @@
     spdk_mlx5_cq_destroy;
     spdk_mlx5_qp_complete_recv;
     spdk_mlx5_qp_complete_send;
+    spdk_mlx5_cq_poll_wc;
     spdk_mlx5_cq_resize;
     spdk_mlx5_qp_connect_cm;
     spdk_mlx5_qp_connect_loopback;

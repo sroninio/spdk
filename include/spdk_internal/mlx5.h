@@ -344,6 +344,16 @@ int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
 				  struct spdk_mlx5_cq_completion *comp, int max_completions);
 
 /**
+ * Poll Completion Queue, save up to \b num_entries into \b wc array
+ *
+ * \param cq Completion Queue
+ * \param num_entries Maximum number of completions to be polled
+ * \param wc Array of work completions to be filled by this function
+ * \return
+ */
+int spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc *wc);
+
+/**
  * Resize Completion Queue
  *
  * \param cq Completion Queue to be resized

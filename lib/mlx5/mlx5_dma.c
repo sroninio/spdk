@@ -548,6 +548,21 @@ mlx5_qp_get_sq_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
 	return qp->sq_completions[comp_idx].wr_id;
 }
 
+static inline uint64_t
+mlx5_qp_get_rq_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
+{
+	uint16_t comp_idx;
+	uint32_t rq_mask;
+
+	rq_mask = qp->hw.rq_wqe_cnt - 1;
+	comp_idx = be16toh(cqe->wqe_counter) & rq_mask;
+	SPDK_DEBUGLOG(mlx5, "got recv cpl, wqe_counter %u, comp_idx %u; wrid %"PRIx64"\n",
+		      cqe->wqe_counter, comp_idx, qp->rq_completions[comp_idx].wr_id);
+	qp->rx_available++;
+
+	return qp->rq_completions[comp_idx].wr_id;
+}
+
 static void
 mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp)
 {
@@ -592,6 +607,241 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 		}
 		n++;
 	} while (n < max_completions);
+
+	return n;
+}
+
+static inline int
+handle_good_cqe_req(struct mlx5_cqe64 *cqe, struct ibv_wc *wc)
+{
+	assert(cqe);
+	assert(wc);
+	/* Inline data in CQE is not implemented for the send operations */
+	assert(!(cqe->op_own & MLX5_INLINE_SCATTER_32));
+	assert(!(cqe->op_own & MLX5_INLINE_SCATTER_64));
+
+	uint8_t send_opcode = be32toh(cqe->sop_drop_qpn) >> 24;
+
+	switch (send_opcode) {
+	case MLX5_OPCODE_RDMA_WRITE_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+	/* FALLTHROUGH */
+	case MLX5_OPCODE_RDMA_WRITE:
+		wc->opcode = IBV_WC_RDMA_WRITE;
+		break;
+	case MLX5_OPCODE_SEND_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+	/* FALLTHROUGH */
+	case MLX5_OPCODE_SEND:
+	case MLX5_OPCODE_SEND_INVAL:
+		wc->opcode = IBV_WC_SEND;
+		break;
+	case MLX5_OPCODE_RDMA_READ:
+		wc->opcode = IBV_WC_RDMA_READ;
+		wc->byte_len = be32toh(cqe->byte_cnt);
+		break;
+	default:
+		SPDK_ERRLOG("Invalid send_opcode 0x%x\n", send_opcode);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static inline int
+handle_good_cqe_resp(struct mlx5_cqe64 *cqe, struct ibv_wc *wc)
+{
+	assert(cqe);
+	assert(wc);
+
+	uint8_t opcode = cqe->op_own >> 4;
+	uint8_t grh;
+
+	switch (opcode) {
+	case MLX5_CQE_RESP_WR_IMM:
+		wc->opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+		wc->imm_data = cqe->imm_inval_pkey;
+		break;
+	case MLX5_CQE_RESP_SEND_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+		wc->imm_data = cqe->imm_inval_pkey;
+	/* FALLTHROUGH */
+	case MLX5_CQE_RESP_SEND:
+		wc->opcode = IBV_WC_RECV;
+		break;
+	case MLX5_CQE_RESP_SEND_INV:
+		wc->opcode = IBV_WC_RECV;
+		wc->wc_flags |= IBV_WC_WITH_INV;
+		wc->invalidated_rkey = be32toh(cqe->imm_inval_pkey);
+		break;
+	default:
+		SPDK_ERRLOG("Invalid recv opcode 0x%x\n", opcode);
+		return -EINVAL;
+	}
+
+	wc->slid		= be16toh(cqe->slid);
+	wc->sl			= (be32toh(cqe->flags_rqpn) >> 24) & 0xf;
+	wc->src_qp		= be32toh(cqe->flags_rqpn) & 0xffffff;
+	wc->dlid_path_bits	= cqe->ml_path & 0x7f;
+	grh			= (be32toh(cqe->flags_rqpn) >> 28) & 3;
+	wc->wc_flags		|= grh ? IBV_WC_GRH : 0;
+	wc->pkey_index		= be32toh(cqe->imm_inval_pkey) & 0xffff;
+
+	return 0;
+}
+
+static inline void
+handle_err_cqe(struct mlx5_err_cqe *cqe, struct ibv_wc *wc)
+{
+	enum ibv_wc_status status;
+
+	switch (cqe->syndrome) {
+	case MLX5_CQE_SYNDROME_LOCAL_LENGTH_ERR:
+		status = IBV_WC_LOC_LEN_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_QP_OP_ERR:
+		status = IBV_WC_LOC_QP_OP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_PROT_ERR:
+		status = IBV_WC_LOC_PROT_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_WR_FLUSH_ERR:
+		status = IBV_WC_WR_FLUSH_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_MW_BIND_ERR:
+		status = IBV_WC_MW_BIND_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_BAD_RESP_ERR:
+		status = IBV_WC_BAD_RESP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_ACCESS_ERR:
+		status = IBV_WC_LOC_ACCESS_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_INVAL_REQ_ERR:
+		status = IBV_WC_REM_INV_REQ_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_ACCESS_ERR:
+		status = IBV_WC_REM_ACCESS_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_OP_ERR:
+		status = IBV_WC_REM_OP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_TRANSPORT_RETRY_EXC_ERR:
+		status = IBV_WC_RETRY_EXC_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_RNR_RETRY_EXC_ERR:
+		status = IBV_WC_RNR_RETRY_EXC_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_ABORTED_ERR:
+		status = IBV_WC_REM_ABORT_ERR;
+		break;
+	default:
+		status = IBV_WC_GENERAL_ERR;
+	}
+
+	wc->status	= status;
+	wc->vendor_err	= cqe->vendor_err_synd;
+}
+
+static int
+mlx5_copy_to_recv_wqe(struct spdk_mlx5_qp *qp, uint16_t index, void *buf, uint32_t size)
+{
+	struct mlx5_wqe_data_seg *dseg;
+	int max;
+	int copy;
+	int i;
+
+	dseg = (void *)qp->hw.rq_addr + index * qp->hw.rq_stride;
+	max = qp->hw.rq_stride / sizeof(*dseg);
+
+	for (i = 0; i < max; i++) {
+		if (spdk_unlikely(dseg->lkey == htobe32(MLX5_INVALID_LKEY))) {
+			return IBV_WC_LOC_LEN_ERR;
+		}
+
+		copy = spdk_min(size, be32toh(dseg->byte_count));
+
+		memcpy((void *)(uintptr_t)be64toh(dseg->addr), buf, copy);
+
+		size -= copy;
+		if (size == 0) {
+			return IBV_WC_SUCCESS;
+		}
+
+		buf += copy;
+		dseg++;
+	}
+
+	return IBV_WC_LOC_LEN_ERR;
+}
+
+int
+spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc *wc)
+{
+	struct spdk_mlx5_qp *qp;
+	struct mlx5_cqe64 *cqe;
+	uint16_t wqe_index;
+	int n = 0;
+
+	do {
+again:
+		cqe = mlx5_cq_poll_one(&cq->hw, 64);
+		if (!cqe) {
+			break;
+		}
+
+		qp = mlx5_cq_find_qp(cq, be32toh(cqe->sop_drop_qpn) & 0xffffff);
+		if (spdk_unlikely(!qp)) {
+			return -ENODEV;
+		}
+
+		wc[n].wc_flags = 0;
+		wc[n].qp_num = qp->hw.qp_num;
+
+		switch (mlx5dv_get_cqe_opcode(cqe)) {
+		case MLX5_CQE_REQ:
+			if (handle_good_cqe_req(cqe, &wc[n])) {
+				return -EINVAL;
+			}
+			wc[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
+			wc[n].status = IBV_WC_SUCCESS;
+			break;
+		case MLX5_CQE_RESP_WR_IMM:
+		case MLX5_CQE_RESP_SEND:
+		case MLX5_CQE_RESP_SEND_IMM:
+		case MLX5_CQE_RESP_SEND_INV:
+			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+			wc[n].status = IBV_WC_SUCCESS;
+			wc[n].byte_len = be32toh(cqe->byte_cnt);
+			if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
+				wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+				wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe, wc[n].byte_len);
+			} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
+				wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+				wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe - 1, wc[n].byte_len);
+			}
+			if (handle_good_cqe_resp(cqe, &wc[n])) {
+				return -EINVAL;
+			}
+			break;
+		case MLX5_CQE_RESIZE_CQ:
+			goto again;
+		case MLX5_CQE_REQ_ERR:
+			wc[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
+			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
+			break;
+		case MLX5_CQE_RESP_ERR:
+			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
+			break;
+		default:
+			SPDK_ERRLOG("Invalid CQE opcode 0x%x\n", mlx5dv_get_cqe_opcode(cqe));
+			return -EINVAL;
+		}
+		n++;
+
+	} while (n < num_entries);
 
 	return n;
 }
