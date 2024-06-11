@@ -132,6 +132,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 		.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |  IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_BIND_MW,
 		.send_cq = cq,
 		.recv_cq = cq,
+		.srq = attr->srq ? attr->srq->verbs_srq : NULL,
 		.sq_sig_all = attr->sigall,
 	};
 	/* Attrs required for MKEYs registration */
@@ -143,6 +144,10 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 
 	if (attr->sigall && attr->siglast) {
 		SPDK_ERRLOG("Params sigall and siglast can't be enabled simultaneously\n");
+		return -EINVAL;
+	}
+	if (attr->srq && attr->cap.max_recv_wr) {
+		SPDK_ERRLOG("SRQ and RQ can't be enabled simultaneously\n");
 		return -EINVAL;
 	}
 	rc = spdk_mlx5_query_crypto_caps(pd->context, &crypto_caps);
@@ -176,10 +181,12 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->hw.rq_wqe_cnt = dv_qp.rq.wqe_cnt;
 	qp->hw.rq_stride = dv_qp.rq.stride;
 
-	SPDK_NOTICELOG("mlx5 QP, sq size %u WQE_BB. %u send_wrs -> %u WQE_BB per send WR\n",
-		       qp->hw.sq_wqe_cnt, attr->cap.max_send_wr, qp->hw.sq_wqe_cnt / attr->cap.max_send_wr);
+	SPDK_NOTICELOG("mlx5 QP, sq size %u WQE_BB, srqn 0x%x. %u send_wrs -> %u WQE_BB per send WR\n",
+		       qp->hw.sq_wqe_cnt, attr->srq ? attr->srq->hw.srqn : 0, attr->cap.max_send_wr,
+		       qp->hw.sq_wqe_cnt / attr->cap.max_send_wr);
 
 	qp->hw.qp_num = qp->verbs_qp->qp_num;
+	qp->srq = attr->srq;
 
 	/*
 	 * Verify that the memory is indeed non-cachable. It relies on a fact (hack) that

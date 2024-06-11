@@ -563,6 +563,20 @@ mlx5_qp_get_rq_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
 	return qp->rq_completions[comp_idx].wr_id;
 }
 
+static inline uint64_t
+mlx5_srq_get_comp_wr_id(struct spdk_mlx5_srq *srq, struct mlx5_cqe64 *cqe)
+{
+	uint16_t comp_idx;
+
+	/* A mask is not applied because the WQE index is reported for SRQ, not the WQE counter. */
+	comp_idx = be16toh(cqe->wqe_counter);
+	mlx5_srq_free_wqe(&srq->hw, comp_idx);
+	SPDK_DEBUGLOG(mlx5, "got srq cpl, comp_idx %u, wrid %" PRIx64 "\n",
+		      comp_idx, srq->wr_id[comp_idx]);
+
+	return srq->wr_id[comp_idx];
+}
+
 static void
 mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp)
 {
@@ -776,10 +790,43 @@ mlx5_copy_to_recv_wqe(struct spdk_mlx5_qp *qp, uint16_t index, void *buf, uint32
 	return IBV_WC_LOC_LEN_ERR;
 }
 
+static int
+mlx5_copy_to_recv_srq(struct spdk_mlx5_srq *srq, uint16_t index, void *buf, uint32_t size)
+{
+	struct mlx5_wqe_srq_next_seg *next_seg;
+	struct mlx5_wqe_data_seg *data_seg;
+	uint32_t copy;
+	uint32_t i;
+
+	next_seg = mlx5_srq_get_wqe(&srq->hw, index);
+	data_seg = (struct mlx5_wqe_data_seg *)(next_seg + 1);
+
+	for (i = 0; i < srq->hw.max_sge; i++) {
+		if (spdk_unlikely(data_seg->lkey == htobe32(MLX5_INVALID_LKEY))) {
+			return IBV_WC_LOC_LEN_ERR;
+		}
+
+		copy = spdk_min(size, be32toh(data_seg->byte_count));
+
+		memcpy((void *)(uintptr_t)be64toh(data_seg->addr), buf, copy);
+
+		size -= copy;
+		if (size == 0) {
+			return IBV_WC_SUCCESS;
+		}
+
+		buf += copy;
+		data_seg++;
+	}
+
+	return IBV_WC_LOC_LEN_ERR;
+}
+
 int
 spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc *wc)
 {
 	struct spdk_mlx5_qp *qp;
+	struct spdk_mlx5_srq *srq;
 	struct mlx5_cqe64 *cqe;
 	uint16_t wqe_index;
 	int n = 0;
@@ -811,15 +858,29 @@ again:
 		case MLX5_CQE_RESP_SEND:
 		case MLX5_CQE_RESP_SEND_IMM:
 		case MLX5_CQE_RESP_SEND_INV:
-			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
 			wc[n].status = IBV_WC_SUCCESS;
 			wc[n].byte_len = be32toh(cqe->byte_cnt);
-			if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
-				wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
-				wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe, wc[n].byte_len);
-			} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
-				wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
-				wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe - 1, wc[n].byte_len);
+
+			srq = qp->srq;
+			if (!srq) {
+				wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+				if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
+					wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+					wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe, wc[n].byte_len);
+				} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
+					wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+					wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe - 1, wc[n].byte_len);
+				}
+			} else {
+				wc[n].wr_id = mlx5_srq_get_comp_wr_id(srq, cqe);
+
+				if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
+					wqe_index = be16toh(cqe->wqe_counter);
+					wc[n].status = mlx5_copy_to_recv_srq(srq, wqe_index, cqe, wc[n].byte_len);
+				} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
+					wqe_index = be16toh(cqe->wqe_counter);
+					wc[n].status = mlx5_copy_to_recv_srq(srq, wqe_index, cqe - 1, wc[n].byte_len);
+				}
 			}
 			if (handle_good_cqe_resp(cqe, &wc[n])) {
 				return -EINVAL;
