@@ -50,7 +50,12 @@ DEFINE_STUB_V(spdk_nvmf_tgt_new_qpair, (struct spdk_nvmf_tgt *tgt, struct spdk_n
 DEFINE_STUB(nvmf_ctrlr_abort_request, int, (struct spdk_nvmf_request *req), 0);
 DEFINE_STUB(spdk_nvme_transport_id_adrfam_str, const char *, (enum spdk_nvmf_adrfam adrfam), NULL);
 DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
-DEFINE_STUB(ibv_resize_cq, int, (struct ibv_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_cq_create, struct spdk_rdma_cq *, (struct spdk_rdma_cq_init_attr *cq_attr),
+	    NULL);
+DEFINE_STUB_V(spdk_rdma_cq_destroy, (struct spdk_rdma_cq *cq));
+DEFINE_STUB(spdk_rdma_cq_resize, int, (struct spdk_rdma_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_cq_poll, int, (struct spdk_rdma_cq *rdma_cq, int num_entries,
+				     struct ibv_wc *wc), 0);
 DEFINE_STUB(spdk_mempool_lookup, struct spdk_mempool *, (const char *name), NULL);
 
 /* ibv_reg_mr can be a macro, need to undefine it */
@@ -1443,7 +1448,7 @@ test_nvmf_rdma_resize_cq(void)
 	tnum_cqe = rpoller.num_cqe;
 	idevice.transport_type = IBV_TRANSPORT_IB;
 	rdevice.attr.max_cqe = 30;
-	MOCK_SET(ibv_resize_cq, -1);
+	MOCK_SET(spdk_rdma_cq_resize, -1);
 
 	rc = nvmf_rdma_resize_cq(&rqpair, &rdevice);
 	CU_ASSERT(rc == -1);
@@ -1453,7 +1458,7 @@ test_nvmf_rdma_resize_cq(void)
 	/* Test5: RDMA CQ resize success. rsize = MIN(MAX(num_cqe * 2, required_num_wr), device->attr.max_cqe). */
 	tnum_wr = rpoller.required_num_wr;
 	tnum_cqe = rpoller.num_cqe;
-	MOCK_SET(ibv_resize_cq, 0);
+	MOCK_SET(spdk_rdma_cq_resize, 0);
 
 	rc = nvmf_rdma_resize_cq(&rqpair, &rdevice);
 	CU_ASSERT(rc == 0);

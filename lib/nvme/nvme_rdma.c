@@ -127,7 +127,7 @@ struct nvme_rdma_rsps;
 
 struct nvme_rdma_poller {
 	struct ibv_context		*device;
-	struct ibv_cq			*cq;
+	struct spdk_rdma_cq		*cq;
 	struct spdk_rdma_srq		*srq;
 	struct nvme_rdma_rsps		*rsps;
 	struct ibv_pd			*pd;
@@ -191,7 +191,7 @@ struct nvme_rdma_qpair {
 
 	struct spdk_rdma_qp			*rdma_qp;
 	struct rdma_cm_id			*cm_id;
-	struct ibv_cq				*cq;
+	struct spdk_rdma_cq			*cq;
 	struct spdk_rdma_srq			*srq;
 
 	struct	spdk_nvme_rdma_req		*rdma_reqs;
@@ -664,7 +664,7 @@ nvme_rdma_resize_cq(struct nvme_rdma_qpair *rqpair, struct nvme_rdma_poller *pol
 	if (poller->current_num_wc != current_num_wc) {
 		SPDK_DEBUGLOG(nvme, "Resize RDMA CQ from %d to %d\n", poller->current_num_wc,
 			      current_num_wc);
-		if (ibv_resize_cq(poller->cq, current_num_wc)) {
+		if (spdk_rdma_cq_resize(poller->cq, current_num_wc)) {
 			SPDK_ERRLOG("RDMA CQ resize failed: errno %d: %s\n", errno, spdk_strerror(errno));
 			return -1;
 		}
@@ -715,6 +715,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	struct ibv_device_attr	dev_attr;
 	struct nvme_rdma_ctrlr	*rctrlr;
 	uint32_t num_cqe, max_num_cqe;
+	struct spdk_rdma_cq_init_attr cq_attr;
 
 	rc = ibv_query_device(rqpair->cm_id->verbs, &dev_attr);
 	if (rc != 0) {
@@ -736,7 +737,13 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 		if (max_num_cqe != 0 && num_cqe > max_num_cqe) {
 			num_cqe = max_num_cqe;
 		}
-		rqpair->cq = ibv_create_cq(rqpair->cm_id->verbs, num_cqe, rqpair, NULL, 0);
+		cq_attr.cqe		= num_cqe;
+		cq_attr.comp_vector	= 0;
+		cq_attr.cq_context	= rqpair;
+		cq_attr.comp_channel	= NULL;
+		cq_attr.pd		= rqpair->cm_id->pd;
+
+		rqpair->cq = spdk_rdma_cq_create(&cq_attr);
 		if (!rqpair->cq) {
 			SPDK_ERRLOG("Unable to create completion queue: errno %d: %s\n", errno, spdk_strerror(errno));
 			return -1;
@@ -2025,7 +2032,7 @@ nvme_rdma_qpair_destroy(struct nvme_rdma_qpair *rqpair)
 			rqpair->rsps = NULL;
 		}
 	} else if (rqpair->cq) {
-		ibv_destroy_cq(rqpair->cq);
+		spdk_rdma_cq_destroy(rqpair->cq);
 		rqpair->cq = NULL;
 	}
 
@@ -2772,7 +2779,7 @@ nvme_rdma_process_send_completion(struct nvme_rdma_poller *poller,
 }
 
 static int
-nvme_rdma_cq_process_completions(struct ibv_cq *cq, uint32_t batch_size,
+nvme_rdma_cq_process_completions(struct spdk_rdma_cq *cq, uint32_t batch_size,
 				 struct nvme_rdma_poller *poller,
 				 struct nvme_rdma_qpair *rdma_qpair,
 				 uint64_t *rdma_completions)
@@ -2783,7 +2790,7 @@ nvme_rdma_cq_process_completions(struct ibv_cq *cq, uint32_t batch_size,
 	int				completion_rc = 0;
 	int				rc, _rc, i;
 
-	rc = ibv_poll_cq(cq, batch_size, wc);
+	rc = spdk_rdma_cq_poll(cq, batch_size, wc);
 	if (rc < 0) {
 		SPDK_ERRLOG("Error polling CQ! (%d): %s\n",
 			    errno, spdk_strerror(errno));
@@ -2836,7 +2843,7 @@ nvme_rdma_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 	struct nvme_rdma_qpair		*rqpair = nvme_rdma_qpair(qpair);
 	struct nvme_rdma_ctrlr		*rctrlr = nvme_rdma_ctrlr(qpair->ctrlr);
 	int				rc = 0, batch_size;
-	struct ibv_cq			*cq;
+	struct spdk_rdma_cq		*cq;
 	uint64_t			rdma_completions = 0;
 
 	/*
@@ -3000,7 +3007,7 @@ static void
 nvme_rdma_poller_destroy(struct nvme_rdma_poller *poller)
 {
 	if (poller->cq) {
-		ibv_destroy_cq(poller->cq);
+		spdk_rdma_cq_destroy(poller->cq);
 	}
 	if (poller->rsps) {
 		nvme_rdma_free_rsps(poller->rsps);
@@ -3024,6 +3031,7 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 	struct ibv_device_attr dev_attr;
 	struct spdk_rdma_srq_init_attr srq_init_attr = {};
 	struct nvme_rdma_rsp_opts opts;
+	struct spdk_rdma_cq_init_attr cq_attr;
 	int num_cqe, max_num_cqe;
 	int rc;
 
@@ -3101,8 +3109,18 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 		num_cqe = max_num_cqe;
 	}
 
-	poller->cq = ibv_create_cq(poller->device, num_cqe, group, NULL, 0);
+	poller->pd = spdk_rdma_utils_get_pd(ctx);
+	if (poller->pd == NULL) {
+		SPDK_ERRLOG("Unable to get PD.\n");
+		goto fail;
+	}
+	cq_attr.cqe		= num_cqe;
+	cq_attr.comp_vector	= 0;
+	cq_attr.cq_context	= group;
+	cq_attr.comp_channel	= NULL;
+	cq_attr.pd		= poller->pd;
 
+	poller->cq = spdk_rdma_cq_create(&cq_attr);
 	if (poller->cq == NULL) {
 		SPDK_ERRLOG("Unable to create CQ, errno %d.\n", errno);
 		goto fail;

@@ -31,7 +31,7 @@ struct spdk_rdma_qp_stats {
 
 struct spdk_rdma_qp_init_attr {
 	void		       *qp_context;
-	struct ibv_cq	       *cq;
+	struct spdk_rdma_cq    *cq;
 	struct ibv_srq	       *srq;
 	struct ibv_qp_cap	cap;
 	struct ibv_pd	       *pd;

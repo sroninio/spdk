@@ -414,7 +414,7 @@ struct spdk_nvmf_rdma_poller {
 
 	int					num_cqe;
 	int					required_num_wr;
-	struct ibv_cq				*cq;
+	struct spdk_rdma_cq			*cq;
 
 	/* The maximum number of I/O outstanding on the shared receive queue at one time */
 	uint16_t				max_srq_depth;
@@ -1016,7 +1016,7 @@ nvmf_rdma_resize_cq(struct spdk_nvmf_rdma_qpair *rqpair, struct spdk_nvmf_rdma_d
 		}
 
 		SPDK_DEBUGLOG(rdma, "Resize RDMA CQ from %d to %d\n", rpoller->num_cqe, num_cqe);
-		rc = ibv_resize_cq(rpoller->cq, num_cqe);
+		rc = spdk_rdma_cq_resize(rpoller->cq, num_cqe);
 		if (rc) {
 			SPDK_ERRLOG("RDMA CQ resize failed: errno %d: %s\n", errno, spdk_strerror(errno));
 			return -1;
@@ -4042,6 +4042,7 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	struct spdk_rdma_srq_init_attr		srq_init_attr;
 	struct spdk_nvmf_rdma_resource_opts	opts;
 	int					num_cqe;
+	struct spdk_rdma_cq_init_attr		cq_init_attr;
 
 	poller = calloc(1, sizeof(*poller));
 	if (!poller) {
@@ -4104,7 +4105,13 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		num_cqe = rtransport->rdma_opts.num_cqe;
 	}
 
-	poller->cq = ibv_create_cq(device->context, num_cqe, poller, NULL, 0);
+	cq_init_attr.cqe		= num_cqe;
+	cq_init_attr.comp_vector	= 0;
+	cq_init_attr.cq_context		= poller;
+	cq_init_attr.comp_channel	= NULL;
+	cq_init_attr.pd			= device->pd;
+
+	poller->cq = spdk_rdma_cq_create(&cq_init_attr);
 	if (!poller->cq) {
 		SPDK_ERRLOG("Unable to create completion queue\n");
 		return -1;
@@ -4248,7 +4255,6 @@ static void
 nvmf_rdma_poller_destroy(struct spdk_nvmf_rdma_poller *poller)
 {
 	struct spdk_nvmf_rdma_qpair	*qpair, *tmp_qpair;
-	int				rc;
 
 	TAILQ_REMOVE(&poller->group->pollers, poller, link);
 	RB_FOREACH_SAFE(qpair, qpairs_tree, &poller->qpairs, tmp_qpair) {
@@ -4264,10 +4270,7 @@ nvmf_rdma_poller_destroy(struct spdk_nvmf_rdma_poller *poller)
 	}
 
 	if (poller->cq) {
-		rc = ibv_destroy_cq(poller->cq);
-		if (rc != 0) {
-			SPDK_ERRLOG("Destroy cq return %d, error: %s\n", rc, strerror(errno));
-		}
+		spdk_rdma_cq_destroy(poller->cq);
 	}
 
 	if (poller->destroy_cb) {
@@ -4706,7 +4709,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 	/* Poll for completing operations. */
-	reaped = ibv_poll_cq(rpoller->cq, 32, wc);
+	reaped = spdk_rdma_cq_poll(rpoller->cq, 32, wc);
 	if (reaped < 0) {
 		SPDK_ERRLOG("Error polling CQ! (%d): %s\n",
 			    errno, spdk_strerror(errno));
