@@ -423,6 +423,33 @@ int spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge,
 			   uint32_t sge_count, uint64_t dstaddr, uint32_t rkey,
 			   uint64_t wrid, uint32_t flags);
 
+/**
+ * Write a Send WR to the SQ of the given QP
+ *
+ * @param qp QP where WR will be written
+ * @param sge SGE array that represents a source for Send
+ * @param num_sge Size of the sge array
+ * @param wrid Id, that is returned in the Work Completion when WR is executed
+ * @param flags Flags from enum ibv_send_flags
+ * @return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint64_t wrid, uint32_t flags);
+
+/**
+ * Write a Send with invalidate WR to the SQ of the given QP
+ *
+ * @param qp QP where WR will be written
+ * @param sge SGE array that represents a source for Send
+ * @param num_sge Size of the sge array
+ * @param invalidate_rkey Remote Key that will be invalidated on the remote host
+ * @param wrid Id, that is returned in the Work Completion when WR is executed
+ * @param flags Flags from enum ibv_send_flags
+ * @return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+			  uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags);
+
 int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags);
 

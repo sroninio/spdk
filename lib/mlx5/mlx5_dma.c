@@ -306,6 +306,128 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sg
 	return 0;
 }
 
+static inline void
+mlx5_dma_send_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int op,
+		   uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
+{
+	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_data_seg *dseg;
+	uint8_t fm_ce_se;
+	uint32_t i, pi;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	/* absolute PI value */
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	SPDK_DEBUGLOG(mlx5, "opc %d, num_sge %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, num_sge,
+		      bb_count, hw_qp->sq_pi, fm_ce_se);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
+	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 1 + num_sge, 0, imm);
+
+	dseg = (struct mlx5_wqe_data_seg *)(ctrl + 1);
+	for (i = 0; i < num_sge; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
+		dseg = dseg + 1;
+	}
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	assert(qp->tx_available >= bb_count);
+	qp->tx_available -= bb_count;
+}
+
+static inline void
+mlx5_dma_send_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+			  int op, uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
+{
+	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_data_seg *dseg;
+	uint8_t fm_ce_se;
+	uint32_t i, to_end, pi;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	/* absolute PI value */
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	SPDK_DEBUGLOG(mlx5, "opc %d, num_sge %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, num_sge,
+		      bb_count, pi, fm_ce_se);
+
+	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
+	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 1 + num_sge, 0, imm);
+	to_end -= sizeof(struct mlx5_wqe_ctrl_seg); /* 16 bytes */
+
+	dseg = (struct mlx5_wqe_data_seg *)(ctrl + 1);
+	for (i = 0; i < num_sge; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
+		to_end -= sizeof(struct mlx5_wqe_data_seg); /* 16 bytes */
+		if (to_end != 0) {
+			dseg = dseg + 1;
+		} else {
+			/* Start from the beginning of SQ */
+			dseg = (struct mlx5_wqe_data_seg *)(hw_qp->sq_addr);
+			to_end = hw_qp->sq_wqe_cnt * MLX5_SEND_WQE_BB;
+		}
+	}
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	assert(qp->tx_available >= bb_count);
+	qp->tx_available -= bb_count;
+}
+
+static inline int
+mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int opcode,
+	     uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
+{
+	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	uint32_t to_end, pi, bb_count;
+
+	/* One building block is 64 bytes - 4 octowords
+	 * It can hold control segment + 3 data segments.
+	 * If num_sge (data segments) is bigger than 3 then we consume additional bb */
+	bb_count = (num_sge <= 3) ? 1 : 1 + SPDK_CEIL_DIV(num_sge - 3, 4);
+
+	if (spdk_unlikely(bb_count > qp->tx_available)) {
+		return -ENOMEM;
+	}
+	if (spdk_unlikely(num_sge > qp->max_send_sge)) {
+		return -E2BIG;
+	}
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
+		mlx5_dma_send_full(qp, sge, num_sge, opcode, flags, invalidate_rkey, wrid, bb_count);
+	} else {
+		mlx5_dma_send_wrap_around(qp, sge, num_sge, opcode, flags, invalidate_rkey, wrid,
+					  bb_count);
+	}
+
+	return 0;
+}
+
+int
+spdk_mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		  uint64_t wrid, uint32_t flags)
+{
+	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND, 0, wrid, flags);
+}
+
+int
+spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
+{
+	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND_INVAL, invalidate_rkey, wrid, flags);
+}
+
 /* polling start */
 
 static inline void

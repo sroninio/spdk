@@ -21,6 +21,8 @@
     spdk_mlx5_cq_poll_completions;
     spdk_mlx5_qp_rdma_write;
     spdk_mlx5_qp_rdma_read;
+    spdk_mlx5_qp_send_inv;
+    spdk_mlx5_qp_send;
     spdk_mlx5_query_crypto_caps;
     spdk_mlx5_query_relaxed_ordering_caps;
     spdk_mlx5_create_indirect_mkey;
