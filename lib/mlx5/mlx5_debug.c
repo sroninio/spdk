@@ -7,6 +7,8 @@
 #include "mlx5_priv.h"
 
 #ifdef DEBUG
+extern struct spdk_log_flag SPDK_LOG_mlx5_wqe_dump;
+
 void
 mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
 {
@@ -15,7 +17,6 @@ mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
 	uint32_t to_end;
 	uint32_t *wqe;
 	int i;
-	extern struct spdk_log_flag SPDK_LOG_mlx5_wqe_dump;
 
 	if (!SPDK_LOG_mlx5_wqe_dump.enabled) {
 		return;
@@ -38,6 +39,29 @@ mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
 			be32toh(wqe[8]),  be32toh(wqe[9]),  be32toh(wqe[10]), be32toh(wqe[11]),
 			be32toh(wqe[12]), be32toh(wqe[13]), be32toh(wqe[14]), be32toh(wqe[15]));
 		wqe = mlx5_qp_get_next_wqbb(hw, &to_end, wqe);
+	}
+}
+
+void
+mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index)
+{
+	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	uint32_t *dseg;
+	size_t dumped_bytes;
+
+	if (!SPDK_LOG_mlx5_wqe_dump.enabled) {
+		return;
+	}
+
+	dseg = (void *)hw_qp->rq_addr + index * hw_qp->rq_stride;
+	SPDK_DEBUGLOG(mlx5_wqe_dump, "QP: qpn 0x%" PRIx32 ", wqe_index 0x%x, addr %p\n",
+		      hw_qp->qp_num, index, dseg);
+
+	/* The RQ WQE stride is aligned to 16 bytes (size of the data segment entry) */
+	for (dumped_bytes = 0; dumped_bytes < hw_qp->rq_stride; dumped_bytes += 16) {
+		fprintf(stderr,
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n",
+			be32toh(dseg[0]),  be32toh(dseg[1]),  be32toh(dseg[2]),  be32toh(dseg[3]));
 	}
 }
 #endif /* DEBUG */

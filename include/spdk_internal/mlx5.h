@@ -161,6 +161,10 @@ struct spdk_mlx5_hw_qp {
 	uint16_t sq_pi;
 	uint32_t sq_tx_db_nc;
 	uint32_t qp_num;
+	uint64_t rq_addr;
+	uint32_t rq_wqe_cnt;
+	uint16_t rq_stride;
+	uint16_t rq_pi;
 };
 
 struct spdk_mlx5_qp_attr {
@@ -178,6 +182,10 @@ struct mlx5_qp_sq_completion {
 	uint32_t completions;
 };
 
+struct mlx5_qp_rq_completion {
+	uint64_t wr_id;
+};
+
 enum spdk_mlx5_qp_sig_mode {
 	/* Default mode, use flags passed by the user */
 	SPDK_MLX5_QP_SIG_NONE = 0,
@@ -190,6 +198,7 @@ enum spdk_mlx5_qp_sig_mode {
 struct spdk_mlx5_qp {
 	struct spdk_mlx5_hw_qp hw;
 	struct mlx5_qp_sq_completion *sq_completions;
+	struct mlx5_qp_rq_completion *rq_completions;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct spdk_mlx5_cq *cq;
 	struct ibv_qp *verbs_qp;
@@ -197,6 +206,8 @@ struct spdk_mlx5_qp {
 	uint16_t max_send_sge;
 	uint16_t tx_available;
 	uint16_t last_pi;
+	uint16_t max_recv_sge;
+	uint16_t rx_available;
 	uint8_t sigmode;
 	bool aes_xts_inc_64;
 };
@@ -449,6 +460,25 @@ int spdk_mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num
  */
 int spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
 			  uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags);
+
+/**
+ * Write a Receive WR to the RQ of the given QP
+ *
+ * @param qp QP where WR will be written
+ * @param sge SGE array that represents a destination for Receive
+ * @param num_sge Size of the sge array
+ * @param wrid Id, that is returned in the Work Completion when WR is executed
+ * @return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint64_t wrid);
+
+/**
+ * Update receive doorbell record for the given QP to start executing WRs written by spdk_mlx5_qp_recv()
+ *
+ * @param qp QP where doorbell record will be updated
+ */
+void spdk_mlx5_qp_complete_recv(struct spdk_mlx5_qp *qp);
 
 int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags);

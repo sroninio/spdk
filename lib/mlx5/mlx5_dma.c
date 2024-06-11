@@ -428,6 +428,55 @@ spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num
 	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND_INVAL, invalidate_rkey, wrid, flags);
 }
 
+int
+spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, uint64_t wrid)
+{
+	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	uint16_t wqe_index;
+	struct mlx5_wqe_data_seg *dseg;
+	uint32_t i;
+
+	SPDK_DEBUGLOG(mlx5, "qp 0x%x, wrid 0x%lx\n", hw_qp->qp_num, wrid);
+	if (spdk_unlikely(qp->rx_available == 0)) {
+		return -ENOMEM;
+	}
+	if (spdk_unlikely(num_sge > qp->max_recv_sge)) {
+		return -E2BIG;
+	}
+
+	wqe_index = hw_qp->rq_pi++ & (hw_qp->rq_wqe_cnt - 1);
+	qp->rq_completions[wqe_index].wr_id = wrid;
+	dseg = (void *)hw_qp->rq_addr + wqe_index * hw_qp->rq_stride;
+
+	for (i = 0; i < num_sge; i++, dseg++, sge++) {
+		dseg->byte_count	= htobe32(sge->length);
+		dseg->lkey		= htobe32(sge->lkey);
+		dseg->addr		= htobe64(sge->addr);
+	}
+
+	/*
+	 * The receive WQE has a fixed size defined in the create QP command. When num_sge is
+	 * lower than qp->max_recv_sge, the last entries of the data segment are not used.
+	 * Set lkey to MLX5_INVALID_LKEY for the first unused entry to let the HW recognize
+	 * the end of the data segment.
+	 */
+	if (i < qp->max_recv_sge) {
+		dseg->byte_count	= 0;
+		dseg->lkey		= htobe32(MLX5_INVALID_LKEY);
+		dseg->addr		= 0;
+	}
+	qp->rx_available--;
+	mlx5_qp_dump_rq_wqe(qp, wqe_index);
+
+	return 0;
+}
+
+void
+spdk_mlx5_qp_complete_recv(struct spdk_mlx5_qp *qp)
+{
+	mlx5_ring_rx_db(qp);
+}
+
 /* polling start */
 
 static inline void

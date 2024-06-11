@@ -111,6 +111,9 @@ mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 	if (qp->sq_completions) {
 		free(qp->sq_completions);
 	}
+	if (qp->rq_completions) {
+		free(qp->rq_completions);
+	}
 }
 
 static int
@@ -169,6 +172,9 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->hw.dbr_addr = (uint64_t)dv_qp.dbrec;
 	qp->hw.sq_bf_addr = (uint64_t)dv_qp.bf.reg;
 	qp->hw.sq_wqe_cnt = dv_qp.sq.wqe_cnt;
+	qp->hw.rq_addr = (uint64_t)dv_qp.rq.buf;
+	qp->hw.rq_wqe_cnt = dv_qp.rq.wqe_cnt;
+	qp->hw.rq_stride = dv_qp.rq.stride;
 
 	SPDK_NOTICELOG("mlx5 QP, sq size %u WQE_BB. %u send_wrs -> %u WQE_BB per send WR\n",
 		       qp->hw.sq_wqe_cnt, attr->cap.max_send_wr, qp->hw.sq_wqe_cnt / attr->cap.max_send_wr);
@@ -186,6 +192,8 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->hw.sq_tx_db_nc = dv_qp.bf.size == 0;
 	qp->tx_available = qp->hw.sq_wqe_cnt;
 	qp->max_send_sge = attr->cap.max_send_sge;
+	qp->rx_available = qp->hw.rq_wqe_cnt;
+	qp->max_recv_sge = attr->cap.max_recv_sge;
 	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
 	rc = posix_memalign((void **)&qp->sq_completions, 4096,
 			    qp->hw.sq_wqe_cnt * sizeof(*qp->sq_completions));
@@ -194,6 +202,18 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 		SPDK_ERRLOG("Failed to alloc completions\n");
 		return rc;
 	}
+
+	if (qp->hw.rq_wqe_cnt) {
+		rc = posix_memalign((void **)&qp->rq_completions, 4096,
+				    qp->hw.rq_wqe_cnt * sizeof(*qp->rq_completions));
+		if (rc) {
+			free(qp->sq_completions);
+			ibv_destroy_qp(qp->verbs_qp);
+			SPDK_ERRLOG("Failed to alloc RQ completions\n");
+			return rc;
+		}
+	}
+
 	qp->sigmode = SPDK_MLX5_QP_SIG_NONE;
 	if (attr->sigall) {
 		qp->sigmode = SPDK_MLX5_QP_SIG_ALL;

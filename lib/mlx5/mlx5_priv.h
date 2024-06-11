@@ -223,10 +223,25 @@ mlx5_ring_tx_db(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl)
 #endif
 }
 
+static inline void
+mlx5_ring_rx_db(struct spdk_mlx5_qp *qp)
+{
+	/*
+	 * Use cpu barrier to prevent code reordering
+	 */
+	spdk_smp_wmb();
+
+	((uint32_t *)qp->hw.dbr_addr)[MLX5_RCV_DBR] = htobe32(qp->hw.rq_pi);
+
+	spdk_memory_bus_store_fence();
+}
+
 #ifdef DEBUG
 void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
+void mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index);
 #else
 #define mlx5_qp_dump_sq_wqe(...) do { } while (0)
+#define mlx5_qp_dump_rq_wqe(...) do { } while (0)
 #endif
 
 static inline void
