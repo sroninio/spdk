@@ -3367,14 +3367,6 @@ bdev_nvme_submit_accel_crc32c(void *ctx, uint32_t *dst, struct iovec *iov,
 	}
 }
 
-static inline struct spdk_io_channel *
-_bdev_nvme_get_accel_channel(void *ctx)
-{
-	struct nvme_poll_group *group = ctx;
-
-	return bdev_nvme_get_accel_channel(group);
-}
-
 static struct spdk_iobuf_channel *
 bdev_nvme_get_iobuf_ch(void *ctx)
 {
@@ -3474,7 +3466,6 @@ bdev_nvme_append_check_crc32c(void *ctx, void **seq,
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
-	.get_accel_channel	= _bdev_nvme_get_accel_channel,
 	.get_iobuf_channel	= bdev_nvme_get_iobuf_ch,
 	.append_crc32c		= bdev_nvme_append_crc32c,
 	.finish_sequence	= bdev_nvme_finish_sequence,

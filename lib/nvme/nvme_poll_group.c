@@ -26,7 +26,6 @@ spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
 	} \
 
 		SET_FIELD(submit_accel_crc32c);
-		SET_FIELD(get_accel_channel);
 		SET_FIELD(get_iobuf_channel);
 		SET_FIELD(append_crc32c);
 		SET_FIELD(finish_sequence);
@@ -38,7 +37,7 @@ spdk_nvme_poll_group_create(void *ctx, struct spdk_nvme_accel_fn_table *table)
 		SET_FIELD(append_check_crc32c);
 		/* Do not remove this statement, you should always update this statement when you adding a new field,
 		 * and do not forget to add the SET_FIELD statement for your added field. */
-		SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_accel_fn_table) == 88, "Incorrect size");
+		SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_accel_fn_table) == 80, "Incorrect size");
 
 #undef SET_FIELD
 	}

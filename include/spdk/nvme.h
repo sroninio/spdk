@@ -344,9 +344,6 @@ struct spdk_nvme_accel_fn_table {
 	void (*submit_accel_crc32c)(void *ctx, uint32_t *dst, struct iovec *iov,
 				    uint32_t iov_cnt, uint32_t seed, spdk_nvme_accel_completion_cb cb_fn, void *cb_arg);
 
-	/** Get accel IO channel */
-	struct spdk_io_channel *(*get_accel_channel)(void *ctx);
-
 	/** Get iobuf channel */
 	struct spdk_iobuf_channel *(*get_iobuf_channel)(void *io_ctx);
 
