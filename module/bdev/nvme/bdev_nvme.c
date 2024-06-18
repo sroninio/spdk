@@ -3334,30 +3334,18 @@ bdev_nvme_destroy_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 	}
 }
 
-static inline struct spdk_io_channel *
-bdev_nvme_get_accel_channel(struct nvme_poll_group *group)
-{
-	return group->accel_channel;
-}
-
 static void
 bdev_nvme_submit_accel_crc32c(void *ctx, uint32_t *dst, struct iovec *iov,
 			      uint32_t iov_cnt, uint32_t seed,
 			      spdk_nvme_accel_completion_cb cb_fn, void *cb_arg)
 {
-	struct spdk_io_channel *accel_ch;
 	struct nvme_poll_group *group = ctx;
 	int rc;
 
 	assert(cb_fn != NULL);
+	assert(group->accel_channel != NULL);
 
-	accel_ch = bdev_nvme_get_accel_channel(group);
-	if (spdk_unlikely(accel_ch == NULL)) {
-		cb_fn(cb_arg, -ENOMEM);
-		return;
-	}
-
-	rc = spdk_accel_submit_crc32cv(accel_ch, dst, iov, iov_cnt, seed, cb_fn, cb_arg);
+	rc = spdk_accel_submit_crc32cv(group->accel_channel, dst, iov, iov_cnt, seed, cb_fn, cb_arg);
 	if (rc) {
 		/* For the two cases, spdk_accel_submit_crc32cv does not call the user's cb_fn */
 		if (rc == -ENOMEM || rc == -EINVAL) {
@@ -3398,16 +3386,12 @@ bdev_nvme_append_crc32c(void *ctx, void **seq, uint32_t *dst, struct iovec *iovs
 			struct spdk_memory_domain *domain, void *domain_ctx, uint32_t seed,
 			spdk_nvme_accel_step_cb cb_fn, void *cb_arg)
 {
-	struct spdk_io_channel *ch;
 	struct nvme_poll_group *group = ctx;
 
-	ch = bdev_nvme_get_accel_channel(group);
-	if (spdk_unlikely(ch == NULL)) {
-		return -ENOMEM;
-	}
+	assert(group->accel_channel != NULL);
 
-	return spdk_accel_append_crc32c((struct spdk_accel_sequence **)seq, ch, dst, iovs, iovcnt,
-					domain, domain_ctx, seed, cb_fn, cb_arg);
+	return spdk_accel_append_crc32c((struct spdk_accel_sequence **)seq, group->accel_channel,
+					dst, iovs, iovcnt, domain, domain_ctx, seed, cb_fn, cb_arg);
 }
 
 static int
