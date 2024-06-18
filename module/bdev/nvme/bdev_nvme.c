@@ -3429,7 +3429,6 @@ bdev_nvme_append_copy_crc32c(void *ctx, void **seq,
 	struct nvme_poll_group *group = ctx;
 
 	assert(group->accel_channel != NULL);
-	assert(cb_fn != NULL);
 
 	return spdk_accel_append_copy_crc32c((struct spdk_accel_sequence **)seq, group->accel_channel,
 					     dst_crc, dst_iovs, dst_iovcnt, dst_domain, dst_domain_ctx,
@@ -3448,7 +3447,6 @@ bdev_nvme_append_copy(void *ctx, void **seq,
 	struct nvme_poll_group *group = ctx;
 
 	assert(group->accel_channel != NULL);
-	assert(cb_fn != NULL);
 
 	return spdk_accel_append_copy((struct spdk_accel_sequence **)seq, group->accel_channel,
 				      dst_iovs, dst_iovcnt, dst_domain, dst_domain_ctx,
@@ -3467,7 +3465,6 @@ bdev_nvme_append_check_crc32c(void *ctx, void **seq,
 	struct nvme_poll_group *group = ctx;
 
 	assert(group->accel_channel != NULL);
-	assert(cb_fn != NULL);
 
 	return spdk_accel_append_check_crc32c((struct spdk_accel_sequence **)seq, group->accel_channel,
 					      crc, src_iovs, src_iovcnt, src_domain, src_domain_ctx,
