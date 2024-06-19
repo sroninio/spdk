@@ -7274,9 +7274,43 @@ bdev_io_complete_unsubmitted(struct spdk_bdev_io *bdev_io)
 static void bdev_destroy_cb(void *io_device);
 
 static void
+bdev_resubmit_queued_reset(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
+			   struct spdk_io_channel *_ch, void *_ctx)
+{
+	struct spdk_bdev_channel *ch = __io_ch_to_bdev_ch(_ch);
+
+	if (!TAILQ_EMPTY(&ch->queued_resets)) {
+		bdev_channel_start_reset(ch);
+	}
+
+	spdk_bdev_for_each_channel_continue(i, 0);
+}
+
+static void
+bdev_resubmit_queued_reset_done(struct spdk_bdev *bdev, void *_ctx, int status)
+{
+	bool reset_in_progress;
+	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING &&
+	    TAILQ_EMPTY(&bdev->internal.open_descs)) {
+		/* bdev_destroy_cb is called asynchronously
+		 * So, it is safe to unregsiter bdev with lock being held */
+		spdk_spin_lock(&bdev->internal.spinlock);
+		if (!bdev->internal.reset_in_progress) {
+			spdk_io_device_unregister(__bdev_to_io_dev(bdev), bdev_destroy_cb);
+		}
+		spdk_spin_unlock(&bdev->internal.spinlock);
+	}
+}
+
+static void
 bdev_reset_complete(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct spdk_bdev_io *bdev_io = _ctx;
+
+	spdk_spin_lock(&bdev->internal.spinlock);
+	assert(bdev_io == bdev->internal.reset_in_progress);
+	bdev->internal.reset_in_progress = NULL;
+	spdk_spin_unlock(&bdev->internal.spinlock);
 
 	if (bdev_io->u.reset.ch_ref != NULL) {
 		spdk_put_io_channel(bdev_io->u.reset.ch_ref);
@@ -7285,10 +7319,8 @@ bdev_reset_complete(struct spdk_bdev *bdev, void *_ctx, int status)
 
 	bdev_io_complete(bdev_io);
 
-	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING &&
-	    TAILQ_EMPTY(&bdev->internal.open_descs)) {
-		spdk_io_device_unregister(__bdev_to_io_dev(bdev), bdev_destroy_cb);
-	}
+	spdk_bdev_for_each_channel(bdev, bdev_resubmit_queued_reset, bdev,
+				   bdev_resubmit_queued_reset_done);
 }
 
 static void
@@ -7350,7 +7382,6 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 		}
 		spdk_spin_lock(&bdev->internal.spinlock);
 		if (bdev_io == bdev->internal.reset_in_progress) {
-			bdev->internal.reset_in_progress = NULL;
 			unlock_channels = true;
 		}
 		spdk_spin_unlock(&bdev->internal.spinlock);
