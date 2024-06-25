@@ -17,7 +17,8 @@ stages:
         - rpmbuild/
       when: never
     - when: on_success
-  tags: [k8s, linux, x86_64]
+  # tags: [k8s, linux, x86_64]
+  tags: [k8s, mtr-rdma, x86_64]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     GIT_SUBMODULE_DEPTH: 1
@@ -40,7 +41,7 @@ build-job:
     - make -j4
     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
   artifacts:
-    expire_in: 1 week
+    expire_in: 1 day
     paths:
       - ./build
       - ./dpdk/build/
@@ -49,7 +50,7 @@ build-job:
       - ./mk/cc.mk
       - ./include/spdk/config.h
 
-.test-job-tmplate:
+.test-job-vm-template:
   stage: test
   tags: [vm, linux, x86_64, f39]
   needs:
@@ -66,8 +67,28 @@ build-job:
     pre_get_sources_script:
       - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
 
-test-job:
-  extends: .test-job-tmplate
+.test-job-k8s-template:
+  extends: .test-job-vm-template
+  tags: [k8s, mtr-rdma, x86_64]
+  image: "$FEDORA_IMAGE"
+
+test-nvmf-k8s-job:
+  extends: .test-job-k8s-template
+  script:
+    - grep -i huge /proc/meminfo
+    - mount
+    - tar xf .test.tar
+    # Run unit-tests in the container (it works)
+    # - sudo ./test/unit/unittest.sh
+    # Run NVMf/RDMA tests in the container
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
+    # multipath.sh doesn't work in K8s container
+    # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
+
+test-autotest-job:
+  extends: .test-job-vm-template
   tags: [not-crypto, vm, linux, x86_64, f39]
   script:
     - patch -p1 < $HOME/spdk-test-nvme.diff
@@ -75,16 +96,13 @@ test-job:
     - tar xf .test.tar
     # clean up output of autotest from previous runs
     - sudo rm -rf $CI_PROJECT_DIR/../output/
-    - sudo ./test/unit/unittest.sh
     - sudo ./scripts/setup.sh
     - sudo ./test/accel/accel_mlx5.sh
-    # TODO: enable once crypto NIC is available
-    # sudo ./test/accel/accel_mlx5_crypto.sh
-    - sudo ./autotest.sh $HOME/autorun-spdk.conf
+    - sudo ./autotest.sh .ci/autotest-vm.conf
     - sudo chown -R $USER $CI_PROJECT_DIR
 
 test-crypto-job:
-  extends: .test-job-tmplate
+  extends: .test-job-vm-template
   tags: [crypto, vm, linux, x86_64, f39]
   script:
     - patch -p1 < $HOME/spdk-test-nvme.diff
@@ -93,7 +111,6 @@ test-crypto-job:
     # clean up output of autotest from previous runs
     - sudo rm -rf $CI_PROJECT_DIR/../output/
     - sudo ./scripts/setup.sh
-    # TODO: enable once crypto NIC is available
     - sudo ./test/accel/accel_mlx5_crypto.sh
     - sudo chown -R $USER $CI_PROJECT_DIR
 
