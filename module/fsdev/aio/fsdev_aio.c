@@ -24,6 +24,7 @@
 #define DEFAULT_WRITEBACK_CACHE true
 #define DEFAULT_MAX_WRITE 0x00020000
 #define DEFAULT_XATTR_ENABLED false
+#define DEFAULT_SKIP_RW false
 #define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
 
 #ifdef SPDK_CONFIG_HAVE_STRUCT_STAT_ST_ATIM
@@ -101,6 +102,7 @@ struct aio_fsdev {
 	struct spdk_fsdev_file_object *root;
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	bool xattr_enabled;
+	bool skip_rw_enabled;
 };
 
 struct aio_fsdev_io {
@@ -1109,6 +1111,17 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
+	if (vfsdev->skip_rw_enabled) {
+		ssize_t bytes_read = 0;
+		for (int i = 0; i < (int)outcnt; i++, outvec++) {
+			bytes_read += outvec->iov_len;
+		}
+
+		fsdev_io->u_out.read.data_size = bytes_read;
+
+		return 0;
+	}
+
 	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, lo_read_cb, fsdev_io, fhandle->fd, offs, size, outvec,
 					   outcnt);
 	if (vfsdev_io->aio) {
@@ -1166,6 +1179,18 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	if (!incnt || !invec) { /* there should be at least one iovec with data */
 		SPDK_ERRLOG("bad invec: iov=%p cnt=%" PRIu32 "\n", invec, incnt);
 		return -EINVAL;
+	}
+
+	if (vfsdev->skip_rw_enabled) {
+		ssize_t bytes_written = 0;
+
+		for (int i = 0; i < (int)incnt; i++, invec++) {
+			bytes_written += invec->iov_len;
+		}
+
+		fsdev_io->u_out.write.data_size = bytes_written;
+
+		return 0;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, lo_write_cb, fsdev_io,
@@ -2285,6 +2310,7 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_bool(w, "enable_writeback_cache",
 				   !!vfsdev->fsdev.opts.writeback_cache_enabled);
 	spdk_json_write_named_uint32(w, "max_write", vfsdev->fsdev.opts.max_write);
+	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->skip_rw_enabled);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -2511,6 +2537,7 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 	opts->xattr_enabled = DEFAULT_XATTR_ENABLED;
 	opts->writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
 	opts->max_write = DEFAULT_MAX_WRITE;
+	opts->skip_rw_enabled = DEFAULT_SKIP_RW;
 }
 
 int
@@ -2580,12 +2607,14 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->fsdev.opts.writeback_cache_enabled = opts->writeback_cache_enabled;
 	vfsdev->fsdev.opts.max_write = opts->max_write;
 
+	vfsdev->skip_rw_enabled = opts->skip_rw_enabled;
+
 	*fsdev = &(vfsdev->fsdev);
 	TAILQ_INSERT_TAIL(&g_aio_fsdev_head, vfsdev, tailq);
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio filesystem %s (xattr_enabled=%" PRIu8 " writeback_cache=%"
-		      PRIu8 " max_write=%" PRIu32 ")\n",
+		      PRIu8 " max_write=%" PRIu32 " skip_rw=%" PRIu8 ")\n",
 		      vfsdev->fsdev.name, vfsdev->xattr_enabled, vfsdev->fsdev.opts.writeback_cache_enabled,
-		      vfsdev->fsdev.opts.max_write);
+		      vfsdev->fsdev.opts.max_write, vfsdev->skip_rw_enabled);
 	return rc;
 }
 void
