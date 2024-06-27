@@ -147,4 +147,3 @@ code-style-job:
     - apt-get -q update
     - ./scripts/pkgdep.sh --developer-tools
     - ./scripts/check_format.sh
-  allow_failure: true
