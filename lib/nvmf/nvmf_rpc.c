@@ -815,7 +815,7 @@ rpc_listen_address_to_trid(const struct rpc_listen_address *address,
 		return -EINVAL;
 	}
 
-	if (spdk_nvme_transport_id_parse_trtype(&trid->trtype, address->transport)) {
+	if (spdk_nvmf_transport_id_parse_trtype(&trid->trtype, address->transport)) {
 		SPDK_ERRLOG("Invalid transport type: %s\n", address->transport);
 		return -EINVAL;
 	}

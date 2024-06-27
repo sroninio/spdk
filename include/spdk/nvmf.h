@@ -1242,6 +1242,17 @@ spdk_nvme_transport_type_t spdk_nvmf_get_transport_type(struct spdk_nvmf_transpo
 const char *spdk_nvmf_get_transport_name(struct spdk_nvmf_transport *transport);
 
 /**
+ * Parse the string representation of a transport ID transport type.
+ *
+ * \param trtype Output transport type (allocated by caller).
+ * \param str Input string representation of transport type (e.g. "PCIe", "RDMA").
+ *
+ * \return 0 if parsing was successful and trtype is filled out, or negated errno
+ * values on failure.
+ */
+int spdk_nvmf_transport_id_parse_trtype(enum spdk_nvme_transport_type *trtype, const char *str);
+
+/**
  * Function to be called once transport add is complete
  *
  * \param cb_arg Callback argument passed to this function.

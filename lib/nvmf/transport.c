@@ -120,6 +120,35 @@ spdk_nvmf_get_transport_name(struct spdk_nvmf_transport *transport)
 	return transport->ops->name;
 }
 
+int
+spdk_nvmf_transport_id_parse_trtype(enum spdk_nvme_transport_type *trtype, const char *str)
+{
+	if (trtype == NULL || str == NULL) {
+		return -EINVAL;
+	}
+
+	if (strcasecmp(str, "PCIe") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_PCIE;
+	} else if (strcasecmp(str, "RDMA") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_RDMA;
+	} else if (strcasecmp(str, "FC") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_FC;
+	} else if (strcasecmp(str, "TCP") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_TCP;
+	} else if (strcasecmp(str, "VFIOUSER") == 0) {
+		*trtype = SPDK_NVME_TRANSPORT_VFIOUSER;
+	} else {
+		const struct spdk_nvmf_transport_ops *transport_ops = nvmf_get_transport_ops(str);
+
+		if (transport_ops) {
+			*trtype = transport_ops->type;
+		} else {
+			return -ENOENT;
+		}
+	}
+	return 0;
+}
+
 static void
 nvmf_transport_opts_copy(struct spdk_nvmf_transport_opts *opts,
 			 struct spdk_nvmf_transport_opts *opts_src,
