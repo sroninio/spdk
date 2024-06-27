@@ -883,15 +883,20 @@ function waitfornbd() {
 	return 1
 }
 
+# Parameters:
+# $1 - bdev name
+# $2 - timeout (optional)
+# $3 - rpc address (optional)
 function waitforbdev() {
 	local bdev_name=$1
 	local bdev_timeout=$2
+	local rpc_addr="${3:-$DEFAULT_RPC_ADDR}"
 	local i
 	[[ -z ${bdev_timeout:-} ]] && bdev_timeout=2000 # ms
 
 	$rpc_py bdev_wait_for_examine
 
-	if $rpc_py bdev_get_bdevs -b $bdev_name -t $bdev_timeout; then
+	if $rpc_py -s "$rpc_addr" bdev_get_bdevs -b $bdev_name -t $bdev_timeout; then
 		return 0
 	fi
 
