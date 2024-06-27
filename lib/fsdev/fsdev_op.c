@@ -37,7 +37,7 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->internal.usr_cb_arg = usr_cb_arg;
 	fsdev_io->internal.cb_arg = cb_arg;
 	fsdev_io->internal.cb_fn = cb_fn;
-	fsdev_io->internal.status = EIO;
+	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
 
 	return fsdev_io;

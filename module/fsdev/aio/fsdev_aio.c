@@ -308,7 +308,7 @@ file_object_fill_attr(struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_
 
 	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 	if (res == -1) {
-		res = errno;
+		res = -errno;
 		SPDK_ERRLOG("fstatat() failed with %d\n", res);
 		return res;
 	}
@@ -345,7 +345,7 @@ utimensat_empty(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *fobject
 		res = utimensat(fobject->fd, "", tv, AT_EMPTY_PATH);
 		if (res == -1 && errno == EINVAL) {
 			/* Sorry, no race free way to set times on symlink. */
-			res = EPERM;
+			errno = EPERM;
 		}
 	} else {
 		res = utimensat(vfsdev->proc_self_fd, fobject->fd_str, tv, 0);
@@ -363,7 +363,7 @@ lo_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = file_object_fill_attr(fobject, &fsdev_io->u_out.getattr.attr);
@@ -372,7 +372,7 @@ lo_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return res;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "GETATTR succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	SPDK_DEBUGLOG(fsdev_aio, "GETATTR succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 	return 0;
 }
 
@@ -390,19 +390,19 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	fd = openat(fobject->fd, ".", O_RDONLY);
 	if (fd == -1) {
-		error = errno;
+		error = -errno;
 		SPDK_ERRLOG("openat failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
 		goto out_err;
 	}
 
 	fhandle = file_handle_create(fobject, fd);
 	if (fd == -1) {
-		error = ENOMEM;
+		error = -ENOMEM;
 		SPDK_ERRLOG("file_handle_create failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject),
 			    error);
 		goto out_err;
@@ -410,7 +410,7 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	fhandle->dir.dp = fdopendir(fd);
 	if (fhandle->dir.dp == NULL) {
-		error = errno;
+		error = -errno;
 		SPDK_ERRLOG("fdopendir failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
 		goto out_err;
 	}
@@ -418,7 +418,7 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fhandle->dir.offset = 0;
 	fhandle->dir.entry = NULL;
 
-	SPDK_DEBUGLOG(fsdev_aio, "OPENDIR succeded for " FOBJECT_FMT " (fh=%p)\n",
+	SPDK_DEBUGLOG(fsdev_aio, "OPENDIR succeeded for " FOBJECT_FMT " (fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 
 	fsdev_io->u_out.opendir.fhandle = fhandle;
@@ -444,12 +444,12 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	file_handle_delete(fhandle);
@@ -459,7 +459,7 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 * freed pointer and falsely reports "Use of memory after it is freed" here.
 	 */
 #ifndef __clang_analyzer__
-	SPDK_DEBUGLOG(fsdev_aio, "RELEASEDIR succeded for " FOBJECT_FMT " (fh=%p)\n",
+	SPDK_DEBUGLOG(fsdev_aio, "RELEASEDIR succeeded for " FOBJECT_FMT " (fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 #endif
 
@@ -483,7 +483,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fob
 
 	newfd = openat(parent_fobject->fd, name, O_PATH | O_NOFOLLOW);
 	if (newfd == -1) {
-		res = errno;
+		res = -errno;
 		SPDK_DEBUGLOG(fsdev_aio, "openat( " FOBJECT_FMT " %s) failed with %d\n",
 			      FOBJECT_ARGS(parent_fobject), name, res);
 		return res;
@@ -491,7 +491,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fob
 
 	res = fstatat(newfd, "", &stat, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 	if (res == -1) {
-		res = errno;
+		res = -errno;
 		SPDK_ERRLOG("fstatat(%s) failed with %d\n", name, res);
 		close(newfd);
 		return res;
@@ -510,7 +510,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fob
 	if (!fobject) {
 		SPDK_ERRLOG("Cannot create file object\n");
 		close(newfd);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	if (attr) {
@@ -556,7 +556,7 @@ lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 * support.
 	 */
 	if (strchr(name, '/')) {
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	err = lo_do_lookup(vfsdev, parent_fobject, name, &fsdev_io->u_out.lookup.fobject,
@@ -582,12 +582,12 @@ lo_change_cred(const struct lo_cred *new, struct lo_cred *old)
 
 	res = syscall(SYS_setresgid, -1, new->egid, -1);
 	if (res == -1) {
-		return errno;
+		return -errno;
 	}
 
 	res = syscall(SYS_setresuid, -1, new->euid, -1);
 	if (res == -1) {
-		int errno_save = errno;
+		int errno_save = -errno;
 
 		syscall(SYS_setresgid, -1, old->egid, -1);
 		return errno_save;
@@ -623,12 +623,12 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (((off_t)offset) != fhandle->dir.offset) {
@@ -647,7 +647,7 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			fhandle->dir.entry = readdir(fhandle->dir.dp);
 			if (!fhandle->dir.entry) {
 				if (errno) {  /* Error */
-					res = errno;
+					res = -errno;
 					SPDK_ERRLOG("readdir failed with err=%d", res);
 					return res;
 				} else {  /* End of stream */
@@ -696,7 +696,7 @@ skip_entry:
 		fhandle->dir.offset = nextoff;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "READDIR succeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 ")\n",
+	SPDK_DEBUGLOG(fsdev_aio, "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 ")\n",
 		      FOBJECT_ARGS(fobject), fhandle, offset);
 	return 0;
 }
@@ -710,7 +710,7 @@ lo_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	file_object_unref(fobject, nlookup);
@@ -763,14 +763,14 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	flags = update_open_flags(vfsdev, flags);
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, flags & ~O_NOFOLLOW);
 	if (fd == -1) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
 			    vfsdev->proc_self_fd, fobject->fd_str, flags, saverr);
 		return saverr;
@@ -780,12 +780,12 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (!fhandle) {
 		SPDK_ERRLOG("cannot create a file handle (fd=%d)\n", fd);
 		close(fd);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	fsdev_io->u_out.open.fhandle = fhandle;
 
-	SPDK_DEBUGLOG(fsdev_aio, "OPEN succeded for " FOBJECT_FMT " (fh=%p, fd=%d)\n",
+	SPDK_DEBUGLOG(fsdev_aio, "OPEN succeeded for " FOBJECT_FMT " (fh=%p, fd=%d)\n",
 		      FOBJECT_ARGS(fobject), fhandle, fd);
 
 	return 0;
@@ -801,23 +801,23 @@ lo_flush(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = close(dup(fhandle->fd));
 	if (res) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("close(dup(%d)) failed for " FOBJECT_FMT " (fh=%p, err=%d)\n",
 			    fhandle->fd, FOBJECT_ARGS(fobject), fhandle, saverr);
 		return saverr;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "FLUSH succeded for " FOBJECT_FMT " (fh=%p)\n", FOBJECT_ARGS(fobject),
+	SPDK_DEBUGLOG(fsdev_aio, "FLUSH succeeded for " FOBJECT_FMT " (fh=%p)\n", FOBJECT_ARGS(fobject),
 		      fhandle);
 
 	return 0;
@@ -836,7 +836,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (to_set & FSDEV_SET_ATTR_MODE) {
@@ -846,7 +846,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			res = fchmodat(vfsdev->proc_self_fd, fobject->fd_str, attr->mode, 0);
 		}
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 			return saverr;
 		}
@@ -858,7 +858,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("fchownat failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 			return saverr;
 		}
@@ -872,7 +872,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		} else {
 			truncfd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 			if (truncfd < 0) {
-				saverr = errno;
+				saverr = -errno;
 				SPDK_ERRLOG("openat failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 				return saverr;
 			}
@@ -880,12 +880,12 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 		res = ftruncate(truncfd, attr->size);
 		if (!fhandle) {
-			saverr = errno;
+			saverr = -errno;
 			close(truncfd);
 			errno = saverr;
 		}
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("ftruncate failed for " FOBJECT_FMT " (size=%" PRIu64 ")\n", FOBJECT_ARGS(fobject),
 				    attr->size);
 			return saverr;
@@ -920,7 +920,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			res = utimensat_empty(vfsdev, fobject, tv);
 		}
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("futimens/utimensat_empty failed for " FOBJECT_FMT "\n",
 				    FOBJECT_ARGS(fobject));
 			return saverr;
@@ -934,7 +934,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return res;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "SETATTR succeded for " FOBJECT_FMT "\n",
+	SPDK_DEBUGLOG(fsdev_aio, "SETATTR succeeded for " FOBJECT_FMT "\n",
 		      FOBJECT_ARGS(fobject));
 
 	return 0;
@@ -961,14 +961,14 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	UNUSED(umask);
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("CREATE: %s not a safe component\n", name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	err = lo_change_cred(&new_cred, &old_cred);
@@ -980,7 +980,7 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	flags = update_open_flags(vfsdev, flags);
 
 	fd = openat(parent_fobject->fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, mode);
-	err = fd == -1 ? errno : 0;
+	err = fd == -1 ? -errno : 0;
 	lo_restore_cred(&old_cred);
 
 	if (err) {
@@ -999,10 +999,10 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		SPDK_ERRLOG("cannot create a file handle (fd=%d)\n", fd);
 		close(fd);
 		file_object_unref(fobject, 1);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "CREATE: succeded (name=%s " FOBJECT_FMT " fh=%p)\n",
+	SPDK_DEBUGLOG(fsdev_aio, "CREATE: succeeded (name=%s " FOBJECT_FMT " fh=%p)\n",
 		      name, FOBJECT_ARGS(fobject), fhandle);
 
 	fsdev_io->u_out.create.fobject = fobject;
@@ -1020,17 +1020,17 @@ lo_release(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	file_handle_delete(fhandle);
 
-	SPDK_DEBUGLOG(fsdev_aio, "RELEASE succeded for " FOBJECT_FMT " fh=%p)\n",
+	SPDK_DEBUGLOG(fsdev_aio, "RELEASE succeeded for " FOBJECT_FMT " fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 	return 0;
 }
@@ -1069,19 +1069,19 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	UNUSED(flags);
 
 	if (!outcnt || !outvec) {
 		SPDK_ERRLOG("bad outvec: iov=%p outcnt=%" PRIu32 "\n", outvec, outcnt);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, lo_read_cb, fsdev_io, fhandle->fd, offs, size, outvec,
@@ -1128,19 +1128,19 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	UNUSED(flags);
 
 	if (!incnt || !invec) { /* there should be at least one iovec with data */
 		SPDK_ERRLOG("bad invec: iov=%p cnt=%" PRIu32 "\n", invec, incnt);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, lo_write_cb, fsdev_io,
@@ -1163,18 +1163,18 @@ lo_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	buf = malloc(PATH_MAX + 1);
 	if (!buf) {
 		SPDK_ERRLOG("malloc(%zu) failed\n", (size_t)(PATH_MAX + 1));
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	res = readlinkat(fobject->fd, "", buf, PATH_MAX + 1);
 	if (res == -1) {
-		int saverr = errno;
+		int saverr = -errno;
 		SPDK_ERRLOG("readlinkat failed for " FOBJECT_FMT " with %d\n",
 			    FOBJECT_ARGS(fobject), saverr);
 		free(buf);
@@ -1184,7 +1184,7 @@ lo_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (((uint32_t)res) == PATH_MAX + 1) {
 		SPDK_ERRLOG("buffer is too short\n");
 		free(buf);
-		return ENAMETOOLONG;
+		return -ENAMETOOLONG;
 	}
 
 	buf[res] = 0;
@@ -1203,12 +1203,12 @@ lo_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = fstatvfs(fobject->fd, &stbuf);
 	if (res == -1) {
-		int saverr = errno;
+		int saverr = -errno;
 		SPDK_ERRLOG("fstatvfs failed with %d\n", saverr);
 		return saverr;
 	}
@@ -1240,12 +1240,12 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_object *
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s isn'h safe\n", name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = lo_change_cred(&new_cred, &old_cred);
@@ -1266,7 +1266,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_object *
 	} else {
 		res = mknodat(parent_fobject->fd, name, mode, rdev);
 	}
-	saverr = errno;
+	saverr = -errno;
 
 	lo_restore_cred(&old_cred);
 
@@ -1337,23 +1337,23 @@ lo_do_unlink(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fob
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s isn't safe\n", name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = lo_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
-		return EIO;
+		return -EIO;
 	}
 
 	res = unlinkat(parent_fobject->fd, name, is_dir ? AT_REMOVEDIR : 0);
 	if (res) {
-		res = errno;
+		res = -errno;
 		SPDK_WARNLOG("unlinkat(" FOBJECT_FMT " %s) failed (err=%d)\n",
 			     FOBJECT_ARGS(parent_fobject), name, res);
 	}
@@ -1397,50 +1397,50 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, new_parent_fobject)) {
 		SPDK_ERRLOG("Invalid new_parent_fobject: %p\n", new_parent_fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("name '%s' isn't safe\n", name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!is_safe_path_component(new_name)) {
 		SPDK_ERRLOG("newname '%s' isn't safe\n", new_name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = lo_do_lookup(vfsdev, parent_fobject, name, &old_fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
-		return EIO;
+		return -EIO;
 	}
 
 	saverr = 0;
 	if (flags) {
 #ifndef SYS_renameat2
 		SPDK_ERRLOG("flags are not supported\n");
-		return ENOTSUP;
+		return -ENOTSUP;
 #else
 		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
 			      new_name, flags);
 		if (res == -1 && errno == ENOSYS) {
 			SPDK_ERRLOG("SYS_renameat2 returned ENOSYS\n");
-			saverr = EINVAL;
+			saverr = -EINVAL;
 		} else if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("SYS_renameat2 failed (err=%d))\n", saverr);
 		}
 #endif
 	} else {
 		res = renameat(parent_fobject->fd, name, new_parent_fobject->fd, new_name);
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("renameat failed (err=%d)\n", saverr);
 		}
 	}
@@ -1460,7 +1460,7 @@ linkat_empty_nofollow(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *f
 		res = linkat(fobject->fd, "", dfd, name, AT_EMPTY_PATH);
 		if (res == -1 && (errno == ENOENT || errno == EINVAL)) {
 			/* Sorry, no race free way to hard-link a symlink. */
-			res = EPERM;
+			errno = EPERM;
 		}
 	} else {
 		res = linkat(vfsdev->proc_self_fd, fobject->fd_str, dfd, name, AT_SYMLINK_FOLLOW);
@@ -1481,17 +1481,17 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s is not a safe component\n", name);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = linkat_empty_nofollow(vfsdev, fobject, new_parent_fobject->fd, name);
 	if (res == -1) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("linkat_empty_nofollow failed " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s (err=%d)\n",
 			    FOBJECT_ARGS(fobject), FOBJECT_ARGS(new_parent_fobject), name, saverr);
 		return saverr;
@@ -1499,7 +1499,7 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	res = file_object_fill_attr(fobject, &fsdev_io->u_out.link.attr);
 	if (res == -1) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("file_object_fill_attr failed for " FOBJECT_FMT " (err=%d)\n",
 			    FOBJECT_ARGS(fobject), saverr);
 		return saverr;
@@ -1525,19 +1525,19 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fhandle) {
 		res = asprintf(&buf, "%i", fobject->fd);
 		if (res == -1) {
-			saverr = errno;
+			saverr = -errno;
 			SPDK_ERRLOG("asprintf failed (errno=%d)\n", saverr);
 			return saverr;
 		}
 
 		fd = openat(vfsdev->proc_self_fd, buf, O_RDWR);
-		saverr = errno;
+		saverr = -errno;
 		free(buf);
 		if (fd == -1) {
 			SPDK_ERRLOG("openat failed (errno=%d)\n", saverr);
@@ -1553,7 +1553,7 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = fsync(fd);
 	}
 
-	saverr = errno;
+	saverr = -errno;
 	if (!fhandle) {
 		close(fd);
 	}
@@ -1575,28 +1575,28 @@ static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return ENOSYS;
+	return -ENOSYS;
 }
 
 static int
 lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return ENOSYS;
+	return -ENOSYS;
 }
 
 static int
 lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return ENOSYS;
+	return -ENOSYS;
 }
 
 static int
 lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return ENOSYS;
+	return -ENOSYS;
 }
 #else
 static int
@@ -1614,32 +1614,32 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!vfsdev->xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
-		return ENOSYS;
+		return -ENOSYS;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to removexattr on symlink. */
 		SPDK_ERRLOG("cannot set xattr for symlink\n");
-		return EPERM;
+		return -EPERM;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 	if (fd < 0) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
 		return saverr;
 	}
 
 	ret = fsetxattr(fd, name, value, size, flags);
-	saverr = errno;
+	saverr = -errno;
 	close(fd);
 	if (ret == -1) {
-		if (saverr == ENOTSUP) {
+		if (saverr == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "flistxattr: extended attributes are not supported or disabled\n");
 		} else {
 			SPDK_ERRLOG("flistxattr failed with errno=%d\n", saverr);
@@ -1668,34 +1668,34 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!vfsdev->xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
-		return ENOSYS;
+		return -ENOSYS;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to getxattr on symlink. */
 		SPDK_ERRLOG("cannot get xattr for symlink\n");
-		return EPERM;
+		return -EPERM;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 	if (fd < 0) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
 		return saverr;
 	}
 
 	ret = fgetxattr(fd, name, buffer, size);
-	saverr = errno;
+	saverr = -errno;
 	close(fd);
 	if (ret == -1) {
-		if (saverr == ENODATA) {
+		if (saverr == -ENODATA) {
 			SPDK_INFOLOG(fsdev_aio, "fgetxattr: no extended attribute '%s' found\n", name);
-		} else if (saverr == ENOTSUP) {
+		} else if (saverr == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "fgetxattr: extended attributes are not supported or disabled\n");
 		} else {
 			SPDK_ERRLOG("fgetxattr failed with errno=%d\n", saverr);
@@ -1725,32 +1725,32 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!vfsdev->xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
-		return ENOSYS;
+		return -ENOSYS;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to listxattr on symlink. */
 		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		return EPERM;
+		return -EPERM;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd < 0) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
 		return saverr;
 	}
 
 	ret = flistxattr(fd, buffer, size);
-	saverr = errno;
+	saverr = -errno;
 	close(fd);
 	if (ret == -1) {
-		if (saverr == ENOTSUP) {
+		if (saverr == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "flistxattr: extended attributes are not supported or disabled\n");
 		} else {
 			SPDK_ERRLOG("flistxattr failed with errno=%d\n", saverr);
@@ -1779,34 +1779,34 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!vfsdev->xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
-		return ENOSYS;
+		return -ENOSYS;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to setxattr on symlink. */
 		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		return EPERM;
+		return -EPERM;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd < 0) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
 		return saverr;
 	}
 
 	ret = fremovexattr(fd, name);
-	saverr = errno;
+	saverr = -errno;
 	close(fd);
 	if (ret == -1) {
-		if (saverr == ENODATA) {
+		if (saverr == -ENODATA) {
 			SPDK_INFOLOG(fsdev_aio, "fremovexattr: no extended attribute '%s' found\n", name);
-		} else if (saverr == ENOTSUP) {
+		} else if (saverr == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "fremovexattr: extended attributes are not supported or disabled\n");
 		} else {
 			SPDK_ERRLOG("fremovexattr failed with errno=%d\n", saverr);
@@ -1833,12 +1833,12 @@ lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (datasync) {
@@ -1848,7 +1848,7 @@ lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	if (res == -1) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("%s failed for fh=%p with err=%d\n",
 			    datasync ? "fdatasync" : "fsync", fhandle, saverr);
 		return saverr;
@@ -1872,17 +1872,17 @@ lo_flock(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = flock(fhandle->fd, operation | LOCK_NB);
 	if (res == -1) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("flock failed for fh=%p with err=%d\n", fhandle, saverr);
 		return saverr;
 	}
@@ -1906,17 +1906,17 @@ lo_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (mode) {
 		SPDK_ERRLOG("non-zero mode is not suppored\n");
-		return EOPNOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	err = posix_fallocate(fhandle->fd, offset, length);
@@ -1949,27 +1949,27 @@ lo_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject_in)) {
 		SPDK_ERRLOG("Invalid fobject_in: %p\n", fobject_in);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle_in)) {
 		SPDK_ERRLOG("Invalid fhandle_in: %p\n", fhandle_in);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject_out)) {
 		SPDK_ERRLOG("Invalid fobject_out: %p\n", fobject_out);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle_out)) {
 		SPDK_ERRLOG("Invalid fhandle_out: %p\n", fhandle_out);
-		return EINVAL;
+		return -EINVAL;
 	}
 
 	res = copy_file_range(fhandle_in->fd, &off_in, fhandle_out->fd, &off_out, len, flags);
 	if (res < 0) {
-		saverr = errno;
+		saverr = -errno;
 		SPDK_ERRLOG("copy_file_range failed with err=%d\n", saverr);
 		return saverr;
 	}
@@ -1982,7 +1982,7 @@ lo_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	return 0;
 #else
-	return ENOSYS;
+	return -ENOSYS;
 #endif
 }
 
@@ -2023,7 +2023,7 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 	ch->mgr = spdk_aio_mgr_create(MAX_AIOS);
 	if (!ch->mgr) {
 		SPDK_ERRLOG("aoi manager init for failed (thread=%s)\n", spdk_thread_get_name(thread));
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll, ch, 0);
@@ -2424,14 +2424,14 @@ setup_root(struct aio_fsdev *vfsdev)
 
 	fd = open(vfsdev->root_path, O_PATH);
 	if (fd == -1) {
-		res = errno;
+		res = -errno;
 		SPDK_ERRLOG("Cannot open root %s (err=%d)\n", vfsdev->root_path, res);
 		return res;
 	}
 
 	res = fstatat(fd, "", &stat, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 	if (res == -1) {
-		res = errno;
+		res = -errno;
 		SPDK_ERRLOG("Cannot get root fstatat of %s (err=%d)\n", vfsdev->root_path, res);
 		close(fd);
 		return res;
@@ -2441,7 +2441,7 @@ setup_root(struct aio_fsdev *vfsdev)
 	if (!vfsdev->root) {
 		SPDK_ERRLOG("Cannot alloc root\n");
 		close(fd);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	SPDK_INFOLOG(fsdev_aio, "root (%s) fd=%d\n", vfsdev->root_path, fd);
@@ -2453,7 +2453,7 @@ setup_proc_self_fd(struct aio_fsdev *vfsdev)
 {
 	vfsdev->proc_self_fd = open("/proc/self/fd", O_PATH);
 	if (vfsdev->proc_self_fd == -1) {
-		int saverr =  errno;
+		int saverr = -errno;
 		SPDK_ERRLOG("Failed to open procfs fd dir with %d\n", saverr);
 		return saverr;
 	}
@@ -2473,7 +2473,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev = calloc(1, sizeof(*vfsdev));
 	if (!vfsdev) {
 		SPDK_ERRLOG("Could not allocate aio_fsdev\n");
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	vfsdev->proc_self_fd = -1;
@@ -2482,14 +2482,14 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	if (!vfsdev->fsdev.name) {
 		SPDK_ERRLOG("Could not strdup fsdev name: %s\n", name);
 		fsdev_aio_free(vfsdev);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	vfsdev->root_path = strdup(root_path);
 	if (!vfsdev->root_path) {
 		SPDK_ERRLOG("Could not strdup root path: %s\n", root_path);
 		fsdev_aio_free(vfsdev);
-		return ENOMEM;
+		return -ENOMEM;
 	}
 
 	rc = setup_root(vfsdev);
