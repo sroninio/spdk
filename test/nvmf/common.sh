@@ -90,7 +90,7 @@ function get_available_rdma_ips() {
 function get_rdma_if_list() {
 	local net_dev rxe_net_dev rxe_net_devs
 
-	if [ -n "$CI_DUT_IFACE"  -a -e "/sys/class/net/$CI_DUT_IFACE" ] ; then
+	if [ -n "$CI_DUT_IFACE" ] && [ -e "/sys/class/net/$CI_DUT_IFACE" ]; then
 		echo "$CI_DUT_IFACE"
 		return 0
 	else
@@ -428,7 +428,7 @@ prepare_net_devs() {
 		fi
 		return 0
 	elif [[ $NET_TYPE == phy ]]; then
-		if [ -n "$CI_DUT_IFACE" -a -e "/sys/class/net/$CI_DUT_IFACE" ] ; then
+		if [ -n "$CI_DUT_IFACE" ] && [ -e "/sys/class/net/$CI_DUT_IFACE" ]; then
 			return 0
 		fi
 		echo "ERROR: No supported devices were found, cannot run the $TEST_TRANSPORT test"

@@ -38,7 +38,7 @@ resolve_mod() {
 
 	if aliases=($(modprobe -R "$mod")); then
 		echo "${aliases[0]}"
-	elif [ "$mod" == "pci:v000015B3d0000101Bsv000015B3sd00000012bc02sc07i00" ] ; then
+	elif [ "$mod" == "pci:v000015B3d0000101Bsv000015B3sd00000012bc02sc07i00" ]; then
 		# rome01 cat /sys/bus/pci/devices/0000:a1:00.0/modalias
 		echo "mlx5_core"
 	else
