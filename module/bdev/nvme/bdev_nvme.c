@@ -3447,6 +3447,24 @@ bdev_nvme_append_check_crc32c(void *ctx, void **seq,
 					      seed, cb_fn, cb_arg);
 }
 
+static int
+bdev_nvme_append_copy_check_crc32c(void *ctx, void **seq,
+				   uint32_t *crc, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+				   struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				   struct iovec *src_iovs, uint32_t src_iovcnt,
+				   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				   uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct nvme_poll_group *group = ctx;
+
+	assert(group->accel_channel != NULL);
+
+	return spdk_accel_append_copy_check_crc32c((struct spdk_accel_sequence **)seq, group->accel_channel,
+			crc, dst_iovs, dst_iovcnt, dst_domain, dst_domain_ctx,
+			src_iovs, src_iovcnt, src_domain, src_domain_ctx,
+			seed, cb_fn, cb_arg);
+}
+
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
@@ -3457,7 +3475,8 @@ static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.abort_sequence		= bdev_nvme_abort_sequence,
 	.append_copy_crc32c	= bdev_nvme_append_copy_crc32c,
 	.append_copy		= bdev_nvme_append_copy,
-	.append_check_crc32c	= bdev_nvme_append_check_crc32c
+	.append_check_crc32c	= bdev_nvme_append_check_crc32c,
+	.append_copy_check_crc32c	= bdev_nvme_append_copy_check_crc32c
 };
 
 static int
