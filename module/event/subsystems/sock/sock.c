@@ -7,6 +7,7 @@
 #include "spdk/stdinc.h"
 #include "spdk/sock.h"
 #include "spdk_internal/init.h"
+#include "spdk/config.h"
 
 static void
 sock_subsystem_init(void)
@@ -35,3 +36,6 @@ static struct spdk_subsystem g_spdk_subsystem_sock = {
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_sock);
+#ifdef SPDK_CONFIG_XLIO
+SPDK_SUBSYSTEM_DEPEND(sock, xlio);
+#endif

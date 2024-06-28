@@ -196,6 +196,10 @@ DEPDIRS-event_iscsi := init iscsi event_scheduler event_scsi event_sock
 DEPDIRS-event_vhost_blk := init vhost
 DEPDIRS-event_vhost_scsi := init vhost event_scheduler event_scsi
 DEPDIRS-event_sock := init sock
+ifeq ($(CONFIG_XLIO),y)
+DEPDIRS-event_sock += event_xlio
+DEPDIRS-event_xlio := init log util xlio
+endif
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_fsdev := init fsdev

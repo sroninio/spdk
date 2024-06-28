@@ -15,7 +15,6 @@ enum {
 	IOCTL_USER_ALLOC_TX_ZC = (1 << 2)
 };
 
-static bool g_initialized;
 #ifndef SPDK_CONFIG_STATIC_XLIO
 struct spdk_sock_xlio_ops g_xlio_ops;
 struct xlio_api_t *g_xlio_api;
@@ -160,11 +159,6 @@ spdk_xlio_init(void)
 	uint64_t required_caps;
 #endif
 
-	if (g_initialized) {
-		SPDK_ERRLOG("XLIO already initialized\n");
-		return -1;
-	}
-
 #ifndef SPDK_CONFIG_STATIC_XLIO
 	static_assert((sizeof(uint8_t) + sizeof(uintptr_t) +
 		       sizeof(uintptr_t)) == sizeof(data),
@@ -221,20 +215,14 @@ spdk_xlio_init(void)
 		return -1;
 	}
 
-	g_initialized = true;
 	return rc;
 }
 
 void
 spdk_xlio_fini(void)
 {
-	if (g_initialized) {
 #ifndef SPDK_CONFIG_STATIC_XLIO
-		xlio_unload();
-		g_xlio_api = NULL;
+	xlio_unload();
+	g_xlio_api = NULL;
 #endif
-		g_initialized = false;
-	} else {
-		SPDK_NOTICELOG("XLIO is not initialized\n");
-	}
 }

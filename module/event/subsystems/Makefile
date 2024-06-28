@@ -15,6 +15,8 @@ DIRS-y += ublk
 endif
 endif
 
+DIRS-$(CONFIG_XLIO) += xlio
+
 DIRS-$(CONFIG_VHOST) += vhost_blk vhost_scsi
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
 
@@ -30,6 +32,9 @@ DEPDIRS-ublk := bdev
 DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost_scsi := scsi
+ifeq ($(CONFIG_XLIO),y)
+DEPDIRS-sock := xlio
+endif
 
 .PHONY: all clean $(DIRS-y)
 

@@ -2149,16 +2149,13 @@ static void
 __attribute__((constructor))
 spdk_net_impl_register_xlio(void)
 {
-	if (spdk_xlio_init() == 0) {
-		spdk_net_impl_register(&g_xlio_net_impl, DEFAULT_SOCK_PRIORITY - 1);
-	}
+	spdk_net_impl_register(&g_xlio_net_impl, DEFAULT_SOCK_PRIORITY - 1);
 }
 
 static void
 __attribute__((destructor))
 spdk_net_impl_unregister_xlio(void)
 {
-	spdk_xlio_fini();
 	xlio_sock_free_pools();
 }
 
