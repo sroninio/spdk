@@ -454,6 +454,8 @@ static void claim_reset(struct spdk_bdev *bdev);
 
 static void bdev_ch_retry_io(struct spdk_bdev_channel *bdev_ch);
 
+static bool bdev_io_should_split(struct spdk_bdev_io *bdev_io);
+
 #define bdev_get_ext_io_opt(opts, field, defval) \
 	(((opts) != NULL && offsetof(struct spdk_bdev_ext_io_opts, field) + \
 	 sizeof((opts)->field) <= (opts)->size) ? (opts)->field : (defval))
@@ -1375,6 +1377,8 @@ _bdev_io_pull_bounce_data_buf(struct spdk_bdev_io *bdev_io, void *buf, size_t le
 	/* set bounce buffer for this operation */
 	bdev_io->u.bdev.iovs[0].iov_base = buf;
 	bdev_io->u.bdev.iovs[0].iov_len = len;
+	/* Now we use 1 iov, split condition could have been changed */
+	bdev_io->internal.split = bdev_io_should_split(bdev_io);
 
 	if (spdk_unlikely(!TAILQ_EMPTY(&shared_resource->nomem_io))) {
 		bdev_queue_nomem_io_tail(shared_resource, bdev_io, BDEV_IO_RETRY_STATE_PULL);
@@ -7289,7 +7293,6 @@ bdev_resubmit_queued_reset(struct spdk_bdev_channel_iter *i, struct spdk_bdev *b
 static void
 bdev_resubmit_queued_reset_done(struct spdk_bdev *bdev, void *_ctx, int status)
 {
-	bool reset_in_progress;
 	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING &&
 	    TAILQ_EMPTY(&bdev->internal.open_descs)) {
 		/* bdev_destroy_cb is called asynchronously
