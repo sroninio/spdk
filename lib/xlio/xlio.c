@@ -9,12 +9,6 @@
 
 #define DEFAULT_XLIO_PATH "libxlio.so"
 
-enum {
-	IOCTL_USER_ALLOC_TX = (1 << 0),
-	IOCTL_USER_ALLOC_RX = (1 << 1),
-	IOCTL_USER_ALLOC_TX_ZC = (1 << 2)
-};
-
 #ifndef SPDK_CONFIG_STATIC_XLIO
 struct spdk_sock_xlio_ops g_xlio_ops;
 struct xlio_api_t *g_xlio_api;
@@ -146,23 +140,14 @@ int
 spdk_xlio_init(void)
 {
 	int rc;
-#pragma pack(push, 1)
-	struct {
-		uint8_t flags;
-		void *(*alloc_func)(size_t);
-		void (*free_func)(void *);
-	} data;
-#pragma pack(pop)
-	struct cmsghdr *cmsg;
-	char cbuf[CMSG_SPACE(sizeof(data))];
-#ifndef SPDK_CONFIG_STATIC_XLIO
-	uint64_t required_caps;
-#endif
+	struct xlio_init_attr iattr = {
+		.flags = 0,
+		.memory_alloc = &spdk_xlio_alloc,
+		.memory_free = &spdk_xlio_free,
+	};
 
 #ifndef SPDK_CONFIG_STATIC_XLIO
-	static_assert((sizeof(uint8_t) + sizeof(uintptr_t) +
-		       sizeof(uintptr_t)) == sizeof(data),
-		      "wrong xlio ioctl data size.");
+	uint64_t required_caps;
 
 	/* Before init, g_xlio_api must be NULL */
 	assert(g_xlio_api == NULL);
@@ -184,35 +169,16 @@ spdk_xlio_init(void)
 		return -1;
 	}
 
-	required_caps = XLIO_EXTRA_API_GET_SOCKET_RINGS_FDS |
-			XLIO_EXTRA_API_SOCKETXTREME_POLL |
-			XLIO_EXTRA_API_SOCKETXTREME_FREE_PACKETS |
-			XLIO_EXTRA_API_IOCTL;
+	required_caps = XLIO_EXTRA_API_XLIO_SOCKET;
 	if ((g_xlio_api->cap_mask & required_caps) != required_caps) {
 		SPDK_ERRLOG("Required XLIO caps are missing: required %" PRIx64 ", got %" PRIx64 "\n",
 			    required_caps, g_xlio_api->cap_mask);
 		return -1;
 	}
-#else
-	rc = xlio_init();
-	if (rc) {
-		SPDK_ERRLOG("xlio_init rc %d (errno=%d)\n", rc, errno);
-	}
 #endif
-
-	cmsg = (struct cmsghdr *)cbuf;
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = CMSG_XLIO_IOCTL_USER_ALLOC;
-	cmsg->cmsg_len = CMSG_LEN(sizeof(data));
-	data.flags = IOCTL_USER_ALLOC_RX;
-	data.alloc_func = spdk_xlio_alloc;
-	data.free_func = spdk_xlio_free;
-	memcpy(CMSG_DATA(cmsg), &data, sizeof(data));
-
-	rc = xlio_extra_ioctl(cmsg, cmsg->cmsg_len);
-	if (rc < 0) {
-		SPDK_ERRLOG("xlio_extra_ioctl rc %d (errno=%d)\n", rc, errno);
-		return -1;
+	rc = xlio_init_ex(&iattr);
+	if (rc) {
+		SPDK_ERRLOG("xlio_init_ex rc %d (errno=%d)\n", rc, errno);
 	}
 
 	return rc;
@@ -224,5 +190,8 @@ spdk_xlio_fini(void)
 #ifndef SPDK_CONFIG_STATIC_XLIO
 	xlio_unload();
 	g_xlio_api = NULL;
+#else
+	/* FIXME: call xlio_exit may cause memory corruption */
+	/** xlio_exit(); */
 #endif
 }

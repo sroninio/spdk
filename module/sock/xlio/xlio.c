@@ -2066,53 +2066,6 @@ xlio_sock_group_impl_get_optimal(struct spdk_sock *_sock, struct spdk_sock_group
 	return NULL;
 }
 
-
-static void
-create_dummy_socket(void *arg1, void *arg2)
-{
-	char *if_name = arg1;
-	int fd;
-	int rc;
-
-	SPDK_NOTICELOG("Create dummy XLIO socket, core %u\n", spdk_env_get_current_core());
-	fd = xlio_socket(AF_INET, SOCK_STREAM, 0);
-	SPDK_NOTICELOG("Create done dummy XLIO socket %d, core %u\n", fd, spdk_env_get_current_core());
-	if (if_name) {
-		rc = xlio_setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, if_name, strlen(if_name) + 1);
-		SPDK_NOTICELOG("Bound dummy XLIO socket %d to device %s, rc %d, core %u\n",
-			       fd, if_name, rc, spdk_env_get_current_core());
-	}
-}
-
-static void
-create_dummy_sockets_done(void *arg1, void *arg2)
-{
-	SPDK_NOTICELOG("Create dummy XLIO sockets done, core %u\n", spdk_env_get_current_core());
-}
-
-static int
-xlio_sock_impl_init(void)
-{
-	char *pre_init_if = getenv("SPDK_XLIO_PRE_INIT_INTERFACE");
-
-	if (!g_spdk_xlio_sock_impl_opts.enable_early_init) {
-		return 0;
-	}
-
-	if (pre_init_if) {
-		/* Create dummy socket on each core to initialize XLIO internals and create rings */
-		spdk_for_each_reactor(create_dummy_socket, pre_init_if, NULL, create_dummy_sockets_done);
-	} else {
-		/* If no interface is given, it is enough to create one dummy socket to initialize XLIO.
-		 * Rings are not created in this case.
-		 */
-		create_dummy_socket(NULL, NULL);
-	}
-
-	SPDK_NOTICELOG("Initialized XLIO socket implementation\n");
-	return 0;
-}
-
 static struct spdk_net_impl g_xlio_net_impl = {
 	.name		= "xlio",
 	.getaddr	= xlio_sock_getaddr,
@@ -2142,7 +2095,6 @@ static struct spdk_net_impl g_xlio_net_impl = {
 	.get_caps	= xlio_sock_get_caps,
 	.recv_zcopy	= xlio_sock_recv_zcopy,
 	.free_bufs	= xlio_sock_free_bufs,
-	.init		= xlio_sock_impl_init,
 };
 
 static void

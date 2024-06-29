@@ -58,6 +58,27 @@ struct spdk_sock_xlio_ops {
 			   struct addrinfo **restrict res);
 	void (*freeaddrinfo)(struct addrinfo *res);
 	const char *(*gai_strerror)(int errcode);
+	int (*xlio_init_ex)(const struct xlio_init_attr *attr);
+	int (*xlio_poll_group_create)(const struct xlio_poll_group_attr *attr,
+				      xlio_poll_group_t *group_out);
+	int (*xlio_poll_group_destroy)(xlio_poll_group_t group);
+	void (*xlio_poll_group_poll)(xlio_poll_group_t group);
+	int (*xlio_socket_create)(const struct xlio_socket_attr *attr, xlio_socket_t *sock_out);
+	int (*xlio_socket_destroy)(xlio_socket_t sock);
+	int (*xlio_socket_setsockopt)(xlio_socket_t sock, int level, int optname, const void *optval,
+				      socklen_t optlen);
+	int (*xlio_socket_bind)(xlio_socket_t sock, const struct sockaddr *addr, socklen_t addrlen);
+	int (*xlio_socket_connect)(xlio_socket_t sock, const struct sockaddr *to, socklen_t tolen);
+	struct ibv_pd *(*xlio_socket_get_pd)(xlio_socket_t sock);
+	int (*xlio_socket_send)(xlio_socket_t sock, const void *data, size_t len,
+				const struct xlio_socket_send_attr *attr);
+	int (*xlio_socket_sendv)(xlio_socket_t sock, const struct iovec *iov, unsigned iovcnt,
+				 const struct xlio_socket_send_attr *attr);
+	void (*xlio_poll_group_flush)(xlio_poll_group_t group);
+	void (*xlio_socket_flush)(xlio_socket_t sock);
+	void (*xlio_socket_buf_free)(xlio_socket_t sock, struct xlio_buf *buf);
+	void (*xlio_poll_group_buf_free)(xlio_poll_group_t group, struct xlio_buf *buf);
+
 };
 
 extern struct spdk_sock_xlio_ops g_xlio_ops;
@@ -87,6 +108,22 @@ extern struct xlio_api_t *g_xlio_api;
 #define xlio_socketxtreme_free_packets(...) g_xlio_api->socketxtreme_free_packets(__VA_ARGS__)
 #define xlio_get_socket_rings_fds(...) g_xlio_api->get_socket_rings_fds(__VA_ARGS__)
 #define xlio_extra_ioctl(...) g_xlio_api->ioctl(__VA_ARGS__)
+#define xlio_init_ex(...) g_xlio_api->xlio_init_ex(__VA_ARGS__)
+#define xlio_poll_group_create(...) g_xlio_api->xlio_poll_group_create(__VA_ARGS__)
+#define xlio_poll_group_destroy(...) g_xlio_api->xlio_poll_group_destroy(__VA_ARGS__)
+#define xlio_poll_group_poll(...) g_xlio_api->xlio_poll_group_poll(__VA_ARGS__)
+#define xlio_socket_create(...) g_xlio_api->xlio_socket_create(__VA_ARGS__)
+#define xlio_socket_destroy(...) g_xlio_api->xlio_socket_destroy(__VA_ARGS__)
+#define xlio_socket_setsockopt(...) g_xlio_api->xlio_socket_setsockopt(__VA_ARGS__)
+#define xlio_socket_bind(...) g_xlio_api->xlio_socket_bind(__VA_ARGS__)
+#define xlio_socket_connect(...) g_xlio_api->xlio_socket_connect(__VA_ARGS__)
+#define xlio_socket_get_pd(...) g_xlio_api->xlio_socket_get_pd(__VA_ARGS__)
+#define xlio_socket_send(...) g_xlio_api->xlio_socket_send(__VA_ARGS__)
+#define xlio_socket_sendv(...) g_xlio_api->xlio_socket_sendv(__VA_ARGS__)
+#define xlio_poll_group_flush(...) g_xlio_api->xlio_poll_group_flush(__VA_ARGS__)
+#define xlio_socket_flush(...) g_xlio_api->xlio_socket_flush(__VA_ARGS__)
+#define xlio_socket_buf_free(...) g_xlio_api->xlio_socket_buf_free(__VA_ARGS__)
+#define xlio_poll_group_buf_free(...) g_xlio_api->xlio_poll_group_buf_free(__VA_ARGS__)
 
 #endif
 
