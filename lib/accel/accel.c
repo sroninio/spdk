@@ -2340,6 +2340,7 @@ accel_task_set_dstbuf(struct spdk_accel_task *task, struct spdk_accel_task *next
 		task->dst_domain_ctx = next->dst_domain_ctx;
 		break;
 	case SPDK_ACCEL_OPC_CRC32C:
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		/* crc32 is special, because it doesn't have a dst buffer */
 		if (task->src_domain != next->src_domain) {
 			return false;
@@ -2376,7 +2377,8 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 
 	switch (task->op_code) {
 	case SPDK_ACCEL_OPC_COPY:
-		if (next->op_code == SPDK_ACCEL_OPC_CRC32C) {
+		if (next->op_code == SPDK_ACCEL_OPC_CRC32C ||
+		    next->op_code == SPDK_ACCEL_OPC_CHECK_CRC32C) {
 			if (task->dst_domain != next->src_domain) {
 				break;
 			}
@@ -2389,8 +2391,9 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 			}
 
 			/* Copy followed by CRC is special because the framework actually has a dedicated
-			 * COPY_CRC32C operation. */
-			task->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
+			 * COPY_CRC32C and COPY_CHECK_CRC32C operations. */
+			task->op_code = (next->op_code == SPDK_ACCEL_OPC_CRC32C) ?
+					SPDK_ACCEL_OPC_COPY_CRC32C : SPDK_ACCEL_OPC_COPY_CHECK_CRC32C;;
 			task->crc_dst = next->crc_dst;
 			task->seed = next->seed;
 
@@ -2429,7 +2432,6 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 	case SPDK_ACCEL_OPC_FILL:
 	case SPDK_ACCEL_OPC_ENCRYPT:
 	case SPDK_ACCEL_OPC_DECRYPT:
-	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		/* We can only merge tasks when one of them is a copy */
 		if (next->op_code != SPDK_ACCEL_OPC_COPY) {
 			break;
@@ -2443,6 +2445,7 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 		accel_sequence_complete_task(seq, next);
 		break;
 	case SPDK_ACCEL_OPC_CRC32C:
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		/* We can only merge tasks when one of them is a copy */
 		if (next->op_code != SPDK_ACCEL_OPC_COPY) {
 			break;
@@ -2469,8 +2472,9 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 		}
 
 		/* Copy followed by CRC is special because the framework actually has a dedicated
-		 * COPY_CRC32C operation. */
-		next->op_code = SPDK_ACCEL_OPC_COPY_CRC32C;
+		 * COPY_CRC32C and COPY_CHECK_CRC32C operations. */
+		next->op_code = (task->op_code == SPDK_ACCEL_OPC_CRC32C) ?
+				SPDK_ACCEL_OPC_COPY_CRC32C : SPDK_ACCEL_OPC_COPY_CHECK_CRC32C;
 		next->crc_dst = task->crc_dst;
 		next->seed = task->seed;
 
