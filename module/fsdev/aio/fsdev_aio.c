@@ -6,7 +6,6 @@
 #include "spdk/log.h"
 #include "spdk/string.h"
 #include "spdk/config.h"
-#include "spdk/rpc.h"
 #include "spdk/util.h"
 #include "spdk/thread.h"
 #include "aio_mgr.h"
@@ -22,6 +21,7 @@
 #define MAX_BACKGROUND (100)
 #define TIME_GRAN (1)
 #define MAX_AIOS 256
+#define DEFAULT_WRITEBACK_CACHE true
 #define DEFAULT_MAX_WRITE 0x00020000
 #define DEFAULT_XATTR_ENABLED false
 #define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
@@ -2225,10 +2225,25 @@ fsdev_aio_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
 
 	UNUSED(vfsdev);
 
+	if (opts->opts_size > offsetof(struct spdk_fsdev_open_opts, max_write)) {
+		/* Set the value the aio fsdev was created with */
+		opts->max_write = vfsdev->fsdev.opts.max_write;
+	}
+
+	if (opts->opts_size > offsetof(struct spdk_fsdev_open_opts, writeback_cache_enabled)) {
+		if (vfsdev->fsdev.opts.writeback_cache_enabled) {
+			/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
+			vfsdev->fsdev.opts.writeback_cache_enabled = opts->writeback_cache_enabled;
+		} else {
+			/* The writeback_cache_enabled was disabled upon creation => we reflect it in the opts */
+			opts->writeback_cache_enabled = false;
+		}
+	}
+
 	/* The AIO doesn't apply any additional restrictions, so we just accept the requested opts */
 	SPDK_DEBUGLOG(fsdev_aio,
-		      "aio filesystem %s: opts updated: writeback_cache=%" PRIu8 " max_write=%" PRIu32 ")\n",
-		      vfsdev->fsdev.name, opts->writeback_cache_enabled, opts->max_write);
+		      "aio filesystem %s: opts updated: max_write=%" PRIu32 ", writeback_cache=%" PRIu8 "\n",
+		      vfsdev->fsdev.name, vfsdev->fsdev.opts.max_write, vfsdev->fsdev.opts.writeback_cache_enabled);
 
 	return 0;
 }
@@ -2529,7 +2544,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 
 	vfsdev->fsdev.opts.writeback_cache_enabled = (writeback_cache_enabled == SPDK_AIO_UNDEFINED) ?
-			false : !!writeback_cache_enabled;
+			DEFAULT_WRITEBACK_CACHE : !!writeback_cache_enabled;
 	vfsdev->fsdev.opts.max_write = (max_write == SPDK_AIO_MAX_WRITE_UNDEFINED) ?
 				       DEFAULT_MAX_WRITE : max_write;
 
