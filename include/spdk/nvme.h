@@ -3169,6 +3169,43 @@ enum spdk_nvme_dealloc_logical_block_read_value spdk_nvme_ns_get_dealloc_logical
 	struct spdk_nvme_ns *ns);
 
 /**
+ * Get the maximun number of ranges that may be passed to a dataset management
+ * command.
+ *
+ * This function is thread safe and can be called at any point while the controller is
+ * attached to the SPDK NVMe driver.
+ *
+ * \param ctrlr Controller to query.
+ *
+ * \return The maximum number of ranges. If dataset management is not supported, return 0.
+ */
+uint8_t spdk_nvme_ctrlr_get_max_dataset_management_ranges(struct spdk_nvme_ctrlr *ctrlr);
+
+/**
+ * Get the maximun size of a single range, in blocks, in a dataset management command.
+ *
+ * This function is thread safe and can be called at any point while the controller is
+ * attached to the SPDK NVMe driver.
+ *
+ * \param ctrlr Controller to query.
+ *
+ * \return The maximum size of one range. If dataset management is not supported, return 0.
+ */
+uint32_t spdk_nvme_ctrlr_get_max_dataset_management_range_size(struct spdk_nvme_ctrlr *ctrlr);
+
+/**
+ * Get the maximun total size, in blocks, of a dataset management command.
+ *
+ * This function is thread safe and can be called at any point while the controller is
+ * attached to the SPDK NVMe driver.
+ *
+ * \param ctrlr Controller to query.
+ *
+ * \return The maximum total size of a dataset management command. If dataset management is not supported, return 0.
+ */
+uint64_t spdk_nvme_ctrlr_get_max_dataset_management_size(struct spdk_nvme_ctrlr *ctrlr);
+
+/**
  * Get the optimal I/O boundary, in blocks, for the given namespace.
  *
  * Read and write commands should not cross the optimal I/O boundary for best

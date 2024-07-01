@@ -2773,6 +2773,24 @@ bdev_rw_should_split(struct spdk_bdev_io *bdev_io)
 	return false;
 }
 
+uint64_t
+spdk_bdev_get_max_unmap(const struct spdk_bdev *bdev)
+{
+	uint8_t max_segments;
+
+	if (bdev->max_unmap_segments == 0) {
+		return 0;
+	}
+
+	/* In practice the maximum number of segments cannot be larger than UINT8_MAX, but we don't want
+	 * to go back and change the type of bdev->max_unmap_segments now. Instead, just limit the value
+	 * to UINT8_MAX. This has the side effect of making the multiplication that follows never
+	 * overflow. */
+	max_segments = bdev->max_unmap_segments > UINT8_MAX ? UINT8_MAX : bdev->max_unmap_segments;
+
+	return (uint64_t)bdev->max_unmap * max_segments;
+}
+
 static bool
 bdev_unmap_should_split(struct spdk_bdev_io *bdev_io)
 {

@@ -4138,6 +4138,18 @@ nvme_disk_create(struct spdk_bdev *disk, const char *base_name,
 	switch (csi) {
 	case SPDK_NVME_CSI_NVM:
 		disk->product_name = "NVMe disk";
+		/* The NVMe driver will report UINT32_MAX as the size if unmap
+		 * is supported and 0 if unmap is not supported. The bdev layer treats 0 as
+		 * unlimited since command support is reported elsewhere. So we convert UINT32_MAX
+		 * to 0 here to make the bdev layer as efficient as possible. */
+		disk->max_unmap = spdk_nvme_ctrlr_get_max_dataset_management_range_size(ctrlr);
+		if (disk->max_unmap == UINT32_MAX) {
+			disk->max_unmap = 0;
+		}
+		disk->max_unmap_segments = spdk_nvme_ctrlr_get_max_dataset_management_ranges(ctrlr);
+		if (disk->max_unmap_segments == UINT8_MAX) {
+			disk->max_unmap_segments = 0;
+		}
 		break;
 	case SPDK_NVME_CSI_ZNS:
 		disk->product_name = "NVMe ZNS disk";
@@ -7946,15 +7958,21 @@ static int
 bdev_nvme_unmap(struct nvme_bdev_io *bio, uint64_t offset_blocks, uint64_t num_blocks)
 {
 	struct spdk_nvme_dsm_range dsm_ranges[SPDK_NVME_DATASET_MANAGEMENT_MAX_RANGES];
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	struct spdk_bdev *bdev = bdev_io->bdev;
 	struct spdk_nvme_dsm_range *range;
 	uint64_t offset, remaining;
+	uint32_t max_range_size;
+	uint16_t max_ranges;
 	uint64_t num_ranges_u64;
 	uint16_t num_ranges;
 	int rc;
 
-	num_ranges_u64 = (num_blocks + SPDK_NVME_DATASET_MANAGEMENT_RANGE_MAX_BLOCKS - 1) /
-			 SPDK_NVME_DATASET_MANAGEMENT_RANGE_MAX_BLOCKS;
-	if (num_ranges_u64 > SPDK_COUNTOF(dsm_ranges)) {
+	max_range_size = bdev->max_unmap == 0 ? UINT32_MAX : bdev->max_unmap;
+	max_ranges = bdev->max_unmap_segments == 0 ? UINT16_MAX : bdev->max_unmap_segments;
+
+	num_ranges_u64 = spdk_divide_round_up(num_blocks, max_range_size);
+	if (num_ranges_u64 > max_ranges) {
 		SPDK_ERRLOG("Unmap request for %" PRIu64 " blocks is too large\n", num_blocks);
 		return -EINVAL;
 	}

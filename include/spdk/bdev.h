@@ -785,6 +785,14 @@ bool spdk_bdev_is_dif_check_enabled(const struct spdk_bdev *bdev,
 uint32_t spdk_bdev_get_max_copy(const struct spdk_bdev *bdev);
 
 /**
+ * Get block device max unmap size.
+ *
+ * \param bdev Block device to query.
+ * \return Max unmap size for this bdev in blocks. 0 means unlimited.
+ */
+uint64_t spdk_bdev_get_max_unmap(const struct spdk_bdev *bdev);
+
+/**
  * Get the most recently measured queue depth from a bdev.
  *
  * The reported queue depth is the aggregate of outstanding I/O

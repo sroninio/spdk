@@ -762,14 +762,24 @@ enum nvme_ctrlr_state {
 	NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT,
 
 	/**
-	 * Get Identify I/O Command Set Specific Controller data structure.
+	 * Get Identify I/O Command Set Specific Controller data structure for the NVM command set.
 	 */
-	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
 
 	/**
-	 * Waiting for Identify I/O Command Set Specific Controller command to be completed.
+	 * Waiting for Identify I/O Command Set Specific Controller NVM command to be completed.
 	 */
-	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC,
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM,
+
+	/**
+	 * Get Identify I/O Command Set Specific Controller data structure for the ZNS command set.
+	 */
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS,
+
+	/**
+	 * Waiting for Identify I/O Command Set Specific Controller ZNS command to be completed.
+	 */
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS,
 
 	/**
 	 * Get Commands Supported and Effects log page for the Zoned Namespace Command Set.
@@ -1039,6 +1049,11 @@ struct spdk_nvme_ctrlr {
 	 * Identify Controller data.
 	 */
 	struct spdk_nvme_ctrlr_data	cdata;
+
+	/**
+	 * NVM Command Set Specific Identify Controller data.
+	 */
+	struct spdk_nvme_nvm_ctrlr_data *cdata_nvm;
 
 	/**
 	 * Zoned Namespace Command Set Specific Identify Controller data.

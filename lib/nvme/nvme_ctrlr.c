@@ -1414,10 +1414,14 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
 		return "set keep alive timeout";
 	case NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT:
 		return "wait for set keep alive timeout";
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC:
-		return "identify controller iocs specific";
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC:
-		return "wait for identify controller iocs specific";
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM:
+		return "identify controller iocs specific nvm";
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM:
+		return "wait for identify controller iocs specific nvm";
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS:
+		return "identify controller iocs specific zns";
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS:
+		return "wait for identify controller iocs specific zns";
 	case NVME_CTRLR_STATE_GET_ZNS_CMD_EFFECTS_LOG:
 		return "get zns cmd and effects log page";
 	case NVME_CTRLR_STATE_WAIT_FOR_GET_ZNS_CMD_EFFECTS_LOG:
@@ -1533,6 +1537,13 @@ nvme_ctrlr_set_state_quiet(struct spdk_nvme_ctrlr *ctrlr, enum nvme_ctrlr_state 
 }
 
 static void
+nvme_ctrlr_free_nvm_specific_data(struct spdk_nvme_ctrlr *ctrlr)
+{
+	spdk_free(ctrlr->cdata_nvm);
+	ctrlr->cdata_nvm = NULL;
+}
+
+static void
 nvme_ctrlr_free_zns_specific_data(struct spdk_nvme_ctrlr *ctrlr)
 {
 	spdk_free(ctrlr->cdata_zns);
@@ -1542,6 +1553,7 @@ nvme_ctrlr_free_zns_specific_data(struct spdk_nvme_ctrlr *ctrlr)
 static void
 nvme_ctrlr_free_iocs_specific_data(struct spdk_nvme_ctrlr *ctrlr)
 {
+	nvme_ctrlr_free_nvm_specific_data(ctrlr);
 	nvme_ctrlr_free_zns_specific_data(ctrlr);
 }
 
@@ -2164,21 +2176,119 @@ nvme_ctrlr_identify_zns_specific_done(void *arg, const struct spdk_nvme_cpl *cpl
 			     ctrlr->opts.admin_timeout_ms);
 }
 
+static void
+nvme_ctrlr_identify_nvm_specific_done(void *arg, const struct spdk_nvme_cpl *cpl)
+{
+	struct spdk_nvme_ctrlr *ctrlr = (struct spdk_nvme_ctrlr *)arg;
+
+	if (spdk_nvme_cpl_is_error(cpl)) {
+		/* no need to print an error, the controller simply does not support NVM */
+		nvme_ctrlr_free_nvm_specific_data(ctrlr);
+	}
+
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS,
+			     ctrlr->opts.admin_timeout_ms);
+}
+
+
+uint8_t
+spdk_nvme_ctrlr_get_max_dataset_management_ranges(struct spdk_nvme_ctrlr *ctrlr)
+{
+	if (ctrlr->cdata_nvm == NULL) {
+		return 0;
+	}
+
+	if (ctrlr->cdata.oncs.dsm) {
+		if (ctrlr->cdata_nvm->dmrl == 0) {
+			return UINT8_MAX;
+		}
+	}
+
+	return ctrlr->cdata_nvm->dmrl;
+}
+
+uint32_t
+spdk_nvme_ctrlr_get_max_dataset_management_range_size(struct spdk_nvme_ctrlr *ctrlr)
+{
+	if (ctrlr->cdata_nvm == NULL) {
+		return 0;
+	}
+
+	if (ctrlr->cdata.oncs.dsm) {
+		if (ctrlr->cdata_nvm->dmrsl == 0) {
+			return UINT32_MAX;
+		}
+	}
+
+	return ctrlr->cdata_nvm->dmrsl;
+}
+
+uint64_t
+spdk_nvme_ctrlr_get_max_dataset_management_size(struct spdk_nvme_ctrlr *ctrlr)
+{
+	if (ctrlr->cdata_nvm == NULL) {
+		return 0;
+	}
+
+	if (ctrlr->cdata.oncs.dsm) {
+		if (ctrlr->cdata_nvm->dmsl == 0) {
+			return UINT64_MAX;
+		}
+	}
+
+	return ctrlr->cdata_nvm->dmsl;
+}
+
 /**
  * This function will try to fetch the I/O Command Specific Controller data structure for
- * each I/O Command Set supported by SPDK.
+ * the NVM command set.
  *
  * If an I/O Command Set is not supported by the controller, "Invalid Field in Command"
- * will be returned. Since we are fetching in a exploratively way, getting an error back
+ * will be returned. Since we are fetching in a explorative way, getting an error back
  * from the controller should not be treated as fatal.
- *
- * I/O Command Sets not supported by SPDK will be skipped (e.g. Key Value Command Set).
- *
- * I/O Command Sets without a IOCS specific data structure (i.e. a zero-filled IOCS specific
- * data structure) will be skipped (e.g. NVM Command Set, Key Value Command Set).
  */
 static int
-nvme_ctrlr_identify_iocs_specific(struct spdk_nvme_ctrlr *ctrlr)
+nvme_ctrlr_identify_iocs_specific_nvm(struct spdk_nvme_ctrlr *ctrlr)
+{
+	int	rc;
+
+	assert(!ctrlr->cdata_nvm);
+	ctrlr->cdata_nvm = spdk_zmalloc(sizeof(*ctrlr->cdata_nvm), 64, NULL, SPDK_ENV_SOCKET_ID_ANY,
+					SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
+	if (!ctrlr->cdata_nvm) {
+		rc = -ENOMEM;
+		goto error;
+	}
+
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM,
+			     ctrlr->opts.admin_timeout_ms);
+
+	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_CTRLR_IOCS, 0, 0, SPDK_NVME_CSI_NVM,
+				     ctrlr->cdata_nvm, sizeof(*ctrlr->cdata_nvm),
+				     nvme_ctrlr_identify_nvm_specific_done, ctrlr);
+	if (rc != 0) {
+		goto error;
+	}
+
+	return 0;
+
+error:
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_ERROR, NVME_TIMEOUT_INFINITE);
+	nvme_ctrlr_free_nvm_specific_data(ctrlr);
+	return rc;
+}
+
+
+/**
+ * This function will try to fetch the I/O Command Specific Controller data structure for
+ * the ZNS command set.
+ *
+ * If an I/O Command Set is not supported by the controller, "Invalid Field in Command"
+ * will be returned. Since we are fetching in a explorative way, getting an error back
+ * from the controller should not be treated as fatal.
+ */
+static int
+nvme_ctrlr_identify_iocs_specific_zns(struct spdk_nvme_ctrlr *ctrlr)
 {
 	int	rc;
 
@@ -2188,11 +2298,6 @@ nvme_ctrlr_identify_iocs_specific(struct spdk_nvme_ctrlr *ctrlr)
 		return 0;
 	}
 
-	/*
-	 * Since SPDK currently only needs to fetch a single Command Set, keep the code here,
-	 * instead of creating multiple NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC substates,
-	 * which would require additional functions and complexity for no good reason.
-	 */
 	assert(!ctrlr->cdata_zns);
 	ctrlr->cdata_zns = spdk_zmalloc(sizeof(*ctrlr->cdata_zns), 64, NULL, SPDK_ENV_SOCKET_ID_ANY,
 					SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
@@ -2201,7 +2306,7 @@ nvme_ctrlr_identify_iocs_specific(struct spdk_nvme_ctrlr *ctrlr)
 		goto error;
 	}
 
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC,
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS,
 			     ctrlr->opts.admin_timeout_ms);
 
 	rc = nvme_ctrlr_cmd_identify(ctrlr, SPDK_NVME_IDENTIFY_CTRLR_IOCS, 0, 0, SPDK_NVME_CSI_ZNS,
@@ -2936,7 +3041,7 @@ nvme_ctrlr_set_keep_alive_timeout_done(void *arg, const struct spdk_nvme_cpl *cp
 	if (spdk_nvme_ctrlr_is_discovery(ctrlr)) {
 		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
 	} else {
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
 				     ctrlr->opts.admin_timeout_ms);
 	}
 }
@@ -2950,7 +3055,7 @@ nvme_ctrlr_set_keep_alive_timeout(struct spdk_nvme_ctrlr *ctrlr)
 		if (spdk_nvme_ctrlr_is_discovery(ctrlr)) {
 			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_READY, NVME_TIMEOUT_INFINITE);
 		} else {
-			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
+			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
 					     ctrlr->opts.admin_timeout_ms);
 		}
 		return 0;
@@ -2960,7 +3065,7 @@ nvme_ctrlr_set_keep_alive_timeout(struct spdk_nvme_ctrlr *ctrlr)
 	if (!spdk_nvme_ctrlr_is_discovery(ctrlr) && ctrlr->cdata.kas == 0) {
 		NVME_CTRLR_DEBUGLOG(ctrlr, "Controller KAS is 0 - not enabling Keep Alive\n");
 		ctrlr->opts.keep_alive_timeout_ms = 0;
-		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
 				     ctrlr->opts.admin_timeout_ms);
 		return 0;
 	}
@@ -3996,8 +4101,12 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		rc = nvme_ctrlr_set_keep_alive_timeout(ctrlr);
 		break;
 
-	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC:
-		rc = nvme_ctrlr_identify_iocs_specific(ctrlr);
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM:
+		rc = nvme_ctrlr_identify_iocs_specific_nvm(ctrlr);
+		break;
+
+	case NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS:
+		rc = nvme_ctrlr_identify_iocs_specific_zns(ctrlr);
 		break;
 
 	case NVME_CTRLR_STATE_GET_ZNS_CMD_EFFECTS_LOG:
@@ -4076,7 +4185,8 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY:
 	case NVME_CTRLR_STATE_WAIT_FOR_CONFIGURE_AER:
 	case NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT:
-	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC:
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM:
+	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS:
 	case NVME_CTRLR_STATE_WAIT_FOR_GET_ZNS_CMD_EFFECTS_LOG:
 	case NVME_CTRLR_STATE_WAIT_FOR_SET_NUM_QUEUES:
 	case NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_ACTIVE_NS:

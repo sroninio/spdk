@@ -140,6 +140,11 @@ DEFINE_STUB(spdk_nvme_ctrlr_cmd_iov_raw_with_md, int, (
 		    spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
 		    spdk_nvme_req_next_sge_cb next_sge_fn), 0);
 
+DEFINE_STUB(spdk_nvme_ctrlr_get_max_dataset_management_range_size, uint32_t, (
+		    struct spdk_nvme_ctrlr *ctrlr), UINT32_MAX);
+DEFINE_STUB(spdk_nvme_ctrlr_get_max_dataset_management_ranges, uint8_t, (
+		    struct spdk_nvme_ctrlr *ctrlr), UINT8_MAX);
+
 DEFINE_STUB(spdk_nvme_cuse_get_ctrlr_name, int, (struct spdk_nvme_ctrlr *ctrlr, char *name,
 		size_t *size), 0);
 

@@ -81,6 +81,7 @@
 	spdk_bdev_write_zeroes_blocks;
 	spdk_bdev_unmap;
 	spdk_bdev_unmap_blocks;
+	spdk_bdev_get_max_unmap;
 	spdk_bdev_flush;
 	spdk_bdev_flush_blocks;
 	spdk_bdev_reset;
