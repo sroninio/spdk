@@ -9238,11 +9238,15 @@ static void
 bdev_ch_unthrottle_qos_queued_io(struct spdk_bdev_channel *bdev_ch)
 {
 	struct spdk_bdev_io *bdev_io;
+	bdev_io_tailq_t tmp;
 
-	while (!TAILQ_EMPTY(&bdev_ch->qos_queued_io)) {
+	TAILQ_INIT(&tmp);
+	TAILQ_SWAP(&tmp, &bdev_ch->qos_queued_io, spdk_bdev_io, internal.link);
+
+	while (!TAILQ_EMPTY(&tmp)) {
 		/* Re-submit the queued I/O. */
-		bdev_io = TAILQ_FIRST(&bdev_ch->qos_queued_io);
-		TAILQ_REMOVE(&bdev_ch->qos_queued_io, bdev_io, internal.link);
+		bdev_io = TAILQ_FIRST(&tmp);
+		TAILQ_REMOVE(&tmp, bdev_io, internal.link);
 		_bdev_io_submit(bdev_io);
 	}
 }
