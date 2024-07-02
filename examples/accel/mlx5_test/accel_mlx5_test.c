@@ -309,8 +309,11 @@ unregister_worker(void *arg1)
 	assert(g_num_workers >= 1);
 	if (--g_num_workers == 0) {
 		pthread_mutex_unlock(&g_workers_lock);
-		g_rc = dump_result();
-		spdk_app_stop(0);
+		/* Only dump results on successful runs */
+		if (g_rc == 0) {
+			g_rc = dump_result();
+		}
+		spdk_app_stop(g_rc);
 	} else {
 		pthread_mutex_unlock(&g_workers_lock);
 	}
