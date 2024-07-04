@@ -321,12 +321,12 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_t
 
 	limit_set_complement = limit->limit % min_limit_per_sec;
 	if (limit_set_complement) {
-		SPDK_ERRLOG("Requested rate limit %" PRIu64
-			    " is not a multiple of %" PRIu64 "\n",
-			    value,
-			    min_limit_per_sec);
+		SPDK_WARNLOG("Requested rate limit %" PRIu64
+			     " is not a multiple of %" PRIu64 "\n",
+			     value,
+			     min_limit_per_sec);
 		limit->limit += min_limit_per_sec - limit_set_complement;
-		SPDK_ERRLOG("Round up the rate limit to %" PRIu64 "\n", value);
+		SPDK_WARNLOG("Round up the rate limit to %" PRIu64 "\n", limit->limit);
 	}
 }
 
