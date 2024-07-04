@@ -27,12 +27,12 @@ DEFINE_STUB(spdk_mlx5_create_indirect_mkey, struct spdk_mlx5_indirect_mkey *, (s
 DEFINE_STUB(spdk_mlx5_qp_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 				       struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out), 0);
 DEFINE_STUB_V(spdk_mlx5_qp_destroy, (struct spdk_mlx5_qp *qp));
+DEFINE_STUB_V(spdk_mlx5_qp_complete_send, (struct spdk_mlx5_qp *qp));
 DEFINE_STUB(spdk_mlx5_cq_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
 				       struct spdk_mlx5_cq **cq_out), 0);
 DEFINE_STUB(spdk_mlx5_cq_destroy, int, (struct spdk_mlx5_cq *cq), 0);
 DEFINE_STUB(spdk_mlx5_qp_set_error_state, int, (struct spdk_mlx5_qp *qp), 0);
 DEFINE_STUB(spdk_memory_domain_update_notification_unsubscribe, int, (void *user_ctx), 0);
-DEFINE_STUB(spdk_mlx5_cq_flush_doorbells, int, (struct spdk_mlx5_cq *cq), 0);
 DEFINE_STUB(spdk_mlx5_crypto_devs_allow, int, (const char *const dev_names[], size_t devs_count),
 	    0);
 DEFINE_STUB_V(spdk_accel_module_finish, (void));

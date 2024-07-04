@@ -208,6 +208,8 @@ struct accel_mlx5_qp {
 	 * submitted requests */
 	STAILQ_HEAD(, accel_mlx5_task) in_hw;
 	struct spdk_poller *recover_poller;
+	STAILQ_ENTRY(accel_mlx5_qp) link;
+	bool need_wr_complete;
 };
 
 struct accel_mlx5_dev {
@@ -229,6 +231,7 @@ struct accel_mlx5_dev {
 	struct spdk_io_channel *ch;
 	/* Pending tasks waiting for requests resources */
 	STAILQ_HEAD(, accel_mlx5_task) nomem;
+	STAILQ_HEAD(, accel_mlx5_qp) complete_wr_qps;
 	uint16_t wrs_in_cq;
 	uint16_t max_wrs_in_cq;
 	bool crypto_multi_block;
@@ -277,6 +280,7 @@ do {									\
 	(dev)->wrs_in_cq++;						\
         assert((qp)->wrs_submitted < (qp)->max_wrs);			\
 	(qp)->wrs_submitted++;						\
+	accel_mlx5_qp_complete_wr(qp);					\
 	(task)->num_wrs++;						\
 } while (0)
 
@@ -284,6 +288,7 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[];
 static struct spdk_accel_driver g_accel_mlx5_driver;
 
 static int accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp);
+static inline void accel_mlx5_qp_complete_wr(struct accel_mlx5_qp *qp);
 static inline int accel_mlx5_execute_sequence(struct spdk_io_channel *ch,
 		struct spdk_accel_sequence *seq);
 static void accel_mlx5_pp_handler(void *ctx);
@@ -3656,6 +3661,28 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 	}
 }
 
+static inline void
+accel_mlx5_qp_complete_wr(struct accel_mlx5_qp *qp)
+{
+	/* Delay completing WRs */
+	if (!qp->need_wr_complete) {
+		qp->need_wr_complete = true;
+		STAILQ_INSERT_TAIL(&qp->dev->complete_wr_qps, qp, link);
+	}
+}
+
+static inline void
+accel_mlx5_dev_complete_wrs(struct accel_mlx5_dev *dev)
+{
+	struct accel_mlx5_qp *qp, *tqp;
+
+	STAILQ_FOREACH_SAFE(qp, &dev->complete_wr_qps, link, tqp) {
+		STAILQ_REMOVE_HEAD(&dev->complete_wr_qps, link);
+		qp->need_wr_complete = false;
+		spdk_mlx5_qp_complete_send(qp->qp);
+	}
+}
+
 static inline int64_t
 accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 {
@@ -3667,9 +3694,12 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 	if (spdk_unlikely(reaped < 0)) {
 		SPDK_ERRLOG("Error polling CQ! (%d): %s\n", errno, spdk_strerror(errno));
 		return reaped;
-	} else if (reaped == 0) {
-		dev->stats.idle_polls++;
-		return 0;
+	} else {
+		accel_mlx5_dev_complete_wrs(dev);
+		if (reaped == 0) {
+			dev->stats.idle_polls++;
+			return 0;
+		}
 	}
 
 	dev->stats.completions += reaped;
@@ -3743,19 +3773,12 @@ accel_mlx5_pp_handler(void *ctx)
 	struct accel_mlx5_io_channel *ch = ctx;
 	struct accel_mlx5_dev *dev;
 	uint32_t i;
-	int rc;
 
 	for (i = 0; i < ch->num_devs; i++) {
 		dev = &ch->devs[i];
-		rc = 0;
 
 		if (dev->wrs_in_cq) {
-			rc = spdk_mlx5_cq_flush_doorbells(dev->cq);
-		}
-
-		if (spdk_unlikely(rc < 0)) {
-			SPDK_ERRLOG("Error %d on CQ, dev %s\n", rc, dev->pd_ref->context->device->name);
-			continue;
+			accel_mlx5_dev_complete_wrs(dev);
 		}
 	}
 
@@ -3946,6 +3969,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 
 		dev->max_wrs_in_cq = g_accel_mlx5.cq_size;
 		STAILQ_INIT(&dev->nomem);
+		STAILQ_INIT(&dev->complete_wr_qps);
 	}
 
 	ch->poller = SPDK_POLLER_REGISTER(accel_mlx5_poller, ch, 0);
