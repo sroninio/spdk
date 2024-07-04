@@ -7,9 +7,8 @@
 #include "spdk_internal/xlio.h"
 #include "spdk/log.h"
 
-#define DEFAULT_XLIO_PATH "libxlio.so"
-
 #ifndef SPDK_CONFIG_STATIC_XLIO
+static char g_default_xlio_path[] = "libxlio.so";
 struct spdk_sock_xlio_ops g_xlio_ops;
 struct xlio_api_t *g_xlio_api;
 static void *g_xlio_handle;
@@ -17,24 +16,12 @@ static void *g_xlio_handle;
 
 #ifndef SPDK_CONFIG_STATIC_XLIO
 static int
-xlio_load(void)
+xlio_load(const char *xlio_path)
 {
-	char *xlio_path;
-
-	xlio_path = getenv("SPDK_XLIO_PATH");
-	if (!xlio_path) {
-		printf("SPDK_XLIO_PATH is not defined. XLIO socket implementation is disabled.\n");
-		return -1;
-	} else if (strnlen(xlio_path, 1) == 0) {
-		xlio_path = NULL;
-		printf("SPDK_XLIO_PATH is defined but empty. Using default: %s\n",
-		       DEFAULT_XLIO_PATH);
-	}
-
-	g_xlio_handle = dlopen(xlio_path ? xlio_path : DEFAULT_XLIO_PATH, RTLD_NOW);
+	g_xlio_handle = dlopen(xlio_path, RTLD_NOW);
 	if (!g_xlio_handle) {
 		SPDK_ERRLOG("Failed to load XLIO library: path %s, error %s\n",
-			    xlio_path ? xlio_path : DEFAULT_XLIO_PATH, dlerror());
+			    xlio_path, dlerror());
 		return -1;
 	}
 
@@ -148,11 +135,21 @@ spdk_xlio_init(void)
 
 #ifndef SPDK_CONFIG_STATIC_XLIO
 	uint64_t required_caps;
+	char *xlio_path;
 
 	/* Before init, g_xlio_api must be NULL */
 	assert(g_xlio_api == NULL);
 
-	if (xlio_load() != 0) {
+	xlio_path = getenv("SPDK_XLIO_PATH");
+	if (!xlio_path) {
+		SPDK_NOTICELOG("SPDK_XLIO_PATH is not defined. XLIO socket implementation is disabled.\n");
+		return 0;
+	} else if (strnlen(xlio_path, 1) == 0) {
+		xlio_path = g_default_xlio_path;
+		SPDK_NOTICELOG("SPDK_XLIO_PATH is defined but empty. Using default: %s\n", g_default_xlio_path);
+	}
+
+	if (xlio_load(xlio_path) != 0) {
 		return -1;
 	}
 
