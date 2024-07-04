@@ -247,10 +247,10 @@ struct spdk_mlx5_umr_crypto_attr {
 };
 
 struct spdk_mlx5_umr_attr {
-	struct mlx5_wqe_data_seg *klm;
+	struct ibv_sge *sge;
 	uint32_t dv_mkey; /* mkey to configure */
 	uint32_t umr_len;
-	uint16_t klm_count;
+	uint16_t sge_count;
 };
 
 /**
@@ -365,20 +365,20 @@ enum {
 /**
  *
  * @param qp
- * @param klm values in BE format
- * @param klm_count
+ * @param sge
+ * @param sge_count
  * @param dstaddr
  * @param rkey
  * @param wrid
  * param flags MLX5_WQE_CTRL_CQ_UPDATE to have a signaled completion or 0
  * @return
  */
-int spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
-			    uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
+int spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge,
+			    uint32_t sge_count, uint64_t dstaddr, uint32_t rkey,
 			    uint64_t wrid, uint32_t flags);
 
-int spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
-			   uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
+int spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge,
+			   uint32_t sge_count, uint64_t dstaddr, uint32_t rkey,
 			   uint64_t wrid, uint32_t flags);
 
 int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,

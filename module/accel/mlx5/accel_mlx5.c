@@ -112,11 +112,11 @@ struct accel_mlx5_module {
 	bool disable_crypto;
 };
 
-struct accel_mlx5_klm {
-	uint32_t src_klm_count;
-	uint32_t dst_klm_count;
-	struct mlx5_wqe_data_seg src_klm[ACCEL_MLX5_MAX_SGE];
-	struct mlx5_wqe_data_seg dst_klm[ACCEL_MLX5_MAX_SGE];
+struct accel_mlx5_sgl {
+	uint32_t src_sge_count;
+	uint32_t dst_sge_count;
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge dst_sge[ACCEL_MLX5_MAX_SGE];
 };
 
 struct accel_mlx5_psv_wrapper {
@@ -545,7 +545,7 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 static int
 accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *domain,
 			  void *domain_ctx,
-			  struct accel_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm)
+			  struct accel_mlx5_qp *qp, struct ibv_sge *sge)
 {
 	struct spdk_rdma_utils_memory_translation map_translation;
 	struct spdk_memory_domain_translation_result domain_translation;
@@ -567,9 +567,9 @@ accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *do
 
 			return rc;
 		}
-		klm->lkey = domain_translation.rdma.lkey;
-		klm->addr = (uint64_t) domain_translation.iov.iov_base;
-		klm->byte_count = domain_translation.iov.iov_len;
+		sge->lkey = domain_translation.rdma.lkey;
+		sge->addr = (uint64_t) domain_translation.iov.iov_base;
+		sge->length = domain_translation.iov.iov_len;
 	} else {
 		rc = spdk_rdma_utils_get_translation(dev->map_ref, addr, size,
 						     &map_translation);
@@ -577,39 +577,39 @@ accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *do
 			SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", addr, size);
 			return rc;
 		}
-		klm->lkey = spdk_rdma_utils_memory_translation_get_lkey(&map_translation);
-		klm->addr = (uint64_t)addr;
-		klm->byte_count = size;
+		sge->lkey = spdk_rdma_utils_memory_translation_get_lkey(&map_translation);
+		sge->addr = (uint64_t)addr;
+		sge->length = size;
 	}
 
 	return 0;
 }
 
 static inline int
-accel_mlx5_klm_unwind(struct mlx5_wqe_data_seg *klm, uint32_t klm_count, uint32_t step)
+accel_mlx5_sge_unwind(struct ibv_sge *sge, uint32_t sge_count, uint32_t step)
 {
 	int i;
 
-	assert(klm_count > 0);
-	SPDK_DEBUGLOG(accel_mlx5, "klm %p, count %u, step %u\n", klm, klm_count, step);
-	for (i = (int)klm_count - 1; i >= 0; i--) {
-		if (klm[i].byte_count > step) {
-			klm[i].byte_count -= step;
-			SPDK_DEBUGLOG(accel_mlx5, "\tklm[%u] len %u, step %u\n", i, klm[i].byte_count, step);
+	assert(sge_count > 0);
+	SPDK_DEBUGLOG(accel_mlx5, "sge %p, count %u, step %u\n", sge, sge_count, step);
+	for (i = (int)sge_count - 1; i >= 0; i--) {
+		if (sge[i].length > step) {
+			sge[i].length -= step;
+			SPDK_DEBUGLOG(accel_mlx5, "\tsge[%u] len %u, step %u\n", i, sge[i].length, step);
 			return (int)i + 1;
 		}
-		SPDK_DEBUGLOG(accel_mlx5, "\tklm[%u] len %u, step %u\n", i, klm[i].byte_count, step);
-		step -= klm[i].byte_count;
+		SPDK_DEBUGLOG(accel_mlx5, "\tsge[%u] len %u, step %u\n", i, sge[i].length, step);
+		step -= sge[i].length;
 	}
 
-	SPDK_ERRLOG("Can't unwind KLM, remaining  %u\n", step);
+	SPDK_ERRLOG("Can't unwind sge, remaining  %u\n", step);
 	assert(step == 0);
 
 	return 0;
 }
 
 static inline int
-accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
+accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 			  struct accel_mlx5_iov_sgl *iovs, struct spdk_memory_domain *domain, void *domain_ctx,
 			  uint32_t lkey, uint32_t block_len, uint32_t *_remaining)
 {
@@ -627,18 +627,18 @@ accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_seg *kl
 		addr = (void *)iovs->iov->iov_base + iovs->iov_offset;
 		if (!lkey) {
 			/* No pre-translated lkey */
-			rc = accel_mlx5_translate_addr(addr, size, domain, domain_ctx, qp, &klm[i]);
+			rc = accel_mlx5_translate_addr(addr, size, domain, domain_ctx, qp, &sge[i]);
 			if (spdk_unlikely(rc)) {
 				return rc;
 			}
 		} else {
-			klm[i].lkey = lkey;
-			klm[i].addr = (uint64_t) addr;
-			klm[i].byte_count = size;
+			sge[i].lkey = lkey;
+			sge[i].addr = (uint64_t) addr;
+			sge[i].length = size;
 		}
 
-		SPDK_DEBUGLOG(accel_mlx5, "\t klm[%d] lkey %u, addr %p, len %u\n", i, klm[i].lkey,
-			      (void *)klm[i].addr, klm[i].byte_count);
+		SPDK_DEBUGLOG(accel_mlx5, "\t sge[%d] lkey %u, addr %p, len %u\n", i, sge[i].lkey,
+			      (void *)sge[i].addr, sge[i].length);
 		accel_mlx5_iov_sgl_advance(iovs, size);
 		i++;
 		assert(remaining >= size);
@@ -737,7 +737,7 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 				 uint64_t wrid, uint32_t fence)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_klm klm;
+	struct accel_mlx5_sgl sgl;
 	uint32_t remaining;
 	uint32_t dst_len;
 	int rc;
@@ -746,7 +746,7 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 	 * limitation on ACCEL_MLX5_MAX_SGE. If this is the case then remaining is not zero */
 	assert(mlx5_task->dst.iov->iov_len > mlx5_task->dst.iov_offset);
 	dst_len = mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset;
-	rc = accel_mlx5_fill_block_sge(qp, klm.src_klm, &mlx5_task->src, task->src_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl.src_sge, &mlx5_task->src, task->src_domain,
 				       task->src_domain_ctx, 0, dst_len, &remaining);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -755,11 +755,11 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 		SPDK_ERRLOG("failed set src sge, rc %d\n", rc);
 		return rc;
 	}
-	klm.src_klm_count = rc;
+	sgl.src_sge_count = rc;
 	assert(dst_len > remaining);
 	dst_len -= remaining;
 
-	rc = accel_mlx5_fill_block_sge(qp, klm.dst_klm, &mlx5_task->dst, task->dst_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl.dst_sge, &mlx5_task->dst, task->dst_domain,
 				       task->dst_domain_ctx, 0, dst_len,  &remaining);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -772,10 +772,10 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 		SPDK_ERRLOG("something wrong\n");
 		abort();
 	}
-	klm.dst_klm_count = rc;
+	sgl.dst_sge_count = rc;
 
-	rc = spdk_mlx5_qp_rdma_write(mlx5_task->qp->qp, klm.src_klm, klm.src_klm_count,
-				     klm.dst_klm[0].addr, klm.dst_klm[0].lkey, wrid, fence);
+	rc = spdk_mlx5_qp_rdma_write(mlx5_task->qp->qp, sgl.src_sge, sgl.src_sge_count,
+				     sgl.dst_sge[0].addr, sgl.dst_sge[0].lkey, wrid, fence);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("new RDMA WRITE failed with %d\n", rc);
 		return rc;
@@ -825,7 +825,7 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 
 static inline int
 accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_qp *qp,
-				struct accel_mlx5_klm *klm,
+				struct accel_mlx5_sgl *sgl,
 				uint32_t dv_mkey, uint32_t src_lkey, uint32_t dst_lkey,
 				uint32_t num_blocks, uint64_t wrid, uint32_t flags)
 {
@@ -837,9 +837,9 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 
 	block_size = task->block_size;
 	length = num_blocks * block_size;
-	SPDK_DEBUGLOG(accel_mlx5, "task %p, src KLM, domain %p, lkey %u, len %u\n", task, task->src_domain,
+	SPDK_DEBUGLOG(accel_mlx5, "task %p, src sge, domain %p, lkey %u, len %u\n", task, task->src_domain,
 		      src_lkey, length);
-	rc = accel_mlx5_fill_block_sge(qp, klm->src_klm, &mlx5_task->src, task->src_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl->src_sge, &mlx5_task->src, task->src_domain,
 				       task->src_domain_ctx, src_lkey, length, &remaining);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -848,7 +848,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 		SPDK_ERRLOG("failed set src sge, rc %d\n", rc);
 		return rc;
 	}
-	klm->src_klm_count = rc;
+	sgl->src_sge_count = rc;
 	if (spdk_unlikely(remaining)) {
 		uint32_t new_len = length - remaining;
 		uint32_t aligned_len, updated_num_blocks;
@@ -869,12 +869,12 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 		if (aligned_len < new_len) {
 			uint32_t dt = new_len - aligned_len;
 
-			/* We can't process part of block, need to unwind src iov_sgl and klm to the
+			/* We can't process part of block, need to unwind src iov_sgl and sge to the
 			 * prev block boundary */
-			SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind src KLM for %u bytes\n", task, dt);
+			SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind src sge for %u bytes\n", task, dt);
 			accel_mlx5_iov_sgl_unwind(&mlx5_task->src, task->s.iovcnt, dt);
-			klm->src_klm_count = accel_mlx5_klm_unwind(klm->src_klm, klm->src_klm_count, dt);
-			if (!klm->src_klm_count) {
+			sgl->src_sge_count = accel_mlx5_sge_unwind(sgl->src_sge, sgl->src_sge_count, dt);
+			if (!sgl->src_sge_count) {
 				return -ERANGE;
 			}
 		}
@@ -893,12 +893,12 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 		return -EINVAL;
 	}
 	umr_attr.dv_mkey = dv_mkey;
-	umr_attr.klm = klm->src_klm;
+	umr_attr.sge = sgl->src_sge;
 
 	if (!mlx5_task->flags.bits.inplace) {
-		SPDK_DEBUGLOG(accel_mlx5, "task %p, dst KLM, domain %p, lkey %u, len %u\n", task, task->dst_domain,
+		SPDK_DEBUGLOG(accel_mlx5, "task %p, dst sge, domain %p, lkey %u, len %u\n", task, task->dst_domain,
 			      dst_lkey, length);
-		rc = accel_mlx5_fill_block_sge(qp, klm->dst_klm, &mlx5_task->dst, task->dst_domain,
+		rc = accel_mlx5_fill_block_sge(qp, sgl->dst_sge, &mlx5_task->dst, task->dst_domain,
 					       task->dst_domain_ctx, dst_lkey, length, &remaining);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -907,7 +907,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 			SPDK_ERRLOG("failed set dst sge, rc %d\n", rc);
 			return rc;
 		}
-		klm->dst_klm_count = rc;
+		sgl->dst_sge_count = rc;
 		if (spdk_unlikely(remaining)) {
 			uint32_t new_len = length - remaining;
 			uint32_t aligned_len, updated_num_blocks, dt;
@@ -928,24 +928,24 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 			if (aligned_len < new_len) {
 				dt = new_len - aligned_len;
 				assert(dt > 0 && dt < length);
-				/* We can't process part of block, need to unwind src and dst iov_sgl and klm to the
+				/* We can't process part of block, need to unwind src and dst iov_sgl and sge to the
 				 * prev block boundary */
-				SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind dst KLM for %u bytes\n", task, dt);
+				SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind dst sge for %u bytes\n", task, dt);
 				accel_mlx5_iov_sgl_unwind(&mlx5_task->dst, task->d.iovcnt, dt);
-				klm->dst_klm_count = accel_mlx5_klm_unwind(klm->dst_klm, klm->dst_klm_count, dt);
-				assert(klm->dst_klm_count > 0 && klm->dst_klm_count <= ACCEL_MLX5_MAX_SGE);
-				if (!klm->dst_klm_count) {
+				sgl->dst_sge_count = accel_mlx5_sge_unwind(sgl->dst_sge, sgl->dst_sge_count, dt);
+				assert(sgl->dst_sge_count > 0 && sgl->dst_sge_count <= ACCEL_MLX5_MAX_SGE);
+				if (!sgl->dst_sge_count) {
 					return -ERANGE;
 				}
 			}
 			assert(length > aligned_len);
 			dt = length - aligned_len;
-			SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind src KLM for %u bytes\n", task, dt);
-			/* The same for src iov_sgl and KLM. In worst case we can unwind SRC 2 times */
+			SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind src sge for %u bytes\n", task, dt);
+			/* The same for src iov_sgl and sge. In worst case we can unwind SRC 2 times */
 			accel_mlx5_iov_sgl_unwind(&mlx5_task->src, task->s.iovcnt, dt);
-			klm->src_klm_count = accel_mlx5_klm_unwind(klm->src_klm, klm->src_klm_count, dt);
-			assert(klm->src_klm_count > 0 && klm->src_klm_count <= ACCEL_MLX5_MAX_SGE);
-			if (!klm->src_klm_count) {
+			sgl->src_sge_count = accel_mlx5_sge_unwind(sgl->src_sge, sgl->src_sge_count, dt);
+			assert(sgl->src_sge_count > 0 && sgl->src_sge_count <= ACCEL_MLX5_MAX_SGE);
+			if (!sgl->src_sge_count) {
 				return -ERANGE;
 			}
 			SPDK_DEBUGLOG(accel_mlx5, "task %p, UMR len %u -> %u\n", task, length, aligned_len);
@@ -958,7 +958,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 		      mlx5_task, task->block_size, cattr.xts_iv, mlx5_task->flags.bits.enc_order, cattr.tweak_mode,
 		      length, dv_mkey, num_blocks);
 
-	umr_attr.klm_count = klm->src_klm_count;
+	umr_attr.sge_count = sgl->src_sge_count;
 	umr_attr.umr_len = length;
 	mlx5_task->num_processed_blocks += num_blocks;
 
@@ -973,20 +973,20 @@ accel_mlx5_task_pretranslate_single_mkey(struct accel_mlx5_task *mlx5_task,
 		struct iovec *base_addr, struct spdk_memory_domain *domain,
 		void *domain_ctx, uint32_t *mkey)
 {
-	struct mlx5_wqe_data_seg klm;
+	struct ibv_sge sge;
 	struct spdk_accel_task *task = &mlx5_task->base;
 	int rc;
 
 	if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !domain) {
 		rc = accel_mlx5_translate_addr(base_addr->iov_base, base_addr->iov_len,
-					       domain, domain_ctx, qp, &klm);
+					       domain, domain_ctx, qp, &sge);
 		if (spdk_unlikely(rc)) {
 			return rc;
 		}
 		if (task->cached_lkey && domain) {
-			*task->cached_lkey = klm.lkey;
+			*task->cached_lkey = sge.lkey;
 		}
-		*mkey = klm.lkey;
+		*mkey = sge.lkey;
 	} else {
 		*mkey = *task->cached_lkey;
 	}
@@ -1017,7 +1017,7 @@ accel_mlx5_task_pretranslate_mkeys(struct accel_mlx5_task *mlx5_task, size_t op_
 static inline int
 accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klms[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	struct accel_mlx5_sgl sgl[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	uint32_t src_lkey = 0, dst_lkey = 0;
@@ -1051,7 +1051,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		} else {
 			num_blocks = mlx5_task->blocks_per_req;
 		}
-		rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &klms[i], mlx5_task->mkeys[i]->mkey,
+		rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &sgl[i], mlx5_task->mkeys[i]->mkey,
 						     src_lkey, dst_lkey, num_blocks, 0, 0);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("UMR configure failed with %d\n", rc);
@@ -1062,16 +1062,16 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	for (i = 0; i < num_ops - 1; i++) {
-		/* UMR is used as a destination for RDMA_READ - from UMR to klms
+		/* UMR is used as a destination for RDMA_READ - from UMR to sge
 		 * XTS is applied on DPS */
 		if (mlx5_task->flags.bits.inplace) {
-			rc = spdk_mlx5_qp_rdma_read(qp->qp, klms[i].src_klm,
-						    klms[i].src_klm_count,
+			rc = spdk_mlx5_qp_rdma_read(qp->qp, sgl[i].src_sge,
+						    sgl[i].src_sge_count,
 						    0, mlx5_task->mkeys[i]->mkey, 0,
 						    first_rdma_fence);
 		} else {
-			rc = spdk_mlx5_qp_rdma_read(qp->qp, klms[i].dst_klm,
-						    klms[i].dst_klm_count,
+			rc = spdk_mlx5_qp_rdma_read(qp->qp, sgl[i].dst_sge,
+						    sgl[i].dst_sge_count,
 						    0, mlx5_task->mkeys[i]->mkey, 0,
 						    first_rdma_fence);
 		}
@@ -1086,11 +1086,11 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (mlx5_task->flags.bits.inplace) {
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klms[i].src_klm, klms[i].src_klm_count,
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sgl[i].src_sge, sgl[i].src_sge_count,
 					    0, mlx5_task->mkeys[i]->mkey,
 					    (uint64_t)mlx5_task, first_rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	} else {
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klms[i].dst_klm, klms[i].dst_klm_count,
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sgl[i].dst_sge, sgl[i].dst_sge_count,
 					    0, mlx5_task->mkeys[i]->mkey,
 					    (uint64_t)mlx5_task, first_rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	}
@@ -1106,7 +1106,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 
 	if (spdk_unlikely(mlx5_task->num_submitted_reqs == mlx5_task->num_reqs &&
 			  mlx5_task->num_blocks > mlx5_task->num_processed_blocks)) {
-		/* We hit "out of KLM entries" case with highly fragmented payload. In that case
+		/* We hit "out of sge entries" case with highly fragmented payload. In that case
 		 * accel_mlx5_configure_crypto_umr function handled fewer data blocks than expected
 		 * That means we need at least 1 more request to complete this task, this request will be
 		 * executed once all submitted ones are completed */
@@ -1124,7 +1124,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_encrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klm;
+	struct accel_mlx5_sgl sgl;
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
@@ -1143,7 +1143,7 @@ accel_mlx5_encrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 
 	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
-	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &klm, mlx5_task->mkeys[0]->mkey,
+	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &sgl, mlx5_task->mkeys[0]->mkey,
 					     src_lkey, 0, mlx5_task->blocks_per_req,
 					     (uint64_t)mlx5_task, SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
@@ -1164,7 +1164,7 @@ accel_mlx5_encrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_decrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klm;
+	struct accel_mlx5_sgl sgl;
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
@@ -1185,7 +1185,7 @@ accel_mlx5_decrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
 	/* This is inplace task where mlx5_task::src poinst to task::d.iovs. dst_lkey describes mlx5_task::src,
 	 * so it is passed to the function below as src_lkey parameter */
-	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &klm, mlx5_task->mkeys[0]->mkey,
+	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &sgl, mlx5_task->mkeys[0]->mkey,
 					     dst_lkey, 0, mlx5_task->blocks_per_req,
 					     (uint64_t)mlx5_task, SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
@@ -1206,7 +1206,7 @@ accel_mlx5_decrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 					struct accel_mlx5_qp *qp,
-					struct accel_mlx5_klm *klm, struct spdk_mlx5_mkey_pool_obj *mkey,
+					struct accel_mlx5_sgl *sgl, struct spdk_mlx5_mkey_pool_obj *mkey,
 					uint32_t src_lkey, uint32_t dst_lkey,
 					enum spdk_mlx5_umr_sig_domain sig_domain, uint32_t psv_index,
 					uint32_t *crc, uint32_t crc_seed, uint64_t iv, uint32_t block_size, uint32_t req_len,
@@ -1217,13 +1217,13 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	struct spdk_mlx5_umr_sig_attr sattr;
 	struct spdk_mlx5_umr_attr umr_attr;
 	uint32_t remaining;
-	uint32_t umr_klm_count;
+	uint32_t umr_sge_count;
 	int rc;
 
 	assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
 	       mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT);
 
-	rc = accel_mlx5_fill_block_sge(qp, klm->src_klm, &mlx5_task->src, task->src_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl->src_sge, &mlx5_task->src, task->src_domain,
 				       task->src_domain_ctx, src_lkey, req_len, &remaining);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -1236,10 +1236,10 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 		SPDK_ERRLOG("Incorrect src iovs, handling not supported for crypto yet\n");
 		abort();
 	}
-	umr_klm_count = klm->src_klm_count = rc;
+	umr_sge_count = sgl->src_sge_count = rc;
 
 	if (!mlx5_task->flags.bits.inplace) {
-		rc = accel_mlx5_fill_block_sge(qp, klm->dst_klm, &mlx5_task->dst, task->dst_domain,
+		rc = accel_mlx5_fill_block_sge(qp, sgl->dst_sge, &mlx5_task->dst, task->dst_domain,
 					       task->dst_domain_ctx, dst_lkey, req_len, &remaining);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -1252,20 +1252,20 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 			SPDK_ERRLOG("Incorrect dst iovs, handling not supported for signature yet\n");
 			abort();
 		}
-		klm->dst_klm_count = rc;
+		sgl->dst_sge_count = rc;
 	}
 
 	if (gen_signature && !encrypt) {
-		/* Ensure that there is a free KLM */
-		if (umr_klm_count >= ACCEL_MLX5_MAX_SGE) {
-			SPDK_ERRLOG("No space left for crc_dst in klm\n");
+		/* Ensure that there is a free sge */
+		if (umr_sge_count >= ACCEL_MLX5_MAX_SGE) {
+			SPDK_ERRLOG("No space left for crc_dst in sge\n");
 			return -EINVAL;
 		}
 
 		*mlx5_task->psv->crc = *crc ^ UINT32_MAX;
-		klm->src_klm[umr_klm_count].lkey = mlx5_task->psv->crc_lkey;
-		klm->src_klm[umr_klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
-		klm->src_klm[umr_klm_count++].byte_count = sizeof(uint32_t);
+		sgl->src_sge[umr_sge_count].lkey = mlx5_task->psv->crc_lkey;
+		sgl->src_sge[umr_sge_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		sgl->src_sge[umr_sge_count++].length = sizeof(uint32_t);
 	}
 
 	SPDK_DEBUGLOG(accel_mlx5, "task %p crypto_attr: bs %u, iv %"PRIu64", enc_on_tx %d\n",
@@ -1296,8 +1296,8 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	 * the size of the signature if it exists in memory.
 	 */
 	umr_attr.umr_len = encrypt ? req_len : req_len + sizeof(*crc);
-	umr_attr.klm_count = umr_klm_count;
-	umr_attr.klm = klm->src_klm;
+	umr_attr.sge_count = umr_sge_count;
+	umr_attr.sge = sgl->src_sge;
 
 	return spdk_mlx5_umr_configure_sig_crypto(qp->qp, &umr_attr, &sattr, &cattr, 0, 0);
 }
@@ -1305,7 +1305,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 static inline int
 accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klms[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	struct accel_mlx5_sgl sgl[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
 	struct spdk_accel_task *task;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
@@ -1317,8 +1317,8 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	uint32_t rdma_fence = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
 	uint32_t req_len;
 	uint32_t blocks_processed;
-	struct mlx5_wqe_data_seg *klm;
-	uint32_t klm_count;
+	struct ibv_sge *sge;
+	uint32_t sge_count;
 	size_t ops_len = mlx5_task->blocks_per_req * num_ops;
 	bool init_signature = mlx5_task->num_submitted_reqs == 0;
 	bool gen_signature = false;
@@ -1377,7 +1377,7 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		 *      Mem sig(xts(data)) -> Wire (data). Configuring signature on Wire is not allowed in this case.
 		 *      BSF.enc_order is encrypted_raw_memory.
 		 */
-		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, qp, &klms[i],
+		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, qp, &sgl[i],
 				mlx5_task->mkeys[i],
 				src_lkey, dst_lkey,
 				SPDK_MLX5_UMR_SIG_DOMAIN_WIRE,
@@ -1407,16 +1407,16 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	for (i = 0; i < num_ops - 1; i++) {
-		/* UMR is used as a destination for RDMA_READ - from UMR to klms
+		/* UMR is used as a destination for RDMA_READ - from UMR to sge
 		 * XTS is applied on DPS */
 		if (mlx5_task->flags.bits.inplace) {
-			klm = klms[i].src_klm;
-			klm_count = klms[i].src_klm_count;
+			sge = sgl[i].src_sge;
+			sge_count = sgl[i].src_sge_count;
 		} else {
-			klm = klms[i].dst_klm;
-			klm_count = klms[i].dst_klm_count;
+			sge = sgl[i].dst_sge;
+			sge_count = sgl[i].dst_sge_count;
 		}
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey, 0, rdma_fence);
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey, 0, rdma_fence);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("RDMA READ failed with %d\n", rc);
 			return rc;
@@ -1428,34 +1428,34 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (mlx5_task->flags.bits.inplace) {
-		klm = klms[i].src_klm;
-		klm_count = klms[i].src_klm_count;
+		sge = sgl[i].src_sge;
+		sge_count = sgl[i].src_sge_count;
 	} else {
-		klm = klms[i].dst_klm;
-		klm_count = klms[i].dst_klm_count;
+		sge = sgl[i].dst_sge;
+		sge_count = sgl[i].dst_sge_count;
 	}
 
 	/*
-	 * TODO: Find a better solution and do not fail the task if klm_count == ACCEL_MLX5_MAX_SGE
+	 * TODO: Find a better solution and do not fail the task if sge_count == ACCEL_MLX5_MAX_SGE
 	 *
 	 * For now, the CRC offload feature is only used to calculate the data digest for write
 	 * operations in the NVMe TCP initiator. Since one continues buffer is allocted for each IO
-	 * in this case, klm_count is 1, and the below check does not fail.
+	 * in this case, sge_count is 1, and the below check does not fail.
 	 */
-	/* Last request, add crc_dst to the KLMs */
+	/* Last request, add crc_dst to the sges */
 	if (mlx5_task->num_submitted_reqs + 1 == mlx5_task->num_reqs) {
-		/* Ensure that there is a free KLM */
-		if (klm_count >= ACCEL_MLX5_MAX_SGE) {
-			SPDK_ERRLOG("No space left for crc_dst in klm\n");
+		/* Ensure that there is a free sge */
+		if (sge_count >= ACCEL_MLX5_MAX_SGE) {
+			SPDK_ERRLOG("No space left for crc_dst in sge\n");
 			return -EINVAL;
 		}
 
-		klm[klm_count].lkey = mlx5_task->psv->crc_lkey;
-		klm[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
-		klm[klm_count++].byte_count = sizeof(uint32_t);
+		sge[sge_count].lkey = mlx5_task->psv->crc_lkey;
+		sge[sge_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		sge[sge_count++].length = sizeof(uint32_t);
 	}
 
-	rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+	rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey,
 				    (uint64_t)mlx5_task, rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("RDMA READ failed with %d\n", rc);
@@ -1476,7 +1476,7 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klms[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	struct accel_mlx5_sgl sgl[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
 	struct spdk_accel_task *task;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
@@ -1488,8 +1488,8 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 	uint32_t rdma_fence = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
 	uint32_t req_len;
 	uint32_t blocks_processed;
-	struct mlx5_wqe_data_seg *klm;
-	uint32_t klm_count;
+	struct ibv_sge *sge;
+	uint32_t sge_count;
 	size_t ops_len = mlx5_task->blocks_per_req * num_ops;
 	bool init_signature = mlx5_task->num_submitted_reqs == 0;
 	bool gen_signature = false;
@@ -1549,7 +1549,7 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 		 *      Mem sig(xts(data)) -> Wire (data). Configuring signature on Wire is not allowed in this case.
 		 *      BSF.enc_order is encrypted_raw_memory.
 		 */
-		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, qp, &klms[i],
+		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, qp, &sgl[i],
 				mlx5_task->mkeys[i],
 				src_lkey, dst_lkey,
 				SPDK_MLX5_UMR_SIG_DOMAIN_MEMORY,
@@ -1579,16 +1579,16 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	for (i = 0; i < num_ops - 1; i++) {
-		/* UMR is used as a destination for RDMA_READ - from UMR to klms
+		/* UMR is used as a destination for RDMA_READ - from UMR to sge
 		 * XTS is applied on DPS */
 		if (mlx5_task->flags.bits.inplace) {
-			klm = klms[i].src_klm;
-			klm_count = klms[i].src_klm_count;
+			sge = sgl[i].src_sge;
+			sge_count = sgl[i].src_sge_count;
 		} else {
-			klm = klms[i].dst_klm;
-			klm_count = klms[i].dst_klm_count;
+			sge = sgl[i].dst_sge;
+			sge_count = sgl[i].dst_sge_count;
 		}
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey, 0, rdma_fence);
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey, 0, rdma_fence);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("RDMA READ failed with %d\n", rc);
 			return rc;
@@ -1600,14 +1600,14 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (mlx5_task->flags.bits.inplace) {
-		klm = klms[i].src_klm;
-		klm_count = klms[i].src_klm_count;
+		sge = sgl[i].src_sge;
+		sge_count = sgl[i].src_sge_count;
 	} else {
-		klm = klms[i].dst_klm;
-		klm_count = klms[i].dst_klm_count;
+		sge = sgl[i].dst_sge;
+		sge_count = sgl[i].dst_sge_count;
 	}
 
-	rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+	rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey,
 				    (uint64_t)mlx5_task, rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("RDMA READ failed with %d\n", rc);
@@ -1626,8 +1626,8 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct mlx5_wqe_data_seg *klm,
-				  uint32_t klm_count, struct spdk_mlx5_mkey_pool_obj *mkey,
+accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct ibv_sge *sge,
+				  uint32_t sge_count, struct spdk_mlx5_mkey_pool_obj *mkey,
 				  enum spdk_mlx5_umr_sig_domain sig_domain, uint32_t umr_len,
 				  bool sig_init, bool sig_check_gen)
 {
@@ -1643,22 +1643,22 @@ accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct mlx5
 	struct spdk_mlx5_umr_attr umr_attr = {
 		.dv_mkey = mkey->mkey,
 		.umr_len = umr_len,
-		.klm_count = klm_count,
-		.klm = klm,
+		.sge_count = sge_count,
+		.sge = sge,
 	};
 
 	return spdk_mlx5_umr_configure_sig(mlx5_task->qp->qp, &umr_attr, &sattr, 0, 0);
 }
 
 static inline int
-accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_klm *klm)
+accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_sgl *sgl)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	uint32_t remaining;
 	int rc;
 
-	rc = accel_mlx5_fill_block_sge(mlx5_task->qp, klm->src_klm, &mlx5_task->src, task->src_domain,
+	rc = accel_mlx5_fill_block_sge(mlx5_task->qp, sgl->src_sge, &mlx5_task->src, task->src_domain,
 				       task->src_domain_ctx, 0, task->nbytes, &remaining);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -1668,10 +1668,10 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 		return rc;
 	}
 	assert(remaining == 0);
-	klm->src_klm_count = rc;
+	sgl->src_sge_count = rc;
 
 	if (!mlx5_task->flags.bits.inplace) {
-		rc = accel_mlx5_fill_block_sge(qp, klm->dst_klm, &mlx5_task->dst, task->dst_domain,
+		rc = accel_mlx5_fill_block_sge(qp, sgl->dst_sge, &mlx5_task->dst, task->dst_domain,
 					       task->dst_domain_ctx, 0, task->nbytes, &remaining);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -1681,7 +1681,7 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 			return rc;
 		}
 		assert(remaining == 0);
-		klm->dst_klm_count = rc;
+		sgl->dst_sge_count = rc;
 	}
 
 	return 0;
@@ -1690,7 +1690,7 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 static inline int
 accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_klm klms;
+	struct accel_mlx5_sgl sgl;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	uint32_t num_ops = spdk_min(mlx5_task->num_reqs - mlx5_task->num_completed_reqs,
@@ -1700,8 +1700,8 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 			 mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
 	bool copy_check_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
 	bool copy_crc_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CRC32C);
-	struct mlx5_wqe_data_seg *klm;
-	uint16_t klm_count;
+	struct ibv_sge *sge;
+	uint16_t sge_count;
 	int rc;
 
 	if (spdk_unlikely(!num_ops)) {
@@ -1710,20 +1710,20 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 
 	mlx5_task->num_wrs = 0;
 	/* At this moment we have as many requests as can be submitted to a qp */
-	rc = accel_mlx5_crc_task_fill_sge(mlx5_task, &klms);
+	rc = accel_mlx5_crc_task_fill_sge(mlx5_task, &sgl);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
 
 	if (copy_check_op) {
-		klm = klms.dst_klm;
-		klm_count = klms.dst_klm_count;
+		sge = sgl.dst_sge;
+		sge_count = sgl.dst_sge_count;
 	} else {
-		klm = klms.src_klm;
-		klm_count = klms.src_klm_count;
+		sge = sgl.src_sge;
+		sge_count = sgl.src_sge_count;
 	}
 
-	rc = accel_mlx5_crc_task_configure_umr(mlx5_task, klm, klm_count, mlx5_task->mkeys[0],
+	rc = accel_mlx5_crc_task_configure_umr(mlx5_task, sge, sge_count, mlx5_task->mkeys[0],
 					       SPDK_MLX5_UMR_SIG_DOMAIN_WIRE, mlx5_task->base.nbytes, true, true);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
@@ -1733,24 +1733,24 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 
 	if (!copy_crc_op) {
-		klm = klms.src_klm;
-		klm_count = klms.src_klm_count;
+		sge = sgl.src_sge;
+		sge_count = sgl.src_sge_count;
 	} else {
-		klm = klms.dst_klm;
-		klm_count = klms.dst_klm_count;
+		sge = sgl.dst_sge;
+		sge_count = sgl.dst_sge_count;
 	}
 
 	/*
-	 * Add the crc destination to the end of KLMs. A free entry must be available for CRC
+	 * Add the crc destination to the end of sge. A free entry must be available for CRC
 	 * because the task init function reserved it.
 	 */
-	assert(klm_count < ACCEL_MLX5_MAX_SGE);
+	assert(sge_count < ACCEL_MLX5_MAX_SGE);
 	if (check_op) {
 		*mlx5_task->psv->crc = *mlx5_task->base.crc_dst ^ UINT32_MAX;
 	}
-	klm[klm_count].lkey = mlx5_task->psv->crc_lkey;
-	klm[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
-	klm[klm_count++].byte_count = sizeof(uint32_t);
+	sge[sge_count].lkey = mlx5_task->psv->crc_lkey;
+	sge[sge_count].addr = (uintptr_t)mlx5_task->psv->crc;
+	sge[sge_count++].length = sizeof(uint32_t);
 
 	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
 		rc = spdk_mlx5_set_psv(qp->qp, mlx5_task->psv->psv_index, *mlx5_task->base.crc_dst, 0, 0);
@@ -1762,11 +1762,11 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (check_op) {
-		rc = spdk_mlx5_qp_rdma_write(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
+		rc = spdk_mlx5_qp_rdma_write(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[0]->mkey,
 					     (uint64_t)mlx5_task, rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 		dev->stats.rdma_writes++;
 	} else {
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[0]->mkey,
 					    (uint64_t)mlx5_task, rdma_fence | SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 		dev->stats.rdma_reads++;
 	}
@@ -1781,7 +1781,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
+accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 				 struct accel_mlx5_iov_sgl *umr_iovs, struct spdk_memory_domain *domain,
 				 void *domain_ctx, struct accel_mlx5_iov_sgl *rdma_iovs, size_t *len)
 {
@@ -1792,8 +1792,8 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_
 	size_t umr_iov_offset;
 	size_t rdma_iov_offset;
 	size_t umr_len = 0;
-	void *klm_addr;
-	size_t klm_len;
+	void *sge_addr;
+	size_t sge_len;
 	size_t umr_sge_len;
 	size_t rdma_sge_len;
 	int rc;
@@ -1804,17 +1804,17 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_
 	while (umr_idx < umr_iovcnt && rdma_idx < rdma_iovcnt) {
 		umr_sge_len = umr_iovs->iov[umr_idx].iov_len - umr_iov_offset;
 		rdma_sge_len = rdma_iovs->iov[rdma_idx].iov_len - rdma_iov_offset;
-		klm_addr = umr_iovs->iov[umr_idx].iov_base + umr_iov_offset;
+		sge_addr = umr_iovs->iov[umr_idx].iov_base + umr_iov_offset;
 
 		if (umr_sge_len == rdma_sge_len) {
 			rdma_idx++;
 			umr_iov_offset = 0;
 			rdma_iov_offset = 0;
-			klm_len = umr_sge_len;
+			sge_len = umr_sge_len;
 		} else if (umr_sge_len < rdma_sge_len) {
 			umr_iov_offset = 0;
 			rdma_iov_offset += umr_sge_len;
-			klm_len = umr_sge_len;
+			sge_len = umr_sge_len;
 		} else {
 			size_t remaining;
 
@@ -1838,15 +1838,15 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct mlx5_wqe_data_
 				}
 				remaining -= rdma_sge_len;
 			}
-			klm_len = umr_sge_len - remaining;
+			sge_len = umr_sge_len - remaining;
 		}
-		rc = accel_mlx5_translate_addr(klm_addr, klm_len, domain, domain_ctx, qp, &klm[umr_idx]);
+		rc = accel_mlx5_translate_addr(sge_addr, sge_len, domain, domain_ctx, qp, &sge[umr_idx]);
 		if (spdk_unlikely(rc)) {
 			return -EINVAL;
 		}
-		SPDK_DEBUGLOG(accel_mlx5, "\t klm[%d] lkey %u, addr %p, len %u\n", umr_idx, klm[umr_idx].lkey,
-			      (void *)klm[umr_idx].addr, klm[umr_idx].byte_count);
-		umr_len += klm_len;
+		SPDK_DEBUGLOG(accel_mlx5, "\t sge[%d] lkey %u, addr %p, len %u\n", umr_idx, sge[umr_idx].lkey,
+			      (void *)sge[umr_idx].addr, sge[umr_idx].length);
+		umr_len += sge_len;
 		umr_idx++;
 	}
 	accel_mlx5_iov_sgl_advance(umr_iovs, umr_len);
@@ -1871,14 +1871,14 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	bool check_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
 			 mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
 	bool copy_crc_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CRC32C);
-	int klm_count;
+	int sge_count;
 	uint32_t remaining;
 	uint64_t umr_offset;
 	bool sig_init, sig_check_gen = false;
 	uint16_t i;
 	int rc;
 	size_t umr_len[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
-	struct mlx5_wqe_data_seg klms[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge sge[ACCEL_MLX5_MAX_SGE];
 	struct spdk_memory_domain *domain;
 	void *domain_ctx;
 
@@ -1928,10 +1928,10 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 			assert((mlx5_task->num_completed_reqs + i + 1) == mlx5_task->num_reqs);
 			break;
 		}
-		klm_count = accel_mlx5_crc_task_fill_umr_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+		sge_count = accel_mlx5_crc_task_fill_umr_sge(qp, sge, sgl_ptr, domain, domain_ctx,
 				&rdma_sgl, &umr_len[i]);
-		if (spdk_unlikely(klm_count <= 0)) {
-			rc = (klm_count == 0) ? -EINVAL : klm_count;
+		if (spdk_unlikely(sge_count <= 0)) {
+			rc = (sge_count == 0) ? -EINVAL : sge_count;
 			SPDK_ERRLOG("failed set UMR sge, rc %d\n", rc);
 			return rc;
 		}
@@ -1945,7 +1945,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 			mlx5_task->last_mkey_idx = i;
 			sig_check_gen = true;
 		}
-		rc = accel_mlx5_crc_task_configure_umr(mlx5_task, klms, klm_count, mlx5_task->mkeys[i],
+		rc = accel_mlx5_crc_task_configure_umr(mlx5_task, sge, sge_count, mlx5_task->mkeys[i],
 						       SPDK_MLX5_UMR_SIG_DOMAIN_WIRE, umr_len[i], sig_init,
 						       sig_check_gen);
 		if (spdk_unlikely(rc)) {
@@ -1978,19 +1978,19 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 
 
 	for (i = 0; i < num_ops - 1; i++) {
-		klm_count = accel_mlx5_fill_block_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+		sge_count = accel_mlx5_fill_block_sge(qp, sge, sgl_ptr, domain, domain_ctx,
 						      0, umr_len[i], &remaining);
-		if (spdk_unlikely(klm_count <= 0)) {
-			rc = (klm_count == 0) ? -EINVAL : klm_count;
+		if (spdk_unlikely(sge_count <= 0)) {
+			rc = (sge_count == 0) ? -EINVAL : sge_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
 			return rc;
 		}
 		if (check_op) {
-			rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+			rc = spdk_mlx5_qp_rdma_write(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey,
 						     0, rdma_fence);
 			dev->stats.rdma_writes++;
 		} else {
-			rc = spdk_mlx5_qp_rdma_read(qp->qp, klms, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+			rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, 0, mlx5_task->mkeys[i]->mkey,
 						    0, rdma_fence);
 			dev->stats.rdma_reads++;
 		}
@@ -2007,39 +2007,39 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		 * The last RDMA does not have any data, only CRC. It also does not have a paired Mkey.
 		 * The CRC is handled in the previous MKey in this case.
 		 */
-		klm_count = 0;
+		sge_count = 0;
 		umr_offset = mlx5_task->last_umr_len;
 	} else {
 		umr_offset = 0;
 		mlx5_task->last_mkey_idx = i;
-		klm_count = accel_mlx5_fill_block_sge(qp, klms, sgl_ptr, domain, domain_ctx,
+		sge_count = accel_mlx5_fill_block_sge(qp, sge, sgl_ptr, domain, domain_ctx,
 						      0, umr_len[i], &remaining);
-		if (spdk_unlikely(klm_count <= 0)) {
-			rc = (klm_count == 0) ? -EINVAL : klm_count;
+		if (spdk_unlikely(sge_count <= 0)) {
+			rc = (sge_count == 0) ? -EINVAL : sge_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
 			return rc;
 		}
 		assert(remaining == 0);
 	}
 	if ((mlx5_task->num_completed_reqs + i + 1) == mlx5_task->num_reqs) {
-		/* Ensure that there is a free KLM for the CRC destination. */
-		assert(klm_count < (int)ACCEL_MLX5_MAX_SGE);
-		/* Add the crc destination to the end of KLMs. */
+		/* Ensure that there is a free sge for the CRC destination. */
+		assert(sge_count < (int)ACCEL_MLX5_MAX_SGE);
+		/* Add the crc destination to the end of sge. */
 		if (check_op) {
 			*mlx5_task->psv->crc = *mlx5_task->base.crc_dst ^ UINT32_MAX;
 		}
-		klms[klm_count].lkey = mlx5_task->psv->crc_lkey;
-		klms[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
-		klms[klm_count++].byte_count = sizeof(uint32_t);
+		sge[sge_count].lkey = mlx5_task->psv->crc_lkey;
+		sge[sge_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		sge[sge_count++].length = sizeof(uint32_t);
 	}
 	rdma_fence |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
 	if (check_op) {
-		rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, umr_offset,
+		rc = spdk_mlx5_qp_rdma_write(qp->qp, sge, sge_count, umr_offset,
 					     mlx5_task->mkeys[mlx5_task->last_mkey_idx]->mkey,
 					     (uint64_t)mlx5_task, rdma_fence);
 		dev->stats.rdma_writes++;
 	} else {
-		rc = spdk_mlx5_qp_rdma_read(qp->qp, klms, klm_count, umr_offset,
+		rc = spdk_mlx5_qp_rdma_read(qp->qp, sge, sge_count, umr_offset,
 					    mlx5_task->mkeys[mlx5_task->last_mkey_idx]->mkey,
 					    (uint64_t)mlx5_task, rdma_fence);
 		dev->stats.rdma_reads++;
@@ -2057,7 +2057,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 /*
  * The following table describes UMR and RDMA operations configuration for crc tasks.
  *
- * | Operation         | Signature domain | UMR klm | RDMA operation | RDMA klm |
+ * | Operation         | Signature domain | UMR sge | RDMA operation | RDMA sge |
  * |-------------------+------------------+---------+----------------+----------|
  * | crc32c            | Wire             | src     | Read           | src      |
  * | copy_crc32c       | Wire             | src     | Read           | dst      |

@@ -152,7 +152,7 @@ mlx5_cqe_err(struct mlx5_cqe64 *cqe)
 }
 
 static inline void
-mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
+mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 		   uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
@@ -166,12 +166,12 @@ mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint3
 
 	/* absolute PI value */
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
-	SPDK_DEBUGLOG(mlx5, "opc %d, sge_count %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, klm_count,
+	SPDK_DEBUGLOG(mlx5, "opc %d, sge_count %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, sge_count,
 		      bb_count, hw_qp->sq_pi, fm_ce_se);
 
 	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
 	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
-	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 2 + klm_count, 0, 0);
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 2 + sge_count, 0, 0);
 
 	rseg = (struct mlx5_wqe_raddr_seg *)(ctrl + 1);
 	rseg->raddr = htobe64(raddr);
@@ -180,8 +180,8 @@ mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint3
 	rseg->reserved = 0;
 
 	dseg = (struct mlx5_wqe_data_seg *)(rseg + 1);
-	for (i = 0; i < klm_count; i++) {
-		mlx5dv_set_data_seg(dseg, klm[i].byte_count, klm[i].lkey, klm[i].addr);
+	for (i = 0; i < sge_count; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
 		dseg = dseg + 1;
 	}
 
@@ -193,8 +193,7 @@ mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint3
 }
 
 static inline void
-mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
-			  uint32_t klm_count,
+mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 			  uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
@@ -208,13 +207,13 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm
 
 	/* absolute PI value */
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
-	SPDK_DEBUGLOG(mlx5, "opc %d, sge_count %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, klm_count,
+	SPDK_DEBUGLOG(mlx5, "opc %d, sge_count %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, sge_count,
 		      bb_count, pi, fm_ce_se);
 
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
 	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
-	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 2 + klm_count, 0, 0);
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 2 + sge_count, 0, 0);
 	to_end -= sizeof(struct mlx5_wqe_ctrl_seg); /* 16 bytes */
 
 	rseg = (struct mlx5_wqe_raddr_seg *)(ctrl + 1);
@@ -225,8 +224,8 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm
 	to_end -= sizeof(struct mlx5_wqe_raddr_seg); /* 16 bytes */
 
 	dseg = (struct mlx5_wqe_data_seg *)(rseg + 1);
-	for (i = 0; i < klm_count; i++) {
-		mlx5dv_set_data_seg(dseg, klm[i].byte_count, klm[i].lkey, klm[i].addr);
+	for (i = 0; i < sge_count; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
 		to_end -= sizeof(struct mlx5_wqe_data_seg); /* 16 bytes */
 		if (to_end != 0) {
 			dseg = dseg + 1;
@@ -245,7 +244,7 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm
 }
 
 int
-spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
+spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 			uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
@@ -254,22 +253,22 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, 
 	/* One building block is 64 bytes - 4 octowords
 	 * It can hold control segment + raddr segment + 2 data segments.
 	 * If sge_count (data segments) is bigger than 2 then we consume additional bb */
-	bb_count = (klm_count <= 2) ? 1 : 1 + SPDK_CEIL_DIV(klm_count - 2, 4);
+	bb_count = (sge_count <= 2) ? 1 : 1 + SPDK_CEIL_DIV(sge_count - 2, 4);
 
 	if (spdk_unlikely(bb_count > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(klm_count > qp->max_sge)) {
+	if (spdk_unlikely(sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
-		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
+		mlx5_dma_xfer_full(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
 				   bb_count);
 	} else {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
+		mlx5_dma_xfer_wrap_around(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
 					  bb_count);
 	}
 
@@ -277,7 +276,7 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, 
 }
 
 int
-spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
+spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 		       uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
@@ -286,21 +285,21 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, u
 	/* One building block is 64 bytes - 4 octowords
 	 * It can hold control segment + raddr segment + 2 data segments.
 	 * If sge_count (data segments) is bigger than 2 then we consume additional bb */
-	bb_count = (klm_count <= 2) ? 1 : 1 + SPDK_CEIL_DIV(klm_count - 2, 4);
+	bb_count = (sge_count <= 2) ? 1 : 1 + SPDK_CEIL_DIV(sge_count - 2, 4);
 
 	if (spdk_unlikely(bb_count > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(klm_count > qp->max_sge)) {
+	if (spdk_unlikely(sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
-		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
+		mlx5_dma_xfer_full(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
 	} else {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid,
+		mlx5_dma_xfer_wrap_around(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid,
 					  bb_count);
 	}
 

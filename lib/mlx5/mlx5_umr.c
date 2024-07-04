@@ -107,9 +107,9 @@ set_umr_mkey_seg_sig(struct mlx5_wqe_mkey_context_seg *mkey,
 }
 
 static inline void
-set_umr_inline_klm_seg(union mlx5_wqe_umr_inline_seg *klm, struct mlx5_wqe_data_seg *sge)
+set_umr_inline_klm_seg(union mlx5_wqe_umr_inline_seg *klm, struct ibv_sge *sge)
 {
-	klm->klm.byte_count = htobe32(sge->byte_count);
+	klm->klm.byte_count = htobe32(sge->length);
 	klm->klm.mkey = htobe32(sge->lkey);
 	klm->klm.address = htobe64(sge->addr);
 }
@@ -117,36 +117,36 @@ set_umr_inline_klm_seg(union mlx5_wqe_umr_inline_seg *klm, struct mlx5_wqe_data_
 static void *
 mlx5_build_inline_mtt(struct spdk_mlx5_hw_qp *qp,
 		      uint32_t *to_end,
-		      union mlx5_wqe_umr_inline_seg *dst_klm,
+		      union mlx5_wqe_umr_inline_seg *klm,
 		      struct spdk_mlx5_umr_attr *umr_attr)
 {
-	struct mlx5_wqe_data_seg *src_klm = umr_attr->klm;
-	int num_wqebbs = umr_attr->klm_count / 4;
-	int tail = umr_attr->klm_count & 0x3;
+	struct ibv_sge *sge = umr_attr->sge;
+	int num_wqebbs = umr_attr->sge_count / 4;
+	int tail = umr_attr->sge_count & 0x3;
 	int i;
 
 	for (i = 0; i < num_wqebbs; i++) {
-		set_umr_inline_klm_seg(&dst_klm[0], src_klm++);
-		set_umr_inline_klm_seg(&dst_klm[1], src_klm++);
-		set_umr_inline_klm_seg(&dst_klm[2], src_klm++);
-		set_umr_inline_klm_seg(&dst_klm[3], src_klm++);
+		set_umr_inline_klm_seg(&klm[0], sge++);
+		set_umr_inline_klm_seg(&klm[1], sge++);
+		set_umr_inline_klm_seg(&klm[2], sge++);
+		set_umr_inline_klm_seg(&klm[3], sge++);
 		/* sizeof(*dst_klm) * 4 == MLX5_SEND_WQE_BB */
-		dst_klm = mlx5_qp_get_next_wqbb(qp, to_end, dst_klm);
+		klm = mlx5_qp_get_next_wqbb(qp, to_end, klm);
 	}
 
 	if (!tail) {
-		return dst_klm;
+		return klm;
 	}
 
 	for (i = 0; i < tail; i++) {
-		set_umr_inline_klm_seg(&dst_klm[i], src_klm++);
+		set_umr_inline_klm_seg(&klm[i], sge++);
 	}
 
 	/* Fill PAD entries to make whole mtt aligned to 64B(MLX5_SEND_WQE_BB) */
-	memset(&dst_klm[i], 0,
+	memset(&klm[i], 0,
 	       MLX5_SEND_WQE_BB - sizeof(union mlx5_wqe_umr_inline_seg) * tail);
 
-	return mlx5_qp_get_next_wqbb(qp, to_end, dst_klm);
+	return mlx5_qp_get_next_wqbb(qp, to_end, klm);
 }
 
 static inline void
@@ -294,8 +294,8 @@ mlx5_umr_configure_full_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_
 	set_umr_mkey_seg_mtt(mkey, umr_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
-	for (i = 0; i < umr_attr->klm_count; i++) {
-		set_umr_inline_klm_seg(klm, &umr_attr->klm[i]);
+	for (i = 0; i < umr_attr->sge_count; i++) {
+		set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
 		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
 		klm = klm + 1;
 	}
@@ -357,8 +357,8 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
-	for (i = 0; i < umr_attr->klm_count; i++) {
-		set_umr_inline_klm_seg(klm, &umr_attr->klm[i]);
+	for (i = 0; i < umr_attr->sge_count; i++) {
+		set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
 		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
 		klm = klm + 1;
 	}
@@ -421,8 +421,8 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_
 	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
-	for (i = 0; i < umr_attr->klm_count; i++) {
-		set_umr_inline_klm_seg(klm, &umr_attr->klm[i]);
+	for (i = 0; i < umr_attr->sge_count; i++) {
+		set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
 		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
 		klm = klm + 1;
 	}
@@ -490,8 +490,8 @@ mlx5_umr_configure_full(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_attr *u
 	mlx5_set_umr_mkey_seg(mkey, umr_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
-	for (i = 0; i < umr_attr->klm_count; i++) {
-		set_umr_inline_klm_seg(klm, &umr_attr->klm[i]);
+	for (i = 0; i < umr_attr->sge_count; i++) {
+		set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
 		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
 		klm = klm + 1;
 	}
@@ -753,7 +753,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->klm_count)) {
+	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 
@@ -771,7 +771,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	 */
 	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) + sizeof(
 			   struct mlx5_wqe_mkey_context_seg);
-	mtt_size = SPDK_ALIGN_CEIL(umr_attr->klm_count, 4);
+	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
 	inline_klm_size = mtt_size * sizeof(union mlx5_wqe_umr_inline_seg);
 	wqe_size += inline_klm_size;
 	wqe_size += sizeof(struct mlx5_crypto_bsf_seg);
@@ -780,7 +780,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
@@ -805,7 +805,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->klm_count)) {
+	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 
@@ -823,7 +823,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	 */
 	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) +
 		   sizeof(struct mlx5_wqe_mkey_context_seg);
-	mtt_size = SPDK_ALIGN_CEIL(umr_attr->klm_count, 4);
+	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
 	inline_klm_size = mtt_size * sizeof(union mlx5_wqe_umr_inline_seg);
 	wqe_size += inline_klm_size;
 	wqe_size += sizeof(struct mlx5_sig_bsf_seg);
@@ -832,7 +832,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
@@ -858,7 +858,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->klm_count)) {
+	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 
@@ -876,7 +876,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	 */
 	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) + sizeof(
 			   struct mlx5_wqe_mkey_context_seg);
-	mtt_size = SPDK_ALIGN_CEIL(umr_attr->klm_count, 4);
+	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
 	inline_klm_size = mtt_size * sizeof(union mlx5_wqe_umr_inline_seg);
 	wqe_size += inline_klm_size;
 	wqe_size += sizeof(struct mlx5_sig_bsf_seg);
@@ -886,7 +886,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
@@ -910,7 +910,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->klm_count)) {
+	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 
@@ -928,7 +928,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	 */
 	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) + sizeof(
 			   struct mlx5_wqe_mkey_context_seg);
-	mtt_size = SPDK_ALIGN_CEIL(umr_attr->klm_count, 4);
+	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
 	inline_klm_size = mtt_size * sizeof(union mlx5_wqe_umr_inline_seg);
 	wqe_size += inline_klm_size;
 
@@ -936,7 +936,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
