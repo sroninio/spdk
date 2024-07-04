@@ -315,6 +315,13 @@ int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
 int spdk_mlx5_cq_flush_doorbells(struct spdk_mlx5_cq *cq);
 
 /**
+ * Ring send doorbell for the given QP to start execution of outstnding WQEs
+ *
+ * \param qp Queue Pair
+ */
+void spdk_mlx5_qp_complete_send(struct spdk_mlx5_qp *qp);
+
+/**
  * Prefetch \b wqe_count building blocks into cache
  *
  * \param qp

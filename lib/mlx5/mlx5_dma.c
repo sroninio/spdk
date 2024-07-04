@@ -456,6 +456,28 @@ spdk_mlx5_cq_flush_doorbells(struct spdk_mlx5_cq *cq)
 	return i;
 }
 
+void
+spdk_mlx5_qp_complete_send(struct spdk_mlx5_qp *qp)
+{
+	struct spdk_mlx5_qp *qp_cur;
+	struct spdk_mlx5_qp *qp_tmp;
+
+	STAILQ_FOREACH_SAFE(qp_cur, &qp->cq->ring_db_qps, db_link, qp_tmp) {
+		if (qp == qp_cur) {
+			STAILQ_REMOVE(&qp->cq->ring_db_qps, qp_cur, spdk_mlx5_qp, db_link);
+			break;
+		}
+	}
+	qp->tx_need_ring_db = false;
+
+	if (qp->sigmode == SPDK_MLX5_QP_SIG_LAST) {
+		qp->ctrl->fm_ce_se &= ~SPDK_MLX5_WQE_CTRL_CE_MASK;
+		qp->ctrl->fm_ce_se |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
+		mlx5_qp_update_comp(qp);
+	}
+	mlx5_ring_tx_db(qp, qp->ctrl);
+}
+
 #ifdef DEBUG
 void
 mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
