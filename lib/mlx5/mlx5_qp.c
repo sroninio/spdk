@@ -609,7 +609,6 @@ spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
 		free(cq);
 		return rc;
 	}
-	STAILQ_INIT(&cq->ring_db_qps);
 	*cq_out = cq;
 
 	return 0;

@@ -235,14 +235,9 @@ mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint
 {
 	mlx5_qp_dump_wqe(qp, n_wqe_bb);
 
-	/* Delay ringing the doorbell */
 	qp->hw.sq_pi += n_wqe_bb;
 	qp->last_pi = ctrlr_pi;
 	qp->ctrl = ctrl;
-	if (!qp->tx_need_ring_db) {
-		qp->tx_need_ring_db = true;
-		STAILQ_INSERT_TAIL(&qp->cq->ring_db_qps, qp, db_link);
-	}
 }
 
 static inline void

@@ -315,18 +315,6 @@ mlx5_qp_update_comp(struct spdk_mlx5_qp *qp)
 	qp->nonsignaled_outstanding = 0;
 }
 
-static inline void
-mlx5_qp_tx_complete(struct spdk_mlx5_qp *qp)
-{
-	qp->tx_need_ring_db = false;
-	if (qp->sigmode == SPDK_MLX5_QP_SIG_LAST) {
-		qp->ctrl->fm_ce_se &= ~SPDK_MLX5_WQE_CTRL_CE_MASK;
-		qp->ctrl->fm_ce_se |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
-		mlx5_qp_update_comp(qp);
-	}
-	mlx5_ring_tx_db(qp, qp->ctrl);
-}
-
 static inline struct mlx5_cqe64 *
 mlx5_cq_get_cqe(struct spdk_mlx5_hw_cq *hw_cq, int cqe_size)
 {
@@ -404,7 +392,7 @@ int
 spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_completion *comp,
 			      int max_completions)
 {
-	struct spdk_mlx5_qp *qp, *tqp;
+	struct spdk_mlx5_qp *qp;
 	struct mlx5_cqe64 *cqe;
 	uint8_t opcode;
 	int n = 0;
@@ -433,43 +421,12 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 		n++;
 	} while (n < max_completions);
 
-	STAILQ_FOREACH_SAFE(qp, &cq->ring_db_qps, db_link, tqp) {
-		STAILQ_REMOVE_HEAD(&cq->ring_db_qps, db_link);
-		mlx5_qp_tx_complete(qp);
-	}
-
 	return n;
-}
-
-int
-spdk_mlx5_cq_flush_doorbells(struct spdk_mlx5_cq *cq)
-{
-	struct spdk_mlx5_qp *qp, *tqp;
-	int i = 0;
-
-	STAILQ_FOREACH_SAFE(qp, &cq->ring_db_qps, db_link, tqp) {
-		STAILQ_REMOVE_HEAD(&cq->ring_db_qps, db_link);
-		mlx5_qp_tx_complete(qp);
-		i++;
-	}
-
-	return i;
 }
 
 void
 spdk_mlx5_qp_complete_send(struct spdk_mlx5_qp *qp)
 {
-	struct spdk_mlx5_qp *qp_cur;
-	struct spdk_mlx5_qp *qp_tmp;
-
-	STAILQ_FOREACH_SAFE(qp_cur, &qp->cq->ring_db_qps, db_link, qp_tmp) {
-		if (qp == qp_cur) {
-			STAILQ_REMOVE(&qp->cq->ring_db_qps, qp_cur, spdk_mlx5_qp, db_link);
-			break;
-		}
-	}
-	qp->tx_need_ring_db = false;
-
 	if (qp->sigmode == SPDK_MLX5_QP_SIG_LAST) {
 		qp->ctrl->fm_ce_se &= ~SPDK_MLX5_WQE_CTRL_CE_MASK;
 		qp->ctrl->fm_ce_se |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
