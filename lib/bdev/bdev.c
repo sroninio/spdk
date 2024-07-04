@@ -3637,8 +3637,10 @@ bdev_retry_qos_queued_io(struct spdk_bdev *bdev)
 	}
 
 	qos_cache = TAILQ_LAST(&qos->cache_list, qos_cache_list);
-	TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
-	TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
+	if (qos_cache != NULL) {
+		TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
+		TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
+	}
 
 	spdk_spin_unlock(&bdev->internal.spinlock);
 }
@@ -3672,8 +3674,10 @@ bdev_group_retry_qos_queued_io(struct spdk_bdev_group *group)
 	}
 
 	qos_cache = TAILQ_LAST(&qos->cache_list, qos_cache_list);
-	TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
-	TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
+	if (qos_cache != NULL) {
+		TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
+		TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
+	}
 
 	spdk_spin_unlock(&group->spinlock);
 }
@@ -3684,6 +3688,10 @@ bdev_group_poll_qos(void *arg)
 	struct spdk_bdev_group *group = arg;
 	struct spdk_bdev_qos *qos = group->qos;
 	uint64_t now = spdk_get_ticks();
+
+	if (spdk_unlikely(qos == NULL)) {
+		return SPDK_POLLER_IDLE;
+	}
 
 	if (now < (qos->last_timeslice + qos->timeslice_size)) {
 		/* We received our callback earlier than expected - return
@@ -3709,6 +3717,10 @@ bdev_channel_poll_qos(void *arg)
 	struct spdk_bdev *bdev = arg;
 	struct spdk_bdev_qos *qos = bdev->internal.qos;
 	uint64_t now = spdk_get_ticks();
+
+	if (spdk_unlikely(qos == NULL)) {
+		return SPDK_POLLER_IDLE;
+	}
 
 	if (now < (qos->last_timeslice + qos->timeslice_size)) {
 		/* We received our callback earlier than expected - return
