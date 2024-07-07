@@ -2618,7 +2618,7 @@ nvme_tcp_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
 
 	TAILQ_FOREACH_SAFE(tcp_req, &tqpair->outstanding_reqs, link, tmp) {
 		SPDK_DEBUGLOG(nvme, "tqpair %p %u, sock 0x%lx, req %p, ordering 0x%x\n",
-			      tqpair, qpair->id, tqpair->xlio_sock, tcp_req->ordering.raw);
+			      tqpair, qpair->id, tqpair->xlio_sock, tcp_req, tcp_req->ordering.raw);
 		if (tcp_req->ordering.bits.in_progress_accel) {
 			continue;
 		}
@@ -5097,7 +5097,7 @@ nvme_tcp_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 		tqpair->flags.pending_events = false;
 	}
 
-	assert(tqpair->sock.flags.closed);
+	assert(tqpair->flags.closed);
 
 	return 0;
 }
