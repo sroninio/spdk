@@ -3765,7 +3765,9 @@ accel_mlx5_pp_handler(void *ctx)
 static bool
 accel_mlx5_supports_opcode(enum spdk_accel_opcode opc)
 {
-	assert(g_accel_mlx5.enabled);
+	if (!g_accel_mlx5.enabled) {
+		return false;
+	}
 
 	switch (opc) {
 	case SPDK_ACCEL_OPC_COPY:
@@ -4157,6 +4159,11 @@ accel_mlx5_deinit_cb(void *ctx)
 static void
 accel_mlx5_deinit(void *ctx)
 {
+	if (!g_accel_mlx5.enabled) {
+		spdk_accel_module_finish();
+		return;
+	}
+
 	spdk_memory_domain_update_notification_unsubscribe(&g_accel_mlx5);
 	if (g_accel_mlx5.allowed_devs) {
 		accel_mlx5_allowed_devs_free();
@@ -4422,7 +4429,7 @@ accel_mlx5_init(void)
 	bool supports_crypto;
 
 	if (!g_accel_mlx5.enabled) {
-		return -ENODEV;
+		return 0;
 	}
 
 	spdk_spin_init(&g_accel_mlx5.lock);
@@ -4556,10 +4563,10 @@ cleanup:
 static void
 accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 {
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "method", "mlx5_scan_accel_module");
+	spdk_json_write_named_object_begin(w, "params");
 	if (g_accel_mlx5.enabled) {
-		spdk_json_write_object_begin(w);
-		spdk_json_write_named_string(w, "method", "mlx5_scan_accel_module");
-		spdk_json_write_named_object_begin(w, "params");
 		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
 		spdk_json_write_named_uint16(w, "cq_size", g_accel_mlx5.cq_size);
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
@@ -4572,9 +4579,11 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.qp_per_domain);
 		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.disable_signature);
 		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.disable_crypto);
-		spdk_json_write_object_end(w);
-		spdk_json_write_object_end(w);
+	} else {
+		spdk_json_write_named_bool(w, "enable_module", g_accel_mlx5.enabled);
 	}
+	spdk_json_write_object_end(w);
+	spdk_json_write_object_end(w);
 }
 
 static size_t
