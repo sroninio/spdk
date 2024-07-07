@@ -393,7 +393,13 @@ nvme_bdev_dump_trid_json(const struct spdk_nvme_transport_id *trid, struct spdk_
 	const char *trtype_str;
 	const char *adrfam_str;
 
-	trtype_str = spdk_nvme_transport_id_trtype_str(trid->trtype);
+	if (trid->trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+	    trid->trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) {
+		trtype_str = trid->trstring;
+	} else {
+		trtype_str = spdk_nvme_transport_id_trtype_str(trid->trtype);
+	}
+
 	if (trtype_str) {
 		spdk_json_write_named_string(w, "trtype", trtype_str);
 	}
