@@ -26,16 +26,10 @@ xlio_subsystem_fini(void)
 	spdk_subsystem_fini_next();
 }
 
-static void
-xlio_subsystem_write_config_json(struct spdk_json_write_ctx *w)
-{
-}
-
 static struct spdk_subsystem g_spdk_subsystem_xlio = {
 	.name = "xlio",
 	.init = xlio_subsystem_init,
 	.fini = xlio_subsystem_fini,
-	.write_config_json = xlio_subsystem_write_config_json,
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_xlio);
