@@ -829,14 +829,18 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 {
 	struct nvme_tcp_qpair *tqpair = (struct nvme_tcp_qpair *)userdata_sq;
 
-	if (event == XLIO_SOCKET_EVENT_ESTABLISHED) {
+	switch (event) {
+	case XLIO_SOCKET_EVENT_ESTABLISHED:
 		SPDK_INFOLOG(nvme_xlio, "Connection established (sock=%lx): event=%d value=%d\n",
 			     userdata_sq, event, value);
 		if (!tqpair->flags.connect_notified) {
 			nvme_tcp_qpair_connect_sock_done(tqpair, 0);
 			tqpair->flags.connect_notified = 1;
 		}
-	} else if (event == XLIO_SOCKET_EVENT_CLOSED || event == XLIO_SOCKET_EVENT_TERMINATED) {
+		break;
+	case XLIO_SOCKET_EVENT_CLOSED:
+	case XLIO_SOCKET_EVENT_TERMINATED:
+	case XLIO_SOCKET_EVENT_ERROR:
 		SPDK_INFOLOG(nvme_xlio, "Connection closed passively (sock=%lx): event=%d value=%d\n",
 			     userdata_sq, event, value);
 		if (!tqpair->flags.closed) {
@@ -847,9 +851,11 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 			nvme_tcp_qpair_connect_sock_done(tqpair, -1);
 			tqpair->flags.connect_notified = 1;
 		}
-	} else {
+		break;
+	default:
 		SPDK_ERRLOG("Unknown Event callback: event=%d value=%d (tqpair=%lx).\n",
 			    event, value, userdata_sq);
+		break;
 	}
 }
 
