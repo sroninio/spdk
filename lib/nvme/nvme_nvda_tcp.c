@@ -4328,8 +4328,10 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 	if (spdk_unlikely(qpair->poll_group == NULL &&
 			  tqpair->state >= NVME_TCP_QPAIR_STATE_SOCK_CONNECTED)) {
 		if (tqpair->flags.closed) {
-			SPDK_ERRLOG("tqpair=%p sock 0x%lx is closed: errno %d(%s)\n",
-				    tqpair, tqpair->xlio_sock, errno, spdk_strerror(errno));
+			if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING) {
+				SPDK_ERRLOG("tqpair=%p sock 0x%lx is closed: errno %d(%s)\n",
+					    tqpair, tqpair->xlio_sock, errno, spdk_strerror(errno));
+			}
 			if (spdk_unlikely(tqpair->qpair.ctrlr->timeout_enabled)) {
 				nvme_tcp_qpair_check_timeout(qpair);
 			}
