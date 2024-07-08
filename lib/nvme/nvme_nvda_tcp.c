@@ -917,15 +917,11 @@ nvme_tcp_poll_group(struct spdk_nvme_transport_poll_group *group)
 }
 
 static int
-nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, bool flush)
+nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 	struct xlio_socket_send_attr attr = {};
 	int i, rc;
-
-	if (flush) {
-		attr.flags = XLIO_SOCKET_SEND_FLAG_FLUSH;
-	}
 
 	if (pdu->data_len < DEFAULT_ZCOPY_THRESHOLD || !pdu->has_mkeys) {
 		attr.flags |= XLIO_SOCKET_SEND_FLAG_INLINE;
@@ -1655,7 +1651,7 @@ nvme_tcp_qpair_write_control_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 	pdu->ddgst_enable = 0;
 	TAILQ_INSERT_TAIL(&tqpair->send_queue, pdu, tailq);
 	tqpair->stats->submitted_requests++;
-	rc = nvme_tcp_qpair_send_pdu(tqpair, pdu, false);
+	rc = nvme_tcp_qpair_send_pdu(tqpair, pdu);
 
 	return rc;
 }
@@ -1872,7 +1868,7 @@ _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 	}
 
 	tqpair->stats->submitted_requests++;
-	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu, false))) {
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu))) {
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 		goto fail_req;
 	}
@@ -2243,7 +2239,7 @@ end:
 			 &tcp_req->req != tqpair->qpair.reserved_req && pdu->data_len;
 
 	tqpair->stats->submitted_requests++;
-	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu, false))) {
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, pdu))) {
 		return -1;
 	}
 
@@ -3477,7 +3473,7 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 	}
 	TAILQ_INSERT_TAIL(&tqpair->send_queue, rsp_pdu, tailq);
 	tqpair->stats->submitted_requests++;
-	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu, false))) {
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu))) {
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 		goto fail_req;
 	}
@@ -3713,7 +3709,7 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	}
 
 	tqpair->stats->submitted_requests++;
-	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu, false))) {
+	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu))) {
 		goto fail_req;
 	}
 
