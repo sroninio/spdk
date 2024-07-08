@@ -985,7 +985,7 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 	if (group && !group->flags.pp_handler_registered) {
 		group->flags.pp_handler_registered = spdk_thread_post_poller_handler_register(
 				xlio_batch_pp_handler, group) == 0;
-	} else {
+	} else if (!group) {
 		tqpair->flags.pending_send = true;
 	}
 
