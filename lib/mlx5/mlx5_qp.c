@@ -121,6 +121,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	struct mlx5dv_obj dv_obj;
 	struct spdk_mlx5_crypto_caps crypto_caps = {};
 	struct ibv_qp_init_attr_ex dv_qp_attr = {
+		.qp_context = attr->qp_context,
 		.cap = attr->cap,
 		.qp_type = IBV_QPT_RC,
 		.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,

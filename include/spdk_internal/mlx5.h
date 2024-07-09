@@ -165,6 +165,7 @@ struct spdk_mlx5_hw_qp {
 
 struct spdk_mlx5_qp_attr {
 	struct ibv_qp_cap cap;
+	void *qp_context;
 	bool sigall;
 	/* If set then CQ_UPDATE will be cleared for every ctrl WQE and only last ctlr WQE before ringing the doorbell
 	 * will be updated with CQ_UPDATE flag */
