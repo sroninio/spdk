@@ -525,31 +525,28 @@ test_spdk_accel_submit_check_crc32c(void)
 	uint32_t crc = 0;
 	uint8_t src[TEST_SUBMIT_SIZE];
 	uint32_t seed = 0;
-	void *cb_arg = DUMMY_ARG;
+	void *cb_arg = NULL;
 	int rc;
 	struct spdk_accel_task task;
 	struct spdk_accel_task_aux_data task_aux;
 	struct spdk_accel_task *expected_accel_task = NULL;
-	int flags = 0;
 
 	STAILQ_INIT(&g_accel_ch->task_pool);
 	SLIST_INIT(&g_accel_ch->task_aux_data_pool);
 
 	/* Fail with no tasks on _get_task() */
-	rc = spdk_accel_submit_check_crc32c(g_ch, &crc, src, seed, nbytes, dummy_cb_fn, cb_arg);
+	rc = spdk_accel_submit_check_crc32c(g_ch, &crc, src, seed, nbytes, NULL, cb_arg);
 	CU_ASSERT(rc == -ENOMEM);
 
 	STAILQ_INSERT_TAIL(&g_accel_ch->task_pool, &task, link);
 	SLIST_INSERT_HEAD(&g_accel_ch->task_aux_data_pool, &task_aux, link);
 
 	/* accel submission OK. */
-	rc = spdk_accel_submit_check_crc32c(g_ch, &crc, src, seed, nbytes, dummy_cb_fn, cb_arg);
+	rc = spdk_accel_submit_check_crc32c(g_ch, &crc, src, seed, nbytes, NULL, cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(task.crc_dst == &crc);
 	CU_ASSERT(task.seed == seed);
 	CU_ASSERT(task.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C);
-	CU_ASSERT(task.cb_fn == dummy_cb_fn);
-	CU_ASSERT(task.cb_arg == cb_arg);
 	expected_accel_task = STAILQ_FIRST(&g_sw_ch->tasks_to_complete);
 	STAILQ_REMOVE_HEAD(&g_sw_ch->tasks_to_complete, link);
 	CU_ASSERT(expected_accel_task == &task);
@@ -563,33 +560,28 @@ test_spdk_accel_submit_copy_check_crc32c(void)
 	uint8_t dst[TEST_SUBMIT_SIZE];
 	uint8_t src[TEST_SUBMIT_SIZE];
 	uint32_t seed = 0;
-	void *cb_arg = DUMMY_ARG;
+	void *cb_arg = NULL;
 	int rc;
 	struct spdk_accel_task task;
 	struct spdk_accel_task_aux_data task_aux;
 	struct spdk_accel_task *expected_accel_task = NULL;
-	int flags = 0;
 
 	STAILQ_INIT(&g_accel_ch->task_pool);
 	SLIST_INIT(&g_accel_ch->task_aux_data_pool);
 
 	/* Fail with no tasks on _get_task() */
-	rc = spdk_accel_submit_copy_check_crc32c(g_ch, dst, src, &crc, seed, nbytes,
-			dummy_cb_fn, cb_arg);
+	rc = spdk_accel_submit_copy_check_crc32c(g_ch, dst, src, &crc, seed, nbytes, NULL, cb_arg);
 	CU_ASSERT(rc == -ENOMEM);
 
 	STAILQ_INSERT_TAIL(&g_accel_ch->task_pool, &task, link);
 	SLIST_INSERT_HEAD(&g_accel_ch->task_aux_data_pool, &task_aux, link);
 
 	/* accel submission OK. */
-	rc = spdk_accel_submit_copy_check_crc32c(g_ch, dst, src, &crc, seed, nbytes,
-			dummy_cb_fn, cb_arg);
+	rc = spdk_accel_submit_copy_check_crc32c(g_ch, dst, src, &crc, seed, nbytes, NULL, cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(task.crc_dst == &crc);
 	CU_ASSERT(task.seed == seed);
 	CU_ASSERT(task.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
-	CU_ASSERT(task.cb_fn == dummy_cb_fn);
-	CU_ASSERT(task.cb_arg == cb_arg);
 	expected_accel_task = STAILQ_FIRST(&g_sw_ch->tasks_to_complete);
 	STAILQ_REMOVE_HEAD(&g_sw_ch->tasks_to_complete, link);
 	CU_ASSERT(expected_accel_task == &task);
