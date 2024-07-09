@@ -15,6 +15,7 @@
     spdk_mlx5_qp_connect_loopback;
     spdk_mlx5_qp_create;
     spdk_mlx5_qp_destroy;
+    spdk_mlx5_qp_modify;
     spdk_mlx5_qp_set_error_state;
     spdk_mlx5_cq_poll_completions;
     spdk_mlx5_qp_rdma_write;

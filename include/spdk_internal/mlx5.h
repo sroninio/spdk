@@ -302,6 +302,16 @@ int spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp);
  */
 int spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *qp, struct rdma_cm_id *cm_id);
 
+/**
+ * Modify the attributes of QP qp with the attributes in attr according to the mask attr_mask
+ *
+ * \param qp QP to be modified
+ * \param attr QP attributed to be used to modify QP
+ * \param attr_mask specifies the QP attributes to be modified
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_modify(struct spdk_mlx5_qp *qp, struct ibv_qp_attr *attr, int attr_mask);
+
 int spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp);
 
 /**

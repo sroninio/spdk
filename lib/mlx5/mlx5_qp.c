@@ -710,6 +710,16 @@ spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 }
 
 int
+spdk_mlx5_qp_modify(struct spdk_mlx5_qp *qp, struct ibv_qp_attr *attr, int attr_mask)
+{
+	assert(qp);
+	assert(qp->verbs_qp);
+	assert(attr);
+
+	return ibv_modify_qp(qp->verbs_qp, attr, attr_mask);
+}
+
+int
 spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp)
 {
 	struct ibv_qp_attr attr = {
