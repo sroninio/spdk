@@ -997,7 +997,7 @@ xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 {
 	int rc;
 	struct xlio_poll_group_attr gattr = {
-		.flags = flags | XLIO_GROUP_FLAG_DIRTY,
+		.flags = flags,
 		.socket_event_cb = &xlio_socket_event_cb,
 		.socket_comp_cb = &xlio_socket_comp_cb,
 		.socket_rx_cb = &xlio_socket_rx_cb,
@@ -1020,7 +1020,7 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 	int rc;
 
 	assert(group);
-	rc = xlio_sock_group_create(&group->xgroup, 0);
+	rc = xlio_sock_group_create(&group->xgroup, XLIO_GROUP_FLAG_DIRTY);
 	if (rc) {
 		SPDK_ERRLOG("Failed to create group.\n");
 		return rc;
