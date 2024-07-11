@@ -3087,7 +3087,7 @@ Example response:
 
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
-Set a bdev in a read-only state
+Set a bdev to read-only state
 
 #### Parameters
 
@@ -3122,7 +3122,7 @@ Example response:
 
 ### bdev_set_rw {#rpc_bdev_set_rw}
 
-Set a bdev in a read-only state
+For a bdev that was previously set to read-only, restore read-write capability.
 
 #### Parameters
 

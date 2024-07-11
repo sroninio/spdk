@@ -3579,7 +3579,7 @@ bdev_io_type_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type)
 }
 
 bool
-spdk_bdev_get_read_only(struct spdk_bdev *bdev)
+spdk_bdev_is_read_only(struct spdk_bdev *bdev)
 {
 	if (bdev->write_disabled) {
 		return true;
@@ -5254,6 +5254,14 @@ _io_type_change_notify(void *ctx)
 	_event_notify(desc, SPDK_BDEV_EVENT_IO_TYPES_CHANGED);
 }
 
+static void
+_claim_released_notify(void *ctx)
+{
+	struct spdk_bdev_desc *desc = ctx;
+
+	_event_notify(desc, SPDK_BDEV_EVENT_CLAIM_RELESED);
+}
+
 int
 spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled)
 {
@@ -5275,11 +5283,15 @@ spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled)
 
 	if (bdev->internal.claim_type == SPDK_BDEV_CLAIM_EXCL_WRITE) {
 		spdk_bdev_module_release_bdev(bdev);
+		TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
+			event_notify(desc, _claim_released_notify);
+		}
 	} else {
 		TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
 			if (desc->claim != NULL) {
 				bdev_desc_release_claims(desc);
 			}
+			event_notify(desc, _claim_released_notify);
 		}
 	}
 

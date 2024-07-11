@@ -22,7 +22,7 @@
 	spdk_bdev_close;
 	spdk_bdev_desc_get_bdev;
 	spdk_bdev_set_timeout;
-	spdk_bdev_get_read_only;
+	spdk_bdev_is_read_only;
 	spdk_bdev_io_type_supported;
 	spdk_bdev_event_type_supported;
 	spdk_bdev_dump_info_json;
