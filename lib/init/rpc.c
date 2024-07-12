@@ -21,9 +21,10 @@ static int
 rpc_subsystem_poll(void *arg)
 {
 	int rc;
-	uint64_t now = spdk_get_ticks();
+	uint64_t now;
 
 	rc = spdk_rpc_accept();
+	now = spdk_get_ticks();
 	if (rc > 0) {
 		if (g_busy_period_end == 0) {
 			spdk_poller_unregister(&g_rpc_poller);
