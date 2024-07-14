@@ -1497,18 +1497,15 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return saverr;
 	}
 
-	res = file_object_fill_attr(fobject, &fsdev_io->u_out.link.attr);
-	if (res == -1) {
-		saverr = -errno;
-		SPDK_ERRLOG("file_object_fill_attr failed for " FOBJECT_FMT " (err=%d)\n",
-			    FOBJECT_ARGS(fobject), saverr);
-		return saverr;
+	res = lo_do_lookup(vfsdev, new_parent_fobject, name, &fsdev_io->u_out.link.fobject,
+			   &fsdev_io->u_out.link.attr);
+	if (res) {
+		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
+		return res;
 	}
 
-	file_object_ref(fobject);
-
 	SPDK_DEBUGLOG(fsdev_aio, "LINK succeeded for " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s\n",
-		      FOBJECT_ARGS(fobject), FOBJECT_ARGS(new_parent_fobject), name);
+		      FOBJECT_ARGS(fobject), FOBJECT_ARGS(fsdev_io->u_out.link.fobject), name);
 
 	return 0;
 }
