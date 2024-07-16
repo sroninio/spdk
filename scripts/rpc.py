@@ -1280,13 +1280,13 @@ if __name__ == "__main__":
                    help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
                    type=int, required=False)
     p.add_argument('--rw-mbytes-per-sec',
-                   help="R/W megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.add_argument('--r-mbytes-per-sec',
-                   help="Read megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.add_argument('--w-mbytes-per-sec',
-                   help="Write megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.set_defaults(func=bdev_set_qos_limit)
 
@@ -3740,13 +3740,13 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
                    type=int, required=False)
     p.add_argument('--rw-mbytes-per-sec',
-                   help="R/W megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.add_argument('--r-mbytes-per-sec',
-                   help="Read megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.add_argument('--w-mbytes-per-sec',
-                   help="Write megabytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   help="Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
                    type=int, required=False)
     p.set_defaults(func=bdev_group_set_qos_limit)
 

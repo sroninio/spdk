@@ -314,7 +314,7 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_t
 		limit->limit = value;
 		min_limit_per_sec = SPDK_BDEV_QOS_MIN_IOS_PER_SEC;
 	} else {
-		/* Change from megabyte to byte rate limit */
+		/* Change from mebibyte to byte rate limit */
 		limit->limit = value * 1024 * 1024;
 		min_limit_per_sec = SPDK_BDEV_QOS_MIN_BYTES_PER_SEC;
 	}

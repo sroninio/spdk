@@ -2816,9 +2816,9 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | Block device name
 rw_ios_per_sec          | Optional | number      | Number of R/W I/Os per second to allow. 0 means unlimited.
-rw_mbytes_per_sec       | Optional | number      | Number of R/W megabytes per second to allow. 0 means unlimited.
-r_mbytes_per_sec        | Optional | number      | Number of Read megabytes per second to allow. 0 means unlimited.
-w_mbytes_per_sec        | Optional | number      | Number of Write megabytes per second to allow. 0 means unlimited.
+rw_mbytes_per_sec       | Optional | number      | Number of R/W mebibytes per second to allow. 0 means unlimited.
+r_mbytes_per_sec        | Optional | number      | Number of Read mebibytes per second to allow. 0 means unlimited.
+w_mbytes_per_sec        | Optional | number      | Number of Write mebibytes per second to allow. 0 means unlimited.
 
 #### Example
 
@@ -3003,9 +3003,9 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | Name of the bdev group
 rw_ios_per_sec          | Optional | number      | Number of R/W I/Os per second to allow. 0 means unlimited.
-rw_mbytes_per_sec       | Optional | number      | Number of R/W megabytes per second to allow. 0 means unlimited.
-r_mbytes_per_sec        | Optional | number      | Number of Read megabytes per second to allow. 0 means unlimited.
-w_mbytes_per_sec        | Optional | number      | Number of Write megabytes per second to allow. 0 means unlimited.
+rw_mbytes_per_sec       | Optional | number      | Number of R/W mebibytes per second to allow. 0 means unlimited.
+r_mbytes_per_sec        | Optional | number      | Number of Read mebibytes per second to allow. 0 means unlimited.
+w_mbytes_per_sec        | Optional | number      | Number of Write mebibytes per second to allow. 0 means unlimited.
 
 #### Example
 
