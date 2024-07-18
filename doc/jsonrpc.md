@@ -13113,9 +13113,9 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | Name of the AIO fsdev to create.
 root_path               | Required | string      | Path on the system directory to be exposed as an SPDK filesystem
-xattr_enabled           | Optional | int         | 1 to enable the extended attributes, 0 otherwise
-writeback_cache         | Optional | int         | 1 to enable the writeback cache, 0 otherwise
-max_write               | Optional | int         | Max write size
+xattr_enabled           | Optional | bool        | true to enable the extended attributes, false otherwise
+writeback_cache         | Optional | bool        | true to enable the writeback cache, false otherwise
+max_write               | Optional | int         | Max write size in bytes
 
 #### Example
 
@@ -13128,8 +13128,8 @@ Example request:
   "params": {
     "name": "aio0",
     "root_path": "/tmp/vfio-test",
-    "xattr_enabled": 0,
-    "writeback_cache": 1,
+    "xattr_enabled": false,
+    "writeback_cache": true,
     "max_write": 65535
   }
 }

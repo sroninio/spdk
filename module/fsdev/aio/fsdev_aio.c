@@ -2474,10 +2474,21 @@ setup_proc_self_fd(struct aio_fsdev *vfsdev)
 	return 0;
 }
 
+void
+spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
+{
+	assert(opts);
+
+	memset(opts, 0, sizeof(*opts));
+
+	opts->xattr_enabled = DEFAULT_XATTR_ENABLED;
+	opts->writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
+	opts->max_write = DEFAULT_MAX_WRITE;
+}
+
 int
 spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *root_path,
-		      enum spdk_aio_bool_param xattr_enabled, enum spdk_aio_bool_param writeback_cache_enabled,
-		      uint32_t max_write)
+		      const struct spdk_fsdev_aio_opts *opts)
 {
 	struct aio_fsdev *vfsdev;
 	int rc;
@@ -2526,8 +2537,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 #endif
 
-	vfsdev->xattr_enabled = (xattr_enabled == SPDK_AIO_UNDEFINED) ?
-				DEFAULT_XATTR_ENABLED : !!xattr_enabled;
+	vfsdev->xattr_enabled = opts->xattr_enabled;
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
 	vfsdev->fsdev.module = &aio_fsdev_module;
@@ -2540,10 +2550,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-	vfsdev->fsdev.opts.writeback_cache_enabled = (writeback_cache_enabled == SPDK_AIO_UNDEFINED) ?
-			DEFAULT_WRITEBACK_CACHE : !!writeback_cache_enabled;
-	vfsdev->fsdev.opts.max_write = (max_write == SPDK_AIO_MAX_WRITE_UNDEFINED) ?
-				       DEFAULT_MAX_WRITE : max_write;
+	vfsdev->fsdev.opts.writeback_cache_enabled = opts->writeback_cache_enabled;
+	vfsdev->fsdev.opts.max_write = opts->max_write;
 
 	*fsdev = &(vfsdev->fsdev);
 	TAILQ_INSERT_TAIL(&g_aio_fsdev_head, vfsdev, tailq);

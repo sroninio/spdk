@@ -32,8 +32,8 @@ def fsdev_set_opts(client, fsdev_io_pool_size: int = None, fsdev_io_cache_size: 
     return client.call('fsdev_set_opts', params)
 
 
-def fsdev_aio_create(client, name, root_path, xattr_enabled: bool = None,
-                     writeback_cache: int = None, max_write: int = None):
+def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
+                     enable_writeback_cache: bool = None, max_write: int = None):
     """Create a aio filesystem.
 
     Args:
@@ -47,10 +47,10 @@ def fsdev_aio_create(client, name, root_path, xattr_enabled: bool = None,
         'name': name,
         'root_path': root_path
     }
-    if xattr_enabled is not None:
-        params['xattr_enabled'] = xattr_enabled
-    if writeback_cache is not None:
-        params['writeback_cache'] = writeback_cache
+    if enable_xattr is not None:
+        params['enable_xattr'] = enable_xattr
+    if enable_writeback_cache is not None:
+        params['enable_writeback_cache'] = enable_writeback_cache
     if max_write is not None:
         params['max_write'] = max_write
     return client.call('fsdev_aio_create', params)
