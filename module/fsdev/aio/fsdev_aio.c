@@ -205,6 +205,7 @@ file_object_unref(struct spdk_fsdev_file_object *fobject, uint32_t count)
 			file_object_unref(parent_fobject, 1); /* unref by the leaf */
 		}
 
+		spdk_spin_destroy(&fobject->lock);
 		close(fobject->fd);
 		free(fobject->fd_str);
 		free(fobject);
