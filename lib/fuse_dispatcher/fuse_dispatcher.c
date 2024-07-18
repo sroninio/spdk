@@ -2591,7 +2591,7 @@ do_destroy(struct fuse_io *fuse_io)
 		int err = spdk_fsdev_op_forget(fuse_io_desc(fuse_io), fuse_io->ch, 0, disp->root_fobject, 1,
 					       do_forget_root_cpl_clb, fuse_io);
 		if (err) {
-			SPDK_ERRLOG("Failed to initiare forget for root (err=%d)\n", err);
+			SPDK_ERRLOG("Failed to initiate forget for root (err=%d)\n", err);
 			fuse_dispatcher_io_complete_err(fuse_io, err);
 			return;
 		}
