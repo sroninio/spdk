@@ -935,7 +935,8 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 				      pdu->capsule_len,
 				      &attr);
 		if (rc < 0) {
-			SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, tqpair->flags.closed);
+			SPDK_ERRLOG("Failed to submit %d, errno %d, tqpair %p, sock closed %d\n",
+				    rc, errno, tqpair, tqpair->flags.closed);
 			return rc;
 		}
 	}
@@ -944,7 +945,8 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 		if (attr.flags & XLIO_SOCKET_SEND_FLAG_INLINE) {
 			rc = xlio_socket_sendv(tqpair->xlio_sock, pdu->iovs, pdu->data_iovcnt, &attr);
 			if (rc < 0) {
-				SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, tqpair->flags.closed);
+				SPDK_ERRLOG("Failed to submit %d, errno %d, tqpair %p, sock closed %d\n",
+					    rc, errno, tqpair, tqpair->flags.closed);
 				return rc;
 			}
 		} else {
@@ -958,7 +960,8 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 						      pdu->iovs[i].iov_len,
 						      &attr);
 				if (rc < 0) {
-					SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, tqpair->flags.closed);
+					SPDK_ERRLOG("Failed to submit %d, errno %d, tqpair %p, sock closed %d\n",
+						    rc, errno, tqpair, tqpair->flags.closed);
 					return rc;
 				}
 			}
@@ -972,7 +975,8 @@ nvme_tcp_qpair_send_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 					      sizeof(pdu->data_digest),
 					      &attr);
 			if (rc < 0) {
-				SPDK_ERRLOG("Failed to submit %d sock closed %d\n", rc, tqpair->flags.closed);
+				SPDK_ERRLOG("Failed to submit %d, errno %d, tqpair %p, sock closed %d\n",
+					    rc, errno, tqpair, tqpair->flags.closed);
 				return rc;
 			}
 		}
