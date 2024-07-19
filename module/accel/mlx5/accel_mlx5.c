@@ -536,10 +536,11 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 	if (task->num_ops) {
 		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, task->mkeys, task->num_ops);
-		}
-		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C ||
-		    task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
-		    task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
+		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C) {
+			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
+			spdk_mempool_put(dev->psv_pool_ref, task->psv);
+		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
+			   task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, task->mkeys, task->num_ops);
 			spdk_mempool_put(dev->psv_pool_ref, task->psv);
 		}
