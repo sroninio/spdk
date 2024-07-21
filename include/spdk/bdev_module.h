@@ -1412,7 +1412,7 @@ int spdk_bdev_notify_io_channel_weight_change(struct spdk_bdev *bdev);
  * \param bdev Block device to change.
  * \new read/write capabilities.
  */
-int spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled);
+int spdk_bdev_set_ro(struct spdk_bdev *bdev, bool write_disabled);
 
 /**
  * Translates NVMe status codes to SCSI status information.

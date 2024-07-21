@@ -5259,11 +5259,11 @@ _claim_released_notify(void *ctx)
 {
 	struct spdk_bdev_desc *desc = ctx;
 
-	_event_notify(desc, SPDK_BDEV_EVENT_CLAIM_RELESED);
+	_event_notify(desc, SPDK_BDEV_EVENT_CLAIM_RELEASED);
 }
 
 int
-spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled)
+spdk_bdev_set_ro(struct spdk_bdev *bdev, bool write_disabled)
 {
 	struct spdk_bdev_desc *desc;
 
@@ -5290,8 +5290,8 @@ spdk_bdev_notify_rw_change(struct spdk_bdev *bdev, bool write_disabled)
 		TAILQ_FOREACH(desc, &bdev->internal.open_descs, link) {
 			if (desc->claim != NULL) {
 				bdev_desc_release_claims(desc);
+				event_notify(desc, _claim_released_notify);
 			}
-			event_notify(desc, _claim_released_notify);
 		}
 	}
 

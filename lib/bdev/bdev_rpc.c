@@ -1207,7 +1207,7 @@ rpc_bdev_set_ro(struct spdk_jsonrpc_request *request,
 		return;
 	}
 
-	spdk_bdev_notify_rw_change(bdev, true);
+	spdk_bdev_set_ro(bdev, true);
 
 	spdk_jsonrpc_send_bool_response(request, true);
 	return;
@@ -1245,7 +1245,7 @@ rpc_bdev_set_rw(struct spdk_jsonrpc_request *request,
 		return;
 	}
 
-	spdk_bdev_notify_rw_change(bdev, false);
+	spdk_bdev_set_ro(bdev, false);
 
 	spdk_jsonrpc_send_bool_response(request, true);
 	return;
