@@ -11,7 +11,6 @@ SO_MINOR := 0
 C_SRCS = fsdev_aio.c fsdev_aio_rpc.c
 
 ifeq ($(OS),Linux)
-$(info Linux: using the Linux aio)
 C_SRCS += linux_aio_mgr.c
 LOCAL_SYS_LIBS = -laio
 else

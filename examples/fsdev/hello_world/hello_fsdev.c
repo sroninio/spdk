@@ -476,7 +476,7 @@ root_lookup_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 {
 	struct hello_context_t *hello_context = cb_arg;
 
-	SPDK_NOTICELOG("Root lockup complete (status=%d)\n", status);
+	SPDK_NOTICELOG("Root lookup complete (status=%d)\n", status);
 	if (status) {
 		SPDK_ERRLOG("Fuse init failed: error %d\n", status);
 		hello_app_done(hello_context, status);
@@ -525,7 +525,7 @@ hello_start(void *arg1)
 	hello_context->app_thread = spdk_get_thread();
 
 	/*
-	 * There can be many bdevs configured, but this application will only use
+	 * There can be many fsdevs configured, but this application will only use
 	 * the one input by the user at runtime.
 	 *
 	 * Open the fs by calling spdk_fsdev_open() with its name.

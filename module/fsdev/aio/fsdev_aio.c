@@ -1568,7 +1568,7 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
-#ifndef SPDK_CONFIG_HAVE_XATTR
+#ifndef __linux__
 static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -1817,7 +1817,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	return 0;
 }
-#endif /* SPDK_CONFIG_HAVE_XATTR */
+#endif /* __linux__ */
 
 static int
 lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
@@ -2530,9 +2530,9 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-#ifndef SPDK_CONFIG_HAVE_XATTR
-	if (xattr_enabled == SPDK_AIO_TRUE) {
-		SPDK_ERRLOG("Extended attributes are not supported\n");
+#ifndef __linux__
+	if (opts->xattr_enabled) {
+		SPDK_ERRLOG("Extended attributes can only be enabled in Linux\n");
 		fsdev_aio_free(vfsdev);
 		return rc;
 	}

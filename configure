@@ -1371,11 +1371,6 @@ if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then
 		CONFIG[HAVE_STRUCT_STAT_ST_ATIM]=n
 		CONFIG[HAVE_STRUCT_STAT_ST_ATIMESPEC]=n
 	fi
-	if [[ $sys_name == "Linux" ]]; then
-		CONFIG[HAVE_XATTR]=y
-	else
-		CONFIG[HAVE_XATTR]=n
-	fi
 fi
 
 # For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
