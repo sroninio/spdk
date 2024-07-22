@@ -2256,8 +2256,9 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_string(w, "name", spdk_fsdev_get_name(&vfsdev->fsdev));
 	spdk_json_write_named_string(w, "root_path", vfsdev->root_path);
-	spdk_json_write_named_uint8(w, "xattr_enabled", vfsdev->xattr_enabled ? 1 : 0);
-	spdk_json_write_named_uint8(w, "writeback_cache", vfsdev->fsdev.opts.writeback_cache_enabled);
+	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->xattr_enabled);
+	spdk_json_write_named_bool(w, "enable_writeback_cache",
+				   !!vfsdev->fsdev.opts.writeback_cache_enabled);
 	spdk_json_write_named_uint32(w, "max_write", vfsdev->fsdev.opts.max_write);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
