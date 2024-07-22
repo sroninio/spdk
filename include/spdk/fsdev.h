@@ -615,6 +615,40 @@ typedef void (spdk_fsdev_op_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel
 		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
+ * Ioctl operation completion callback.
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ * \param request A device-dependent request cmd.
+ * \param argp Command arguments.
+ */
+typedef void (spdk_fsdev_op_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+		int status, uint32_t request, void *argp);
+
+/**
+ * Ioctl operation.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object.
+ * \param fhandle File handle.
+ * \param request A device-dependent request cmd.
+ * \param argp Command arguments. The pointer must be valid until the cb_fn arrives.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ */
+int spdk_fsdev_op_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject,
+			struct spdk_fsdev_file_handle *fhandle, uint32_t request,
+			void *argp, spdk_fsdev_op_ioctl_cpl_cb cb_fn, void *cb_arg);
+
+/**
  * Create a symbolic link
  *
  * \param desc Filesystem device descriptor.

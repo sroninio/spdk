@@ -576,14 +576,8 @@ static int
 lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.syncfs.fobject;
 	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.syncfs.fhandle;
-
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
-	}
 
 	res = syncfs(fhandle->fd);
 	if (res == -1) {
@@ -639,6 +633,37 @@ lo_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	return 0;
+}
+
+static int
+lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.ioctl.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.ioctl.fobject;
+	uint32_t request = fsdev_io->u_in.ioctl.request;
+	void *argp = fsdev_io->u_in.ioctl.argp;
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	fsdev_io->u_out.ioctl.request = request;
+	fsdev_io->u_out.ioctl.argp = argp;
+
+	res = ioctl(fhandle->fd, request, argp);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Ioctl failed for " FOBJECT_FMT " request=%u (err=%d)\n",
+			    FOBJECT_ARGS(fobject), request, res);
+		return res;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "IOCTL succeded for " FOBJECT_FMT " request=%u\n",
+			FOBJECT_ARGS(fobject), request);
 	return 0;
 }
 
@@ -2287,6 +2312,7 @@ static fsdev_op_handler_func handlers[] = {
 	[SPDK_FSDEV_OP_COPY_FILE_RANGE] = lo_copy_file_range,
 	[SPDK_FSDEV_OP_SYNCFS] = lo_syncfs,
 	[SPDK_FSDEV_OP_LSEEK] = lo_lseek,
+	[SPDK_FSDEV_OP_IOCTL] = lo_ioctl,
 };
 
 static void

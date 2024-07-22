@@ -33,6 +33,10 @@
 
 #define UT_SUBMIT_IO_NUM_COMMON_PARAMS 4
 
+/* No-op ioctl */
+#define UT_IOCTL_CMD 32
+#define UT_IOCTL_DATA ((void *)0xBEEFDEAF)
+
 static uint64_t
 ut_hash(const void *buf, size_t size)
 {
@@ -562,6 +566,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.lseek.offset);
 		ut_call_record_param_int(fsdev_io->u_in.lseek.whence);
+		break;
+	case SPDK_FSDEV_OP_IOCTL:
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.request);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.argp);
 		break;
 	case __SPDK_FSDEV_OP_LAST:
 	default:
@@ -2255,6 +2265,39 @@ ut_fsdev_test_op_lseek(void)
 }
 
 static void
+ut_fsdev_op_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			 uint32_t request, void *argp)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_op_ioctl_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_op_ioctl(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				   UT_IOCTL_CMD, UT_IOCTL_DATA, ut_fsdev_op_ioctl_cpl_cb,
+				   status);
+}
+
+static void
+ut_fsdev_op_ioctl_check_op_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == UT_IOCTL_CMD);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == UT_IOCTL_DATA);
+}
+
+static void
+ut_fsdev_test_op_ioctl(void)
+{
+	ut_fsdev_test_op(SPDK_FSDEV_OP_IOCTL, 0, 4, ut_fsdev_op_ioctl_execute_op_clb,
+			 ut_fsdev_op_ioctl_check_op_clb);
+}
+
+static void
 ut_fsdev_op_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
@@ -2476,6 +2519,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_op_syncfs);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_access);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_lseek);
+	CU_ADD_TEST(suite, ut_fsdev_test_op_ioctl);
 
 	allocate_cores(1);
 	allocate_threads(1);
