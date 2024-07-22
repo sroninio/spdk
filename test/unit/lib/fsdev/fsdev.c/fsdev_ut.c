@@ -550,6 +550,13 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fhandle);
 		break;
+	case SPDK_FSDEV_OP_ACCESS:
+		ut_call_record_param_ptr(fsdev_io->u_in.access.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.access.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.access.mask);
+		ut_call_record_param_int(fsdev_io->u_in.access.uid);
+		ut_call_record_param_int(fsdev_io->u_in.access.gid);
+		break;
 	case __SPDK_FSDEV_OP_LAST:
 	default:
 		break;
@@ -2174,6 +2181,40 @@ ut_fsdev_test_op_syncfs(void)
 }
 
 static void
+ut_fsdev_op_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			  uint32_t mask, uid_t uid, uid_t gid)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_op_access_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_op_access(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				    F_OK | R_OK, 42, 43, ut_fsdev_op_access_cpl_cb, status);
+}
+
+static void
+ut_fsdev_op_access_check_op_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	int mask = (int)ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2);
+	CU_ASSERT(mask >= F_OK && mask <= (F_OK | R_OK | W_OK | X_OK));
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 42);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 43);
+}
+
+static void
+ut_fsdev_test_op_access(void)
+{
+	ut_fsdev_test_op(SPDK_FSDEV_OP_ACCESS, 0, 5, ut_fsdev_op_access_execute_op_clb,
+			 ut_fsdev_op_access_check_op_clb);
+}
+
+static void
 ut_fsdev_op_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
@@ -2393,6 +2434,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_op_fallocate);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_copy_file_range);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_syncfs);
+	CU_ADD_TEST(suite, ut_fsdev_test_op_access);
 
 	allocate_cores(1);
 	allocate_threads(1);

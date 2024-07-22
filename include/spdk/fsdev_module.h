@@ -236,6 +236,7 @@ enum spdk_fsdev_op {
 	SPDK_FSDEV_OP_FALLOCATE,
 	SPDK_FSDEV_OP_COPY_FILE_RANGE,
 	SPDK_FSDEV_OP_SYNCFS,
+	SPDK_FSDEV_OP_ACCESS,
 	__SPDK_FSDEV_OP_LAST
 };
 
@@ -433,6 +434,13 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 		} syncfs;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
 	} u_in;
 
 	union {
@@ -501,6 +509,12 @@ struct spdk_fsdev_io {
 		struct {
 			size_t data_size;
 		} copy_file_range;
+		struct {
+			struct spdk_fsdev_file_attr attr;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
 	} u_out;
 
 	/**

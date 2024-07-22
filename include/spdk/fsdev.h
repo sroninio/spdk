@@ -454,6 +454,44 @@ int spdk_fsdev_op_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *c
 			 spdk_fsdev_op_lookup_cpl_cb cb_fn, void *cb_arg);
 
 /**
+ * Access operation completion callback
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ * \param mask Access mask to check.
+ * \param uid Uid that was used for checking access.
+ * \param gid Gid that was used for checking access.
+ */
+typedef void (spdk_fsdev_op_access_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+		int status, uint32_t mask, uid_t uid, uid_t gid);
+
+/**
+ * Check the file access flags for passed mask.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object for checking.
+ * \param fhandle File handle.
+ * \param mask Access mask to check.
+ * \param uid Uid to be used for checking access.
+ * \param gid Gid to be used for checking access.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ * - -EACCESS - access is not allowed.
+ */
+int spdk_fsdev_op_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+			 struct spdk_fsdev_file_handle *fhandle, uint32_t mask,
+			 uid_t uid, uid_t gid, spdk_fsdev_op_access_cpl_cb cb_fn,
+			 void *cb_arg);
+
+/**
  * Look up file operation completion callback
  *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API

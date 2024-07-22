@@ -115,7 +115,43 @@ spdk_fsdev_op_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 
 	fsdev_io_submit(fsdev_io);
 	return 0;
+}
 
+static void
+_spdk_fsdev_op_access_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_op_access_cpl_cb,
+		     fsdev_io->u_out.access.mask, fsdev_io->u_out.access.uid,
+		     fsdev_io->u_out.access.gid);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_op_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		     struct spdk_fsdev_file_handle *fhandle, uint32_t mask,
+		     uid_t uid, uid_t gid, spdk_fsdev_op_access_cpl_cb cb_fn,
+		     void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_op_access_cb, ch,
+					 SPDK_FSDEV_OP_ACCESS);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.access.fobject = fobject;
+	fsdev_io->u_in.access.fhandle = fhandle;
+	fsdev_io->u_in.access.mask = mask;
+	fsdev_io->u_in.access.uid = uid;
+	fsdev_io->u_in.access.gid = gid;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
 }
 
 static void
