@@ -390,6 +390,36 @@ struct spdk_fsdev_file_statfs {
 };
 
 /**
+ * Syncfs operation completion callback
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ */
+typedef void (spdk_fsdev_op_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+		int status);
+
+/**
+ * Sync entire filesystem referred by the file handle.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object to identify the fs.
+ * \param fhandle File hsndle to the opened file.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ */
+int spdk_fsdev_op_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+			 struct spdk_fsdev_file_handle *fhandle,
+			 spdk_fsdev_op_syncfs_cpl_cb cb_fn, void *cb_arg);
+
+/**
  * Lookup file operation completion callback
  *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API

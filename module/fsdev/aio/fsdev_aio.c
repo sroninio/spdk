@@ -570,6 +570,30 @@ lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+static int
+lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.syncfs.fobject;
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.syncfs.fhandle;
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	res = syncfs(fhandle->fd);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Cannot syncfs for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
+		return res;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "SYNCFS succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	return 0;
+}
+
 /*
  * Change to uid/gid of caller so that file is created with ownership of caller.
  */
@@ -2190,6 +2214,7 @@ static fsdev_op_handler_func handlers[] = {
 	[SPDK_FSDEV_OP_ABORT] = lo_abort,
 	[SPDK_FSDEV_OP_FALLOCATE] = lo_fallocate,
 	[SPDK_FSDEV_OP_COPY_FILE_RANGE] = lo_copy_file_range,
+	[SPDK_FSDEV_OP_SYNCFS] = lo_syncfs,
 };
 
 static void
