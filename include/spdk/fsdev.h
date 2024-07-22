@@ -520,6 +520,56 @@ int spdk_fsdev_op_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *c
 			 struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
 			 spdk_fsdev_op_forget_cpl_cb cb_fn, void *cb_arg);
 
+enum spdk_fsdev_seek_whence {
+	SPDK_FSDEV_SEEK_SET = (1 << 0),
+	SPDK_FSDEV_SEEK_CUR = (1 << 1),
+	SPDK_FSDEV_SEEK_END = (1 << 2),
+	SPDK_FSDEV_SEEK_HOLE = (1 << 3),
+	SPDK_FSDEV_SEEK_DATA = (1 << 4)
+};
+
+/**
+ * Reposition read/write file offset callback.
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ * \param offset Resulting offset.
+ * \param whence Used whence.
+ */
+typedef void (spdk_fsdev_op_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+		int status, off_t offset, enum spdk_fsdev_seek_whence whence);
+
+/**
+ * Reposition read/write file offset operation.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object.
+ * \param fhandle File handle.
+ * \param offset The offset is bytes.
+ * \param whence Behavior of the offset usage.
+ * - SPDK_FSDEV_SEEK_SET  - the offset is set to offset bytes.
+ * - SPDK_FSDEV_SSEEK_CUR  - the offset is set to its current location plus offset bytes.
+ * - SPDK_FSDEV_SSEEK_END  - the offset is set to the size of the file plus offset bytes.
+ * - SPDK_FSDEV_SSEEK_HOLE - the offset is set to the start of the next hole greater than or
+ *   equal to the supplied offset.
+ * - SPDK_FSDEV_SSEEK_DATA - the offset is set to the start of the next non-hole file region
+ *   greater than or equal to the supplied offset.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ */
+int spdk_fsdev_op_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject,
+			struct spdk_fsdev_file_handle *fhandle, off_t offset,
+			enum spdk_fsdev_seek_whence whence, spdk_fsdev_op_lseek_cpl_cb cb_fn,
+			void *cb_arg);
+
 /**
  * Read symbolic link operation completion callback
  *

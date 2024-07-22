@@ -593,6 +593,52 @@ lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "SYNCFS succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+
+	return 0;
+}
+
+static int
+lo_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.lseek.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.lseek.fobject;
+	off_t offset = fsdev_io->u_in.lseek.offset;
+	enum spdk_fsdev_seek_whence whence = fsdev_io->u_in.lseek.whence;
+	int awhence;
+
+	switch (whence) {
+	case SPDK_FSDEV_SEEK_SET:
+		awhence = SEEK_SET;
+		break;
+	case SPDK_FSDEV_SEEK_CUR:
+		awhence = SEEK_CUR;
+		break;
+	case SPDK_FSDEV_SEEK_END:
+		awhence = SEEK_END;
+		break;
+	case SPDK_FSDEV_SEEK_HOLE:
+		awhence = SEEK_HOLE;
+		break;
+	case SPDK_FSDEV_SEEK_DATA:
+		awhence = SEEK_DATA;
+		break;
+	default:
+		/* Inducing error from lseek() with invalid whence. */
+		awhence = -1;
+	}
+
+	offset = lseek(fhandle->fd, offset, awhence);
+	fsdev_io->u_out.lseek.offset = offset;
+	fsdev_io->u_out.lseek.whence = whence;
+	if (offset == (off_t) -1) {
+		res = -errno;
+		SPDK_ERRLOG("Failed to change read/write offset for " FOBJECT_FMT " (err=%d)\n",
+			    FOBJECT_ARGS(fobject), res);
+		return res;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 	return 0;
 }
 
@@ -2240,6 +2286,7 @@ static fsdev_op_handler_func handlers[] = {
 	[SPDK_FSDEV_OP_FALLOCATE] = lo_fallocate,
 	[SPDK_FSDEV_OP_COPY_FILE_RANGE] = lo_copy_file_range,
 	[SPDK_FSDEV_OP_SYNCFS] = lo_syncfs,
+	[SPDK_FSDEV_OP_LSEEK] = lo_lseek,
 };
 
 static void

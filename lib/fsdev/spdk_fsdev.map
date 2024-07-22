@@ -57,6 +57,7 @@
 	spdk_fsdev_op_abort;
 	spdk_fsdev_op_fallocate;
 	spdk_fsdev_op_copy_file_range;
+	spdk_fsdev_op_lseek;
 
 	# Public functions in fsdev_module.h
 	spdk_fsdev_register;

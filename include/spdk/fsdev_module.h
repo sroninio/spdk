@@ -237,6 +237,7 @@ enum spdk_fsdev_op {
 	SPDK_FSDEV_OP_COPY_FILE_RANGE,
 	SPDK_FSDEV_OP_SYNCFS,
 	SPDK_FSDEV_OP_ACCESS,
+	SPDK_FSDEV_OP_LSEEK,
 	__SPDK_FSDEV_OP_LAST
 };
 
@@ -441,6 +442,12 @@ struct spdk_fsdev_io {
 			uid_t uid;
 			uid_t gid;
 		} access;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
 	} u_in;
 
 	union {
@@ -515,6 +522,10 @@ struct spdk_fsdev_io {
 			uid_t uid;
 			uid_t gid;
 		} access;
+		struct {
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
 	} u_out;
 
 	/**

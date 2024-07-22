@@ -557,6 +557,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_int(fsdev_io->u_in.access.uid);
 		ut_call_record_param_int(fsdev_io->u_in.access.gid);
 		break;
+	case SPDK_FSDEV_OP_LSEEK:
+		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.lseek.offset);
+		ut_call_record_param_int(fsdev_io->u_in.lseek.whence);
+		break;
 	case __SPDK_FSDEV_OP_LAST:
 	default:
 		break;
@@ -2215,6 +2221,40 @@ ut_fsdev_test_op_access(void)
 }
 
 static void
+ut_fsdev_op_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			 off_t offset, enum spdk_fsdev_seek_whence whence)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_op_lseek_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_op_lseek(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				   4096, SPDK_FSDEV_SEEK_SET, ut_fsdev_op_lseek_cpl_cb, status);
+}
+
+static void
+ut_fsdev_op_lseek_check_op_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	off_t offset = (off_t)ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2);
+	enum spdk_fsdev_seek_whence whence = ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3);
+	CU_ASSERT(offset >= 0 && offset != (off_t) -1);
+	CU_ASSERT(whence >= SPDK_FSDEV_SEEK_SET && whence <= SPDK_FSDEV_SEEK_DATA);
+}
+
+static void
+ut_fsdev_test_op_lseek(void)
+{
+	ut_fsdev_test_op(SPDK_FSDEV_OP_LSEEK, 0, 4, ut_fsdev_op_lseek_execute_op_clb,
+			 ut_fsdev_op_lseek_check_op_clb);
+}
+
+static void
 ut_fsdev_op_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
@@ -2435,6 +2475,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_op_copy_file_range);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_syncfs);
 	CU_ADD_TEST(suite, ut_fsdev_test_op_access);
+	CU_ADD_TEST(suite, ut_fsdev_test_op_lseek);
 
 	allocate_cores(1);
 	allocate_threads(1);
