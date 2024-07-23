@@ -66,6 +66,7 @@ spdk_fsdev_op_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name,
 		     spdk_fsdev_op_lookup_cpl_cb cb_fn, void *cb_arg)
 {
+    printf("in anton base lookup\n");
 	struct spdk_fsdev_io *fsdev_io;
 
 	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_op_lookup_cb, ch,

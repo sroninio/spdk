@@ -11,6 +11,46 @@
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
 
+///====================avi additions :
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#ifdef WIN32
+#include <win32/win32_compat.h>
+#pragma comment(lib, "ws2_32.lib")
+WSADATA wsaData;
+#else
+#include <sys/stat.h>
+#endif
+ 
+#ifdef HAVE_POLL_H
+#include <poll.h>
+#endif
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#define SERVER "10.1.1.27"
+#define EXPORT "/VIRTUAL"
+#define NFSFILE "/BOOKS/Classics/Dracula.djvu"
+#define NFSDIR "/BOOKS/Classics/"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <fcntl.h>
+
+#include "libnfs.h"
+#include "libnfs-raw.h"
+#include "libnfs-raw-mount.h"
+
+
+//==============================end avi additions
+
 #define OP_STATUS_ASYNC INT_MIN
 
 #ifndef UNUSED
@@ -533,6 +573,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *parent_fob
 static int
 lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
+	printf("9 LOOKUP\n");
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int err;
 	struct spdk_fsdev_file_object *parent_fobject = fsdev_io->u_in.lookup.parent_fobject;
@@ -1237,6 +1278,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_object *
 		.euid = euid,
 		.egid = egid,
 	};
+	printf("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n");
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, parent_fobject)) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
@@ -1296,6 +1338,8 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
 	uid_t euid = fsdev_io->u_in.mknod.euid;
 	gid_t egid = fsdev_io->u_in.mknod.egid;
+	printf("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+	SPDK_ERRLOG("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
 
 	return lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
 				&fsdev_io->u_out.mknod.fobject, &fsdev_io->u_out.mknod.attr);
@@ -2017,6 +2061,7 @@ aio_io_poll(void *arg)
 static int
 aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 {
+	printf("aio_fsdev_create_cb\n");
 	struct aio_io_channel *ch = ctx_buf;
 	struct spdk_thread *thread = spdk_get_thread();
 
@@ -2038,6 +2083,7 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 static void
 aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 {
+	printf("aio_fsdev_destroy_cb\n");
 	struct aio_io_channel *ch = ctx_buf;
 	struct spdk_thread *thread = spdk_get_thread();
 
@@ -2054,6 +2100,7 @@ aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 static int
 fsdev_aio_initialize(void)
 {
+	printf("fsdev_aio_initialize\n");
 	/*
 	 * We need to pick some unique address as our "io device" - so just use the
 	 *  address of the global tailq.
@@ -2068,12 +2115,15 @@ fsdev_aio_initialize(void)
 static void
 fsdev_aio_finish(void)
 {
+	printf("fsdev_aio_finish\n");
+
 	spdk_io_device_unregister(&g_aio_fsdev_head, NULL);
 }
 
 static int
 fsdev_aio_get_ctx_size(void)
 {
+	printf("fsdev_aio_get_ctx_size\n");
 	return sizeof(struct aio_fsdev_io);
 }
 
@@ -2089,6 +2139,8 @@ SPDK_FSDEV_MODULE_REGISTER(aio, &aio_fsdev_module);
 static void
 fsdev_aio_free(struct aio_fsdev *vfsdev)
 {
+	printf("fsdev_aio_free\n");
+	
 	if (vfsdev->proc_self_fd != -1) {
 		close(vfsdev->proc_self_fd);
 	}
@@ -2109,6 +2161,8 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 static void
 fsdev_free_leafs(struct spdk_fsdev_file_object *fobject, bool unref_fobject)
 {
+	printf("fsdev_free_leafs\n");
+
 	while (!TAILQ_EMPTY(&fobject->handles)) {
 		struct spdk_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
 		file_handle_delete(fhandle);
@@ -2144,6 +2198,8 @@ fsdev_free_leafs(struct spdk_fsdev_file_object *fobject, bool unref_fobject)
 static int
 fsdev_aio_destruct(void *ctx)
 {
+	printf("fsdev_aio_destruct\n");
+	
 	struct aio_fsdev *vfsdev = ctx;
 
 	TAILQ_REMOVE(&g_aio_fsdev_head, vfsdev, tailq);
@@ -2198,6 +2254,14 @@ static void
 fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int status;
+	printf("fsdev_aio_submit_request\n");
+	nfs_avi_func(); //this is a function from libnfs !!
+	// printf("\n end nfs func\n");
+
+	//function from libnfs library:
+	// int x = nfs_get_fd(NULL);
+
+	// SPDK_ERRLOG("AAAAAAAAAAAAAAAAAAAAAAAAAA÷AAAAAAAAAAAAAAAAAAQQQ\n");
 	enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
 
 	assert(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
@@ -2211,6 +2275,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 static struct spdk_io_channel *
 fsdev_aio_get_io_channel(void *ctx)
 {
+	printf("fsdev_aio_get_io_channel\n");
 	/* We don't create an spdk_io_channel per aio_fsdev. Rather we share it among all the aio fsdevs. */
 	return spdk_get_io_channel(&g_aio_fsdev_head);
 }
@@ -2218,6 +2283,8 @@ fsdev_aio_get_io_channel(void *ctx)
 static int
 fsdev_aio_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
 {
+	printf("fsdev_aio_negotiate_opts\n");
+	
 	struct aio_fsdev *vfsdev = ctx;
 
 	assert(opts != 0);
@@ -2251,6 +2318,8 @@ fsdev_aio_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
 static void
 fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx *w)
 {
+	printf("fsdev_aio_write_config_json\n");
+
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev);
 
 	spdk_json_write_object_begin(w);
@@ -2276,6 +2345,8 @@ struct fsdev_aio_reset_ctx {
 static void
 fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
 {
+	printf("fsdev_aio_reset_done\n");
+
 	fsdev_free_leafs(ctx->vfsdev->root, false);
 
 	ctx->cb(ctx->cb_arg, status);
@@ -2288,6 +2359,8 @@ fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
 static void
 fsdev_aio_reset_check_outstanding_io_msg_cb(struct spdk_io_channel_iter *i)
 {
+	printf("fsdev_aio_reset_check_outstanding_io_msg_cb\n");
+
 	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
@@ -2434,6 +2507,8 @@ static const struct spdk_fsdev_fn_table aio_fn_table = {
 static int
 setup_root(struct aio_fsdev *vfsdev)
 {
+
+	printf("3 SET UP ROOT \n");
 	int fd, res;
 	struct stat stat;
 
@@ -2482,6 +2557,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		      enum spdk_aio_bool_param xattr_enabled, enum spdk_aio_bool_param writeback_cache_enabled,
 		      uint32_t max_write)
 {
+	printf("4 AIO CREATE (?) \n");
 	struct aio_fsdev *vfsdev;
 	int rc;
 

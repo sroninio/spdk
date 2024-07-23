@@ -5,6 +5,9 @@
 #  All rights reserved.
 #
 
+
+
+
 S :=
 
 SPDK_ROOT_DIR := $(CURDIR)
@@ -82,6 +85,11 @@ XNVMEBUILD = xnvmebuild
 LIB += xnvmebuild
 endif
 
+
+
+
+
+
 all: mk/cc.mk $(DIRS-y)
 clean: $(DIRS-y)
 	$(Q)rm -f include/spdk/config.h
@@ -147,3 +155,4 @@ ldflags: .ldflags .libs_only_other
 	$(Q)echo ''
 
 include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+
