@@ -528,6 +528,7 @@ mlx5_cq_poll_one(struct spdk_mlx5_hw_cq *hw_cq, int cqe_size)
 		      be16toh(cqe->wqe_counter),
 		      cqe->op_own & MLX5_INLINE_SCATTER_32,
 		      cqe->op_own & MLX5_INLINE_SCATTER_64);
+	mlx5_cq_dump_cqe(hw_cq, cqe);
 	return cqe;
 }
 

@@ -91,6 +91,33 @@ mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index)
 			be32toh(wqe[12]), be32toh(wqe[13]), be32toh(wqe[14]), be32toh(wqe[15]));
 	}
 }
+
+void
+mlx5_cq_dump_cqe(struct spdk_mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe)
+{
+	unsigned ci;
+	uint32_t *cqe = (uint32_t *)_cqe;
+	extern struct spdk_log_flag SPDK_LOG_mlx5_cqe_dump;
+
+	if (!SPDK_LOG_mlx5_cqe_dump.enabled) {
+		return;
+	}
+
+	ci = hw_cq->ci & (hw_cq->cqe_cnt - 1);
+
+	SPDK_DEBUGLOG(mlx5_cqe_dump, "CQ: cqn 0x%" PRIx32 ", cqe_index 0x%x, addr %p\n",
+		      hw_cq->cq_num, ci, cqe);
+	fprintf(stderr,
+		"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+		"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+		"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+		"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n",
+		be32toh(cqe[0]),  be32toh(cqe[1]),  be32toh(cqe[2]),  be32toh(cqe[3]),
+		be32toh(cqe[4]),  be32toh(cqe[5]),  be32toh(cqe[6]),  be32toh(cqe[7]),
+		be32toh(cqe[8]),  be32toh(cqe[9]),  be32toh(cqe[10]), be32toh(cqe[11]),
+		be32toh(cqe[12]), be32toh(cqe[13]), be32toh(cqe[14]), be32toh(cqe[15]));
+}
 #endif /* DEBUG */
 
 SPDK_LOG_REGISTER_COMPONENT(mlx5_wqe_dump)
+SPDK_LOG_REGISTER_COMPONENT(mlx5_cqe_dump)
