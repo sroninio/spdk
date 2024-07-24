@@ -1794,7 +1794,7 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 	int umr_idx = 0;
 	int rdma_idx = 0;
 	int umr_iovcnt = spdk_min(umr_iovs->iovcnt, (int)ACCEL_MLX5_MAX_SGE);
-	int rdma_iovcnt = spdk_min(umr_iovs->iovcnt, (int)ACCEL_MLX5_MAX_SGE);
+	int rdma_iovcnt = spdk_min(rdma_iovs->iovcnt, (int)ACCEL_MLX5_MAX_SGE);
 	size_t umr_iov_offset;
 	size_t rdma_iov_offset;
 	size_t umr_len = 0;
@@ -1834,11 +1834,13 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 				if (remaining == rdma_sge_len) {
 					rdma_idx++;
 					rdma_iov_offset = 0;
+					umr_iov_offset = 0;
 					remaining = 0;
 					break;
 				}
 				if (remaining < rdma_sge_len) {
 					rdma_iov_offset = remaining;
+					umr_iov_offset = 0;
 					remaining = 0;
 					break;
 				}
