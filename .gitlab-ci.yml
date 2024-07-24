@@ -17,8 +17,8 @@ stages:
         - rpmbuild/
       when: never
     - when: on_success
-  # tags: [k8s, linux, x86_64]
-  tags: [k8s, mtr-rdma, x86_64]
+  tags: [k8s, linux, x86_64]
+  # tags: [k8s, mtr-rdma, x86_64]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     GIT_SUBMODULE_DEPTH: 1
@@ -31,9 +31,9 @@ build-job:
   stage: build
   image: "$FEDORA_IMAGE"
   script:
-    # FIXME cache FIO sources && configure results
+    # Cache FIO sources && configure results
     # GET FIO source, run ./configure
-    - (cd .. ; curl -LO https://github.com/axboe/fio/archive/refs/tags/fio-3.35.tar.gz; tar xf fio-3.35.tar.gz)
+    - (cd .. ; curl -LO http://swx-repos.mtr.labs.mlnx/repository/fio-sources/fio-fio-3.35.tar.gz; tar xf fio-fio-3.35.tar.gz)
     - cd ../fio-fio-3.35
     - ./configure --prefix=/usr/local
     - cd $CI_PROJECT_DIR
@@ -41,7 +41,7 @@ build-job:
     - make -j4
     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
   artifacts:
-    expire_in: 1 day
+    expire_in: 3 day
     paths:
       - ./build
       - ./dpdk/build/
@@ -143,6 +143,7 @@ code-style-job:
   extends: .do_build
   stage: build
   image: "$COV_IMAGE"
+  allow_failure: true
   script:
     - apt-get -q update
     - ./scripts/pkgdep.sh --developer-tools

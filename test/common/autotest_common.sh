@@ -19,7 +19,10 @@ function xtrace_restore() {
 	fi
 }
 
-function xtrace_disable_per_cmd() { eval "$* ${BASH_XTRACEFD}> /dev/null"; }
+function xtrace_disable_per_cmd() {
+	local IFS=" "
+	eval "$* ${BASH_XTRACEFD}> /dev/null"
+}
 
 function xtrace_fd() {
 	if [[ -n ${BASH_XTRACEFD:-} && -e /proc/self/fd/$BASH_XTRACEFD ]]; then

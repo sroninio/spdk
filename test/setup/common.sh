@@ -1,6 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2020 Intel Corporation
 #  All rights reserved.
+# vim: set filetype=bash:
 #
 
 source "$rootdir/test/common/autotest_common.sh"

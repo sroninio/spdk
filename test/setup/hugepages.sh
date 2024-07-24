@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2020 Intel Corporation
 #  All rights reserved.
+# vim: set filetype=bash:
 #
 testdir=$(readlink -f "$(dirname "$0")")
 rootdir=$(readlink -f "$testdir/../../")
@@ -13,7 +14,7 @@ declare -i default_hugepages=0
 declare -i no_nodes=0
 declare -i nr_hugepages=0
 
-default_hugepages=$(get_meminfo Hugepagesize)
+default_hugepages=$(xtrace_disable_per_cmd get_meminfo Hugepagesize)
 default_huge_nr=/sys/kernel/mm/hugepages/hugepages-${default_hugepages}kB/nr_hugepages
 global_huge_nr=/proc/sys/vm/nr_hugepages
 
@@ -94,10 +95,10 @@ verify_nr_hugepages() {
 	local anon
 
 	if [[ $(< /sys/kernel/mm/transparent_hugepage/enabled) != *"[never]"* ]]; then
-		anon=$(get_meminfo AnonHugePages)
+		anon=$(xtrace_disable_per_cmd get_meminfo AnonHugePages)
 	fi
-	surp=$(get_meminfo HugePages_Surp)
-	resv=$(get_meminfo HugePages_Rsvd)
+	surp=$(xtrace_disable_per_cmd get_meminfo HugePages_Surp)
+	resv=$(xtrace_disable_per_cmd get_meminfo HugePages_Rsvd)
 
 	echo "nr_hugepages=$nr_hugepages"
 	echo "resv_hugepages=$resv"
@@ -107,14 +108,14 @@ verify_nr_hugepages() {
 	(($(< "$default_huge_nr") == nr_hugepages + surp + resv))
 	# This knob doesn't account for the surp, resv hugepages
 	(($(< "$global_huge_nr") == nr_hugepages))
-	(($(get_meminfo HugePages_Total) == nr_hugepages + surp + resv))
+	(($(xtrace_disable_per_cmd get_meminfo HugePages_Total) == nr_hugepages + surp + resv))
 
 	get_nodes
 
 	# Take global resv and per-node surplus hugepages into account
 	for node in "${!nodes_test[@]}"; do
 		((nodes_test[node] += resv))
-		((nodes_test[node] += $(get_meminfo HugePages_Surp "$node")))
+		((nodes_test[node] += $(xtrace_disable_per_cmd get_meminfo HugePages_Surp "$node")))
 	done
 
 	# There's no obvious way of determining which NUMA node is going to end
