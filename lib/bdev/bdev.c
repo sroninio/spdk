@@ -8111,6 +8111,7 @@ bdev_group_start_qos(struct spdk_bdev_group *group)
 
 			/* Setup QoS using the previously configured limits */
 			bdev_qos_limits_set(&group->qos->limits, group->qos_limits_usr_cfg);
+			bdev_qos_limits_update_max_quota_per_timeslice(&group->qos->limits);
 		}
 	}
 
