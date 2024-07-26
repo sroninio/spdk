@@ -11,13 +11,7 @@
 
 #include "common/lib/test_env.c"
 
-#define UT_MAX_IOVS 2u
 #define UT_SIZE_IOMS 128u
-
-struct nvme_ns_cmd_ut_cb_arg {
-	struct iovec iovs[UT_MAX_IOVS];
-	uint32_t iovpos;
-};
 
 static struct nvme_driver _g_nvme_driver = {
 	.lock = PTHREAD_MUTEX_INITIALIZER,
@@ -75,24 +69,28 @@ spdk_pci_enumerate(struct spdk_pci_driver *driver, spdk_pci_enum_cb enum_cb, voi
 	return -1;
 }
 
+struct nvme_request_sgl_ctx {
+	struct iovec *iovs;
+	uint32_t iovcnt;
+	uint32_t cur_idx;
+};
+
 static void
 nvme_request_reset_sgl(void *cb_arg, uint32_t sgl_offset)
 {
+	struct nvme_request_sgl_ctx *ctx = (struct nvme_request_sgl_ctx *)cb_arg;
+
+	ctx->cur_idx = 0;
 }
 
 static int
 nvme_request_next_sge(void *cb_arg, void **address, uint32_t *length)
 {
-	uint32_t *lba_count = cb_arg;
+	struct nvme_request_sgl_ctx *ctx = (struct nvme_request_sgl_ctx *)cb_arg;
 
-	/*
-	 * We need to set address to something here, since the SGL splitting code will
-	 *  use it to determine PRP compatibility.  Just use a rather arbitrary address
-	 *  for now - these tests will not actually cause data to be read from or written
-	 *  to this address.
-	 */
-	*address = (void *)(uintptr_t)0x10000000;
-	*length = *lba_count;
+	*address = (void *)ctx->iovs[ctx->cur_idx].iov_base;
+	*length = ctx->iovs[ctx->cur_idx].iov_len;
+
 	return 0;
 }
 
@@ -743,14 +741,18 @@ test_nvme_ns_cmd_readv(void)
 	struct spdk_nvme_ctrlr		ctrlr;
 	struct spdk_nvme_qpair		qpair;
 	int				rc = 0;
-	void				*cb_arg;
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
 
-	cb_arg = malloc(512);
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
+
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size, 0, 128 * 1024, 0, false);
-	rc = spdk_nvme_ns_cmd_readv(&ns, &qpair, 0x1000, lba_count, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_readv(&ns, &qpair, 0x1000, lba_count, NULL, &sgl_ctx, 0,
 				    nvme_request_reset_sgl, nvme_request_next_sge);
 
 	CU_ASSERT(rc == 0);
@@ -759,29 +761,15 @@ test_nvme_ns_cmd_readv(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 
-	rc = spdk_nvme_ns_cmd_readv(&ns, &qpair, 0x1000, 256, NULL, cb_arg, 0, nvme_request_reset_sgl,
+	rc = spdk_nvme_ns_cmd_readv(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0, nvme_request_reset_sgl,
 				    NULL);
 	CU_ASSERT(rc != 0);
 
-	free(cb_arg);
 	nvme_free_request(g_request);
 	cleanup_after_test(&qpair);
-}
-
-static int
-nvme_request_next_sge_invalid_prp1(void *cb_arg, void **address, uint32_t *length)
-{
-	struct nvme_ns_cmd_ut_cb_arg *iovs = cb_arg;
-
-	CU_ASSERT(iovs->iovpos < UT_MAX_IOVS);
-	*address = iovs->iovs[iovs->iovpos].iov_base;
-	*length = iovs->iovs[iovs->iovpos].iov_len;
-	iovs->iovpos++;
-
-	return 0;
 }
 
 static void
@@ -790,19 +778,19 @@ test_nvme_ns_cmd_writev(void)
 	struct spdk_nvme_ns		ns;
 	struct spdk_nvme_ctrlr		ctrlr;
 	struct spdk_nvme_qpair		qpair;
-	struct nvme_ns_cmd_ut_cb_arg iovs_cb_arg = {
-		.iovs = {
-			{.iov_base = (void *)(uintptr_t)0x3E8000, .iov_len = 200},
-			{.iov_base = (void *)(uintptr_t)0x3E9000, .iov_len = 312}
-		},
-	};
 	int				rc = 0;
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov[2] = {};
+
+	iov[0].iov_base = (void *)(uintptr_t)0x10000000;
+	iov[0].iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = iov;
+	sgl_ctx.iovcnt = 1;
 
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size, 0, 128 * 1024, 0, false);
-	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, lba_count, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, lba_count, NULL, &sgl_ctx, 0,
 				     nvme_request_reset_sgl, nvme_request_next_sge);
 
 	CU_ASSERT(rc == 0);
@@ -811,32 +799,36 @@ test_nvme_ns_cmd_writev(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 
 	/* Test case: NULL reset_sgl callback, expect fail */
-	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 256, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0,
 				     NULL, nvme_request_next_sge);
 	CU_ASSERT(rc == -EINVAL);
 
 	/* PRP1 start address is page aligned while end address is not. NVME driver
 	 * tries to split such a request but iov[0] length is not multiple of block size.
 	 * Expect fail */
-	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 1, NULL, &iovs_cb_arg, 0,
-				     nvme_request_reset_sgl, nvme_request_next_sge_invalid_prp1);
+	iov[0].iov_base = (void *)(uintptr_t)0x3E8000;
+	iov[0].iov_len = 200;
+	iov[1].iov_base = (void *)(uintptr_t)0x3E9000;
+	iov[1].iov_len = 312;
+	sgl_ctx.iovs = iov;
+	sgl_ctx.iovcnt = 2;
+	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 1, NULL, &sgl_ctx, 0,
+				     nvme_request_reset_sgl, nvme_request_next_sge);
 	CU_ASSERT(rc == -EINVAL);
 
 	/* PRP1 end address is page aligned while start address is not. Expect pass */
-	iovs_cb_arg.iovs[0].iov_base = (void *)(((uintptr_t)iovs_cb_arg.iovs[0].iov_base) + ctrlr.page_size
-						- iovs_cb_arg.iovs[0].iov_len);
-	iovs_cb_arg.iovpos = 0;
-	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 1, NULL, &iovs_cb_arg, 0,
-				     nvme_request_reset_sgl, nvme_request_next_sge_invalid_prp1);
+	iov[0].iov_base = (void *)(((uintptr_t)iov[0].iov_base) + ctrlr.page_size - iov[0].iov_len);
+	rc = spdk_nvme_ns_cmd_writev(&ns, &qpair, 0x1000, 1, NULL, &sgl_ctx, 0,
+				     nvme_request_reset_sgl, nvme_request_next_sge);
 	CU_ASSERT(g_request->cmd.opc == SPDK_NVME_OPC_WRITE);
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
-	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge_invalid_prp1);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &iovs_cb_arg);
+	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 
 	nvme_free_request(g_request);
@@ -850,14 +842,18 @@ test_nvme_ns_cmd_comparev(void)
 	struct spdk_nvme_ctrlr		ctrlr;
 	struct spdk_nvme_qpair		qpair;
 	int				rc = 0;
-	void				*cb_arg;
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
 
-	cb_arg = malloc(512);
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
+
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size, 0, 128 * 1024, 0, false);
-	rc = spdk_nvme_ns_cmd_comparev(&ns, &qpair, 0x1000, lba_count, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_comparev(&ns, &qpair, 0x1000, lba_count, NULL, &sgl_ctx, 0,
 				       nvme_request_reset_sgl, nvme_request_next_sge);
 
 	CU_ASSERT(rc == 0);
@@ -866,14 +862,13 @@ test_nvme_ns_cmd_comparev(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 
-	rc = spdk_nvme_ns_cmd_comparev(&ns, &qpair, 0x1000, 256, NULL, cb_arg, 0,
+	rc = spdk_nvme_ns_cmd_comparev(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0,
 				       nvme_request_reset_sgl, NULL);
 	CU_ASSERT(rc != 0);
 
-	free(cb_arg);
 	nvme_free_request(g_request);
 	cleanup_after_test(&qpair);
 }
@@ -891,7 +886,13 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	struct nvme_request		*child0, *child1;
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
+
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
 
 	block_size = 512;
 	md_size = 128;
@@ -911,7 +912,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	 */
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 128, 128 * 1024, 0, false);
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0,
 					       nvme_request_reset_sgl, nvme_request_next_sge, metadata, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -936,7 +937,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	 */
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 128, 128 * 1024, 0, true);
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0,
 					       nvme_request_reset_sgl, nvme_request_next_sge, NULL, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -972,7 +973,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	 */
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 8, 128 * 1024, 0, true);
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sge_length, 0,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx, 0,
 					       nvme_request_reset_sgl, nvme_request_next_sge, NULL, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -1008,7 +1009,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 8, 128 * 1024, 0, true);
 	ns.flags |= SPDK_NVME_NS_DPS_PI_SUPPORTED;
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sge_length,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx,
 					       SPDK_NVME_IO_FLAGS_PRACT, nvme_request_reset_sgl, nvme_request_next_sge, NULL, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -1033,7 +1034,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 8, 128 * 1024, 0, false);
 	ns.flags |= SPDK_NVME_NS_DPS_PI_SUPPORTED;
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sge_length,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 256, NULL, &sgl_ctx,
 					       SPDK_NVME_IO_FLAGS_PRACT, nvme_request_reset_sgl, nvme_request_next_sge, metadata, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -1060,7 +1061,7 @@ test_nvme_ns_cmd_comparev_with_md(void)
 	prepare_for_test(&ns, &ctrlr, &qpair, 512, 8, 128 * 1024, 0, false);
 	ns.flags |= SPDK_NVME_NS_DPS_PI_SUPPORTED;
 
-	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 384, NULL, &sge_length,
+	rc = spdk_nvme_ns_cmd_comparev_with_md(&ns, &qpair, 0x1000, 384, NULL, &sgl_ctx,
 					       SPDK_NVME_IO_FLAGS_PRACT, nvme_request_reset_sgl, nvme_request_next_sge, metadata, 0, 0);
 
 	CU_ASSERT(rc == 0);
@@ -1697,7 +1698,8 @@ test_nvme_ns_cmd_zone_appendv_with_md(void)
 	uint32_t			sector_size = 512;
 	uint32_t			md_size = 128;
 	char				*metadata = NULL;
-	uint64_t			sge_length;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
 
 	metadata = malloc(md_size * 384);
 	SPDK_CU_ASSERT_FATAL(metadata != NULL);
@@ -1712,12 +1714,15 @@ test_nvme_ns_cmd_zone_appendv_with_md(void)
 	 * 128 KB I/O <= max zone append size. Test should pass.
 	 */
 	lba_count = 256;
-	sge_length = lba_count * sector_size;
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size, md_size, 256 * 1024, 0, false);
 	ctrlr.max_zone_append_size = 128 * 1024;
 	ctrlr.flags |= SPDK_NVME_CTRLR_ZONE_APPEND_SUPPORTED;
 	ns.csi = SPDK_NVME_CSI_ZNS;
-	rc = nvme_ns_cmd_zone_appendv_with_md(&ns, &qpair, 0x0, lba_count, NULL, &sge_length, 0,
+	rc = nvme_ns_cmd_zone_appendv_with_md(&ns, &qpair, 0x0, lba_count, NULL, &sgl_ctx, 0,
 					      nvme_request_reset_sgl, nvme_request_next_sge, metadata, 0, 0);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(g_request != NULL);
@@ -1731,7 +1736,7 @@ test_nvme_ns_cmd_zone_appendv_with_md(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 
 	nvme_free_request(g_request);
@@ -1747,13 +1752,13 @@ test_nvme_ns_cmd_zone_appendv_with_md(void)
 	 * 256 KB I/O > max zone append size. Test should fail.
 	 */
 	lba_count = 512;
-	sge_length = lba_count * sector_size;
+	iov.iov_len = lba_count * sector_size;
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size, md_size, 256 * 1024, 0, false);
 	ctrlr.max_zone_append_size = 128 * 1024;
 	ctrlr.flags |= SPDK_NVME_CTRLR_ZONE_APPEND_SUPPORTED;
 	ns.csi = SPDK_NVME_CSI_ZNS;
 
-	rc = nvme_ns_cmd_zone_appendv_with_md(&ns, &qpair, 0x0, lba_count, NULL, &sge_length, 0,
+	rc = nvme_ns_cmd_zone_appendv_with_md(&ns, &qpair, 0x0, lba_count, NULL, &sgl_ctx, 0,
 					      nvme_request_reset_sgl, nvme_request_next_sge, metadata, 0, 0);
 	CU_ASSERT(rc == -EINVAL);
 	SPDK_CU_ASSERT_FATAL(g_request == NULL);
@@ -2047,14 +2052,20 @@ test_spdk_nvme_ns_cmd_readv_with_md(void)
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
 	uint32_t			md_size = 128;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
+
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
 
 	metadata = (void *)0xDEADBEEF;
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size,
 			 md_size, 128 * 1024, 0, false);
 
 	rc = spdk_nvme_ns_cmd_readv_with_md(&ns, &qpair, 0x1000, lba_count, NULL,
-					    &sge_length, 0, nvme_request_reset_sgl,
+					    &sgl_ctx, 0, nvme_request_reset_sgl,
 					    nvme_request_next_sge, metadata, 0, 0);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(g_request != NULL);
@@ -2062,7 +2073,7 @@ test_spdk_nvme_ns_cmd_readv_with_md(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->payload.md == (void *)0xDEADBEEF);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
 	CU_ASSERT(g_request->payload_size == 256 * 512);
@@ -2096,7 +2107,13 @@ test_spdk_nvme_ns_cmd_writev_ext(void)
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
 	uint32_t			md_size = 128;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
+
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
 
 	ext_opts.size = SPDK_SIZEOF(&ext_opts, cdw13);
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size,
@@ -2105,7 +2122,7 @@ test_spdk_nvme_ns_cmd_writev_ext(void)
 	/* Invalid io_flags. Expect fail */
 	ext_opts.io_flags = 0xFFFF000F;
 	rc = spdk_nvme_ns_cmd_writev_ext(&ns, &qpair, 0x1000, lba_count,
-					 NULL, &sge_length, nvme_request_reset_sgl,
+					 NULL, &sgl_ctx, nvme_request_reset_sgl,
 					 nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc != 0);
 	ext_opts.io_flags = SPDK_NVME_IO_FLAGS_PRCHK_REFTAG | SPDK_NVME_IO_FLAGS_DATA_PLACEMENT_DIRECTIVE;
@@ -2113,19 +2130,19 @@ test_spdk_nvme_ns_cmd_writev_ext(void)
 
 	/* Empty reset_sgl cb. Expect fail */
 	rc = spdk_nvme_ns_cmd_writev_ext(&ns, &qpair, 0x1000, lba_count,
-					 NULL, &sge_length, NULL,
+					 NULL, &sgl_ctx, NULL,
 					 nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc != 0);
 
 	/* Empty next_sgl cb. Expect fail */
 	rc = spdk_nvme_ns_cmd_writev_ext(&ns, &qpair, 0x1000, lba_count,
-					 NULL, &sge_length, nvme_request_reset_sgl,
+					 NULL, &sgl_ctx, nvme_request_reset_sgl,
 					 NULL, &ext_opts);
 	CU_ASSERT(rc != 0);
 
 	/* Expect pass */
 	rc = spdk_nvme_ns_cmd_writev_ext(&ns, &qpair, 0x1000, lba_count,
-					 NULL, &sge_length, nvme_request_reset_sgl,
+					 NULL, &sgl_ctx, nvme_request_reset_sgl,
 					 nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(g_request != NULL);
@@ -2133,7 +2150,7 @@ test_spdk_nvme_ns_cmd_writev_ext(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->payload.md == (void *)0xDEADBEEF);
 	CU_ASSERT(g_request->payload.opts == &ext_opts);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
@@ -2168,7 +2185,13 @@ test_spdk_nvme_ns_cmd_readv_ext(void)
 	uint32_t			lba_count = 256;
 	uint32_t			sector_size = 512;
 	uint32_t			md_size = 128;
-	uint64_t			sge_length = lba_count * sector_size;
+	struct nvme_request_sgl_ctx	sgl_ctx = {};
+	struct iovec			iov = {};
+
+	iov.iov_base = (void *)(uintptr_t)0x10000000;
+	iov.iov_len = sector_size * lba_count;
+	sgl_ctx.iovs = &iov;
+	sgl_ctx.iovcnt = 1;
 
 	ext_opts.size = SPDK_SIZEOF(&ext_opts, cdw13);
 	prepare_for_test(&ns, &ctrlr, &qpair, sector_size,
@@ -2177,26 +2200,26 @@ test_spdk_nvme_ns_cmd_readv_ext(void)
 	/* Invalid io_flags. Expect fail */
 	ext_opts.io_flags = 0xFFFF000F;
 	rc = spdk_nvme_ns_cmd_readv_ext(&ns, &qpair, 0x1000, lba_count,
-					NULL, &sge_length, nvme_request_reset_sgl,
+					NULL, &sgl_ctx, nvme_request_reset_sgl,
 					nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc != 0);
 	ext_opts.io_flags = SPDK_NVME_IO_FLAGS_PRCHK_REFTAG;
 
 	/* Empty reset_sgl cb. Expect fail */
 	rc = spdk_nvme_ns_cmd_readv_ext(&ns, &qpair, 0x1000, lba_count,
-					NULL, &sge_length, NULL,
+					NULL, &sgl_ctx, NULL,
 					nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc != 0);
 
 	/* Empty next_sgl cb. Expect fail */
 	rc = spdk_nvme_ns_cmd_readv_ext(&ns, &qpair, 0x1000, lba_count,
-					NULL, &sge_length, nvme_request_reset_sgl,
+					NULL, &sgl_ctx, nvme_request_reset_sgl,
 					NULL, &ext_opts);
 	CU_ASSERT(rc != 0);
 
 	/* Expect pass */
 	rc = spdk_nvme_ns_cmd_readv_ext(&ns, &qpair, 0x1000, lba_count,
-					NULL, &sge_length, nvme_request_reset_sgl,
+					NULL, &sgl_ctx, nvme_request_reset_sgl,
 					nvme_request_next_sge, &ext_opts);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(g_request != NULL);
@@ -2204,7 +2227,7 @@ test_spdk_nvme_ns_cmd_readv_ext(void)
 	CU_ASSERT(nvme_payload_type(&g_request->payload) == NVME_PAYLOAD_TYPE_SGL);
 	CU_ASSERT(g_request->payload.reset_sgl_fn == nvme_request_reset_sgl);
 	CU_ASSERT(g_request->payload.next_sge_fn == nvme_request_next_sge);
-	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sge_length);
+	CU_ASSERT(g_request->payload.contig_or_cb_arg == &sgl_ctx);
 	CU_ASSERT(g_request->payload.md == (void *)0xDEADBEEF);
 	CU_ASSERT(g_request->payload.opts == &ext_opts);
 	CU_ASSERT(g_request->cmd.nsid == ns.id);
