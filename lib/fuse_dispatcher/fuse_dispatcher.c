@@ -824,8 +824,8 @@ do_lookup(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_lookup(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), name, do_lookup_cpl_clb, fuse_io);
+	err = spdk_fsdev_lookup(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), name, do_lookup_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -852,9 +852,9 @@ do_forget(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), fsdev_io_d2h_u64(fuse_io, arg->nlookup),
-				   do_forget_cpl_clb, fuse_io);
+	err = spdk_fsdev_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), fsdev_io_d2h_u64(fuse_io, arg->nlookup),
+				do_forget_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -894,8 +894,8 @@ do_getattr(struct fuse_io *fuse_io)
 		}
 	}
 
-	err = spdk_fsdev_op_getattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), file_handle(fh), do_getattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_getattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), file_handle(fh), do_getattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -959,9 +959,9 @@ do_setattr(struct fuse_io *fuse_io)
 		FSDEV_SET_ATTR_MTIME_NOW |
 		FSDEV_SET_ATTR_CTIME;
 
-	err = spdk_fsdev_op_setattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), file_handle(fh), &attr, valid,
-				    do_setattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_setattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), file_handle(fh), &attr, valid,
+				 do_setattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -984,8 +984,8 @@ do_readlink(struct fuse_io *fuse_io)
 {
 	int err;
 
-	err = spdk_fsdev_op_readlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				     file_object(fuse_io), do_readlink_cpl_clb, fuse_io);
+	err = spdk_fsdev_readlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				  file_object(fuse_io), do_readlink_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1024,9 +1024,9 @@ do_symlink(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_symlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), name, linkname, fuse_io->hdr.uid, fuse_io->hdr.gid,
-				    do_symlink_cpl_clb, fuse_io);
+	err = spdk_fsdev_symlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), name, linkname, fuse_io->hdr.uid, fuse_io->hdr.gid,
+				 do_symlink_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1067,10 +1067,10 @@ do_mknod(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_mknod(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
-				  fsdev_io_d2h_u32(fuse_io, arg->rdev), fuse_io->hdr.uid, fuse_io->hdr.gid,
-				  do_mknod_cpl_clb, fuse_io);
+	err = spdk_fsdev_mknod(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
+			       fsdev_io_d2h_u32(fuse_io, arg->rdev), fuse_io->hdr.uid, fuse_io->hdr.gid,
+			       do_mknod_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1111,9 +1111,9 @@ do_mkdir(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_mkdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
-				  fuse_io->hdr.uid, fuse_io->hdr.gid, do_mkdir_cpl_clb, fuse_io);
+	err = spdk_fsdev_mkdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
+			       fuse_io->hdr.uid, fuse_io->hdr.gid, do_mkdir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1140,8 +1140,8 @@ do_unlink(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_unlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), name, do_unlink_cpl_clb, fuse_io);
+	err = spdk_fsdev_unlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), name, do_unlink_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1168,8 +1168,8 @@ do_rmdir(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_rmdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, do_rmdir_cpl_clb, fuse_io);
+	err = spdk_fsdev_rmdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), name, do_rmdir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1227,9 +1227,9 @@ do_rename_common(struct fuse_io *fuse_io, bool version2)
 		return;
 	}
 
-	err = spdk_fsdev_op_rename(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), oldname, ino_to_object(fuse_io, newdir),
-				   newname, flags, do_rename_cpl_clb, fuse_io);
+	err = spdk_fsdev_rename(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), oldname, ino_to_object(fuse_io, newdir),
+				newname, flags, do_rename_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1284,17 +1284,17 @@ do_link(struct fuse_io *fuse_io)
 
 	oldnodeid = fsdev_io_d2h_u64(fuse_io, arg->oldnodeid);
 
-	err = spdk_fsdev_op_link(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 ino_to_object(fuse_io, oldnodeid), file_object(fuse_io), name,
-				 do_link_cpl_clb, fuse_io);
+	err = spdk_fsdev_link(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			      ino_to_object(fuse_io, oldnodeid), file_object(fuse_io), name,
+			      do_link_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
 }
 
 static void
-do_open_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_handle *fhandle)
+do_fopen_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		 struct spdk_fsdev_file_handle *fhandle)
 {
 	struct fuse_io *fuse_io = cb_arg;
 
@@ -1326,9 +1326,9 @@ do_open(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_open(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), flags,
-				 do_open_cpl_clb, fuse_io);
+	err = spdk_fsdev_fopen(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), flags,
+			       do_fopen_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1366,11 +1366,11 @@ do_read(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_read(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), file_handle(fh),
-				 fsdev_io_d2h_u32(fuse_io, arg->size), fsdev_io_d2h_u64(fuse_io, arg->offset),
-				 flags, fuse_io->out_iov + 1, fuse_io->out_iovcnt - 1, NULL,
-				 do_read_cpl_clb, fuse_io);
+	err = spdk_fsdev_read(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			      file_object(fuse_io), file_handle(fh),
+			      fsdev_io_d2h_u32(fuse_io, arg->size), fsdev_io_d2h_u64(fuse_io, arg->offset),
+			      flags, fuse_io->out_iov + 1, fuse_io->out_iovcnt - 1, NULL,
+			      do_read_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1413,11 +1413,11 @@ do_write(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_write(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), file_handle(fh),
-				  fsdev_io_d2h_u32(fuse_io, arg->size), fsdev_io_d2h_u64(fuse_io, arg->offset),
-				  flags, fuse_io->in_iov + fuse_io->in_offs.iov_offs, fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs,
-				  NULL, do_write_cpl_clb, fuse_io);
+	err = spdk_fsdev_write(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh),
+			       fsdev_io_d2h_u32(fuse_io, arg->size), fsdev_io_d2h_u64(fuse_io, arg->offset),
+			       flags, fuse_io->in_iov + fuse_io->in_offs.iov_offs, fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs,
+			       NULL, do_write_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1441,8 +1441,8 @@ do_statfs(struct fuse_io *fuse_io)
 {
 	int err;
 
-	err = spdk_fsdev_op_statfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), do_statfs_cpl_clb, fuse_io);
+	err = spdk_fsdev_statfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), do_statfs_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1474,9 +1474,9 @@ do_release(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_release(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), file_handle(fh),
-				    do_release_cpl_clb, fuse_io);
+	err = spdk_fsdev_release(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), file_handle(fh),
+				 do_release_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1508,9 +1508,9 @@ do_fsync(struct fuse_io *fuse_io)
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 	datasync = (fsdev_io_d2h_u32(fuse_io, arg->fsync_flags) & 1) ? true : false;
 
-	err = spdk_fsdev_op_fsync(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), file_handle(fh), datasync,
-				  do_fsync_cpl_clb, fuse_io);
+	err = spdk_fsdev_fsync(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh), datasync,
+			       do_fsync_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1555,9 +1555,9 @@ do_setxattr(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_setxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				     file_object(fuse_io), name, value, size, fsdev_io_d2h_u32(fuse_io, arg->flags),
-				     do_setxattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_setxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				  file_object(fuse_io), name, value, size, fsdev_io_d2h_u32(fuse_io, arg->flags),
+				  do_setxattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1625,9 +1625,9 @@ do_getxattr(struct fuse_io *fuse_io)
 
 	fuse_io->out_offs = out_offs_bu; /* Restore the out offset */
 
-	err = spdk_fsdev_op_getxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				     file_object(fuse_io), name, buff, size,
-				     do_getxattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_getxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				  file_object(fuse_io), name, buff, size,
+				  do_getxattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1671,9 +1671,9 @@ do_listxattr(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_listxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				      file_object(fuse_io), iov->iov_base, size,
-				      do_listxattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_listxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				   file_object(fuse_io), iov->iov_base, size,
+				   do_listxattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1699,8 +1699,8 @@ do_removexattr(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_removexattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					file_object(fuse_io), name, do_removexattr_cpl_clb, fuse_io);
+	err = spdk_fsdev_removexattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				     file_object(fuse_io), name, do_removexattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1732,9 +1732,9 @@ do_flush(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_flush(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), file_handle(fh),
-				  do_flush_cpl_clb, fuse_io);
+	err = spdk_fsdev_flush(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh),
+			       do_flush_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1917,8 +1917,8 @@ fuse_dispatcher_open_fsdev_continue(struct fuse_io *fuse_io)
 
 	fuse_io->u.init.out_len = outargsize;
 
-	res = spdk_fsdev_op_lookup(fuse_io_desc(fuse_io), fuse_io->ch, 0, NULL /* root */,
-				   "" /* will be ignored */, do_root_lookup_cpl_clb, fuse_io);
+	res = spdk_fsdev_lookup(fuse_io_desc(fuse_io), fuse_io->ch, 0, NULL /* root */,
+				"" /* will be ignored */, do_root_lookup_cpl_clb, fuse_io);
 	if (res) {
 		SPDK_ERRLOG("Failed to initiate lookup for the root (err=%d)\n", res);
 		fuse_dispatcher_open_fsdev_rollback(fuse_io);
@@ -2138,9 +2138,9 @@ do_opendir(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_opendir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), fsdev_io_d2h_u32(fuse_io, arg->flags),
-				    do_opendir_cpl_clb, fuse_io);
+	err = spdk_fsdev_opendir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), fsdev_io_d2h_u32(fuse_io, arg->flags),
+				 do_opendir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2212,10 +2212,10 @@ do_readdir_common(struct fuse_io *fuse_io, bool plus)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_readdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), file_handle(fh),
-				    fsdev_io_d2h_u64(fuse_io, arg->offset),
-				    do_readdir_entry_clb, do_readdir_cpl_clb, fuse_io);
+	err = spdk_fsdev_readdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				 file_object(fuse_io), file_handle(fh),
+				 fsdev_io_d2h_u64(fuse_io, arg->offset),
+				 do_readdir_entry_clb, do_readdir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2257,9 +2257,9 @@ do_releasedir(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_releasedir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				       file_object(fuse_io), file_handle(fh),
-				       do_releasedir_cpl_clb, fuse_io);
+	err = spdk_fsdev_releasedir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				    file_object(fuse_io), file_handle(fh),
+				    do_releasedir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2291,9 +2291,9 @@ do_fsyncdir(struct fuse_io *fuse_io)
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 	datasync = (fsdev_io_d2h_u32(fuse_io, arg->fsync_flags) & 1) ? true : false;
 
-	err = spdk_fsdev_op_fsyncdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				     file_object(fuse_io), file_handle(fh), datasync,
-				     do_fsyncdir_cpl_clb, fuse_io);
+	err = spdk_fsdev_fsyncdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				  file_object(fuse_io), file_handle(fh), datasync,
+				  do_fsyncdir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2348,9 +2348,9 @@ do_setlk_common(struct fuse_io *fuse_io)
 
 		fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-		err = spdk_fsdev_op_flock(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					  file_object(fuse_io), file_handle(fh), op,
-					  do_setlk_cpl_clb, fuse_io);
+		err = spdk_fsdev_flock(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				       file_object(fuse_io), file_handle(fh), op,
+				       do_setlk_cpl_clb, fuse_io);
 		if (err) {
 			fuse_dispatcher_io_complete_err(fuse_io, err);
 		}
@@ -2399,9 +2399,9 @@ do_access(struct fuse_io *fuse_io)
 	mask = fsdev_io_h2d_u32(fuse_io, arg->mask);
 
 	/* Using effective uid and gid. Without setuid they have uid of the process. */
-	err = spdk_fsdev_op_access(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), mask, geteuid(), getegid(),
-				   do_access_cpl_clb, fuse_io);
+	err = spdk_fsdev_access(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), mask, geteuid(), getegid(),
+				do_access_cpl_clb, fuse_io);
 
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -2458,9 +2458,9 @@ do_create(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_create(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), name, mode, flags, umask, fuse_io->hdr.uid,
-				   fuse_io->hdr.gid, do_create_cpl_clb, fuse_io);
+	err = spdk_fsdev_create(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), name, mode, flags, umask, fuse_io->hdr.uid,
+				fuse_io->hdr.gid, do_create_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2492,7 +2492,7 @@ do_interrupt(struct fuse_io *fuse_io)
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "INTERRUPT: %" PRIu64 "\n", unique);
 
-	err = spdk_fsdev_op_abort(fuse_io_desc(fuse_io), fuse_io->ch, unique, do_abort_cpl_clb, fuse_io);
+	err = spdk_fsdev_abort(fuse_io_desc(fuse_io), fuse_io->ch, unique, do_abort_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2543,11 +2543,11 @@ do_fallocate(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
-	err = spdk_fsdev_op_fallocate(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				      file_object(fuse_io), file_handle(fh),
-				      fsdev_io_d2h_u32(fuse_io, arg->mode), fsdev_io_d2h_u64(fuse_io, arg->offset),
-				      fsdev_io_d2h_u64(fuse_io, arg->length),
-				      do_fallocate_cpl_clb, fuse_io);
+	err = spdk_fsdev_fallocate(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				   file_object(fuse_io), file_handle(fh),
+				   fsdev_io_d2h_u32(fuse_io, arg->mode), fsdev_io_d2h_u64(fuse_io, arg->offset),
+				   fsdev_io_d2h_u64(fuse_io, arg->length),
+				   do_fallocate_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -2616,8 +2616,8 @@ do_destroy(struct fuse_io *fuse_io)
 	SPDK_DEBUGLOG(fuse_dispatcher, "DESTROY\n");
 
 	if (disp->root_fobject) {
-		int err = spdk_fsdev_op_forget(fuse_io_desc(fuse_io), fuse_io->ch, 0, disp->root_fobject, 1,
-					       do_forget_root_cpl_clb, fuse_io);
+		int err = spdk_fsdev_forget(fuse_io_desc(fuse_io), fuse_io->ch, 0, disp->root_fobject, 1,
+					    do_forget_root_cpl_clb, fuse_io);
 		if (err) {
 			SPDK_ERRLOG("Failed to initiate forget for root (err=%d)\n", err);
 			fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -2701,9 +2701,9 @@ do_batch_forget(struct fuse_io *fuse_io)
 	for (i = 0; i < count; i++) {
 		uint64_t ino = fsdev_io_d2h_u64(fuse_io, forgets[i].ino);
 		uint64_t nlookup = fsdev_io_d2h_u64(fuse_io, forgets[i].nlookup);
-		err = spdk_fsdev_op_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					   ino_to_object(fuse_io, ino), nlookup,
-					   do_batch_forget_cpl_clb, fuse_io);
+		err = spdk_fsdev_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+					ino_to_object(fuse_io, ino), nlookup,
+					do_batch_forget_cpl_clb, fuse_io);
 		if (!err) {
 			fuse_io->u.batch_forget.to_forget++;
 		} else {
@@ -2743,11 +2743,11 @@ do_copy_file_range(struct fuse_io *fuse_io)
 	nodeid_out = fsdev_io_d2h_u64(fuse_io, arg->nodeid_out);
 	fh_out = fsdev_io_d2h_u64(fuse_io, arg->fh_out);
 
-	err = spdk_fsdev_op_copy_file_range(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					    file_object(fuse_io), file_handle(fh_in), fsdev_io_d2h_u64(fuse_io, arg->off_in),
-					    ino_to_object(fuse_io, nodeid_out), file_handle(fh_out), fsdev_io_d2h_u64(fuse_io, arg->off_out),
-					    fsdev_io_d2h_u64(fuse_io, arg->len), fsdev_io_d2h_u64(fuse_io, arg->flags),
-					    do_copy_file_range_cpl_clb, fuse_io);
+	err = spdk_fsdev_copy_file_range(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+					 file_object(fuse_io), file_handle(fh_in), fsdev_io_d2h_u64(fuse_io, arg->off_in),
+					 ino_to_object(fuse_io, nodeid_out), file_handle(fh_out), fsdev_io_d2h_u64(fuse_io, arg->off_out),
+					 fsdev_io_d2h_u64(fuse_io, arg->len), fsdev_io_d2h_u64(fuse_io, arg->flags),
+					 do_copy_file_range_cpl_clb, fuse_io);
 
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -2789,8 +2789,8 @@ do_syncfs(struct fuse_io *fuse_io)
 		return;
 	}
 
-	err = spdk_fsdev_op_syncfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), do_syncfs_cpl_clb, fuse_io);
+	err = spdk_fsdev_syncfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				file_object(fuse_io), do_syncfs_cpl_clb, fuse_io);
 
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);

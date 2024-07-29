@@ -13142,8 +13142,8 @@ Set fsdev module options.
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-fsdev_io_pool_size      | Required | string      | Size of fsdev IO objects pool.
-fsdev_io_cache_size     | Required | string      | Size of fsdev IO objects cache per thread.
+fsdev_io_pool_size      | Required | int         | Size of fsdev IO objects pool.
+fsdev_io_cache_size     | Required | int         | Size of fsdev IO objects cache per thread.
 
 #### Example
 

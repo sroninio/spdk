@@ -286,6 +286,7 @@ invalid:
 SPDK_RPC_REGISTER("vfu_virtio_create_scsi_endpoint", rpc_vfu_virtio_create_scsi_endpoint,
 		  SPDK_RPC_RUNTIME)
 
+#ifdef SPDK_CONFIG_FSDEV
 struct rpc_vfu_virtio_create_fs {
 	char		*name;
 	char		*fsdev_name;
@@ -375,3 +376,4 @@ invalid:
 }
 SPDK_RPC_REGISTER("vfu_virtio_create_fs_endpoint", rpc_vfu_virtio_create_fs_endpoint,
 		  SPDK_RPC_RUNTIME)
+#endif

@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -44,17 +44,14 @@ struct rpc_fsdev_set_opts {
 };
 
 static const struct spdk_json_object_decoder rpc_fsdev_set_opts_decoders[] = {
-	{"fsdev_io_pool_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_pool_size), spdk_json_decode_uint32, true},
-	{"fsdev_io_cache_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_cache_size), spdk_json_decode_uint32, true},
+	{"fsdev_io_pool_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_pool_size), spdk_json_decode_uint32, false},
+	{"fsdev_io_cache_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_cache_size), spdk_json_decode_uint32, false},
 };
 
 static void
 rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
 {
-	struct rpc_fsdev_set_opts req = {
-		.fsdev_io_pool_size = UINT32_MAX,
-		.fsdev_io_cache_size = UINT32_MAX,
-	};
+	struct rpc_fsdev_set_opts req = {};
 	int rc;
 	struct spdk_fsdev_opts opts = {};
 
@@ -74,13 +71,8 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 		return;
 	}
 
-	if (req.fsdev_io_pool_size != UINT32_MAX) {
-		opts.fsdev_io_pool_size = req.fsdev_io_pool_size;
-	}
-
-	if (req.fsdev_io_cache_size != UINT32_MAX) {
-		opts.fsdev_io_cache_size = req.fsdev_io_cache_size;
-	}
+	opts.fsdev_io_pool_size = req.fsdev_io_pool_size;
+	opts.fsdev_io_cache_size = req.fsdev_io_cache_size;
 
 	rc = spdk_fsdev_set_opts(&opts);
 	if (rc) {

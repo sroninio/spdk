@@ -3466,8 +3466,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                        fsdev_io_cache_size=args.fsdev_io_cache_size))
 
     p = subparsers.add_parser('fsdev_set_opts', help='Set the fsdev subsystem options')
-    p.add_argument('-p', '--fsdev-io-pool-size', help='Size of fsdev IO objects pool', type=int)
-    p.add_argument('-c', '--fsdev-io-cache-size', help='Size of fsdev IO objects cache per thread', type=int)
+    p.add_argument('fsdev-io-pool-size', help='Size of fsdev IO objects pool', type=int)
+    p.add_argument('fsdev-io-cache-size', help='Size of fsdev IO objects cache per thread', type=int)
     p.set_defaults(func=fsdev_set_opts)
 
     def fsdev_get_fsdevs(args):

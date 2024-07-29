@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_FSDEV_MODULE_H
@@ -211,44 +211,44 @@ struct spdk_fsdev {
 	} internal;
 };
 
-enum spdk_fsdev_op {
-	SPDK_FSDEV_OP_LOOKUP,
-	SPDK_FSDEV_OP_FORGET,
-	SPDK_FSDEV_OP_GETATTR,
-	SPDK_FSDEV_OP_SETATTR,
-	SPDK_FSDEV_OP_READLINK,
-	SPDK_FSDEV_OP_SYMLINK,
-	SPDK_FSDEV_OP_MKNOD,
-	SPDK_FSDEV_OP_MKDIR,
-	SPDK_FSDEV_OP_UNLINK,
-	SPDK_FSDEV_OP_RMDIR,
-	SPDK_FSDEV_OP_RENAME,
-	SPDK_FSDEV_OP_LINK,
-	SPDK_FSDEV_OP_OPEN,
-	SPDK_FSDEV_OP_READ,
-	SPDK_FSDEV_OP_WRITE,
-	SPDK_FSDEV_OP_STATFS,
-	SPDK_FSDEV_OP_RELEASE,
-	SPDK_FSDEV_OP_FSYNC,
-	SPDK_FSDEV_OP_SETXATTR,
-	SPDK_FSDEV_OP_GETXATTR,
-	SPDK_FSDEV_OP_LISTXATTR,
-	SPDK_FSDEV_OP_REMOVEXATTR,
-	SPDK_FSDEV_OP_FLUSH,
-	SPDK_FSDEV_OP_OPENDIR,
-	SPDK_FSDEV_OP_READDIR,
-	SPDK_FSDEV_OP_RELEASEDIR,
-	SPDK_FSDEV_OP_FSYNCDIR,
-	SPDK_FSDEV_OP_FLOCK,
-	SPDK_FSDEV_OP_CREATE,
-	SPDK_FSDEV_OP_ABORT,
-	SPDK_FSDEV_OP_FALLOCATE,
-	SPDK_FSDEV_OP_COPY_FILE_RANGE,
-	SPDK_FSDEV_OP_SYNCFS,
-	SPDK_FSDEV_OP_ACCESS,
-	SPDK_FSDEV_OP_LSEEK,
-	SPDK_FSDEV_OP_IOCTL,
-	__SPDK_FSDEV_OP_LAST
+enum spdk_fsdev_io_type {
+	SPDK_FSDEV_IO_LOOKUP,
+	SPDK_FSDEV_IO_FORGET,
+	SPDK_FSDEV_IO_GETATTR,
+	SPDK_FSDEV_IO_SETATTR,
+	SPDK_FSDEV_IO_READLINK,
+	SPDK_FSDEV_IO_SYMLINK,
+	SPDK_FSDEV_IO_MKNOD,
+	SPDK_FSDEV_IO_MKDIR,
+	SPDK_FSDEV_IO_UNLINK,
+	SPDK_FSDEV_IO_RMDIR,
+	SPDK_FSDEV_IO_RENAME,
+	SPDK_FSDEV_IO_LINK,
+	SPDK_FSDEV_IO_OPEN,
+	SPDK_FSDEV_IO_READ,
+	SPDK_FSDEV_IO_WRITE,
+	SPDK_FSDEV_IO_STATFS,
+	SPDK_FSDEV_IO_RELEASE,
+	SPDK_FSDEV_IO_FSYNC,
+	SPDK_FSDEV_IO_SETXATTR,
+	SPDK_FSDEV_IO_GETXATTR,
+	SPDK_FSDEV_IO_LISTXATTR,
+	SPDK_FSDEV_IO_REMOVEXATTR,
+	SPDK_FSDEV_IO_FLUSH,
+	SPDK_FSDEV_IO_OPENDIR,
+	SPDK_FSDEV_IO_READDIR,
+	SPDK_FSDEV_IO_RELEASEDIR,
+	SPDK_FSDEV_IO_FSYNCDIR,
+	SPDK_FSDEV_IO_FLOCK,
+	SPDK_FSDEV_IO_CREATE,
+	SPDK_FSDEV_IO_ABORT,
+	SPDK_FSDEV_IO_FALLOCATE,
+	SPDK_FSDEV_IO_COPY_FILE_RANGE,
+	SPDK_FSDEV_IO_SYNCFS,
+	SPDK_FSDEV_IO_ACCESS,
+	SPDK_FSDEV_IO_LSEEK,
+	SPDK_FSDEV_IO_IOCTL,
+	__SPDK_FSDEV_IO_LAST
 };
 
 struct spdk_fsdev_io {
@@ -337,7 +337,7 @@ struct spdk_fsdev_io {
 			uint32_t flags;
 			struct iovec *iov;
 			uint32_t iovcnt;
-			struct spdk_fsdev_ext_op_opts *opts;
+			struct spdk_fsdev_io_opts *opts;
 		} read;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -347,7 +347,7 @@ struct spdk_fsdev_io {
 			uint64_t flags;
 			const struct iovec *iov;
 			uint32_t iovcnt;
-			struct spdk_fsdev_ext_op_opts *opts;
+			struct spdk_fsdev_io_opts *opts;
 		} write;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -396,7 +396,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_handle *fhandle;
 			uint64_t offset;
 			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg);
-			spdk_fsdev_op_readdir_entry_cb *usr_entry_cb_fn;
+			spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn;
 		} readdir;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -573,7 +573,7 @@ struct spdk_fsdev_io {
 		bool in_submit_request;
 
 		/** IO operation */
-		enum spdk_fsdev_op op;
+		enum spdk_fsdev_io_type type;
 
 		/** IO unique ID */
 		uint64_t unique;
@@ -680,15 +680,15 @@ void spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status);
 
 
 /**
- * Get I/O operation
+ * Get I/O type
  *
  * \param fsdev_io I/O to complete.
  *
- * \return operation code assosiated with the I/O
+ * \return operation code associated with the I/O
  */
-static inline enum spdk_fsdev_op
-spdk_fsdev_io_get_op(struct spdk_fsdev_io *fsdev_io) {
-	return fsdev_io->internal.op;
+static inline enum spdk_fsdev_io_type
+spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
+	return fsdev_io->internal.type;
 }
 
 /**

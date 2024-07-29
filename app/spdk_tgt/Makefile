@@ -13,7 +13,7 @@ C_SRCS := spdk_tgt.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 
-SPDK_LIB_LIST += event event_iscsi event_nvmf event_fsdev
+SPDK_LIB_LIST += event event_iscsi event_nvmf
 
 ifeq ($(SPDK_ROOT_DIR)/lib/env_dpdk,$(CONFIG_ENV))
 SPDK_LIB_LIST += env_dpdk_rpc
@@ -30,6 +30,10 @@ endif
 ifeq ($(CONFIG_VFIO_USER),y)
 SPDK_LIB_LIST += event_vfu_tgt
 endif
+endif
+
+ifeq ($(CONFIG_FSDEV),y)
+SPDK_LIB_LIST += event_fsdev
 endif
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app.mk

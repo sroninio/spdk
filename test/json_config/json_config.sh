@@ -46,7 +46,10 @@ function tgt_check_notification_types() {
 	timing_enter "${FUNCNAME[0]}"
 
 	local ret=0
-	local enabled_types=("fsdev_register" "fsdev_unregister" "bdev_register" "bdev_unregister")
+	local enabled_types=("bdev_register" "bdev_unregister")
+	if grep -q '#define SPDK_CONFIG_FSDEV 1' $rootdir/include/spdk/config.h; then
+		enabled_types+=("fsdev_register" "fsdev_unregister")
+	fi
 
 	local get_types=($(tgt_rpc notify_get_types | jq -r '.[]'))
 

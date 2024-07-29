@@ -11,7 +11,7 @@
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
 
-#define OP_STATUS_ASYNC INT_MIN
+#define IO_STATUS_ASYNC INT_MIN
 
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
@@ -1219,7 +1219,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
 
-	return OP_STATUS_ASYNC;
+	return IO_STATUS_ASYNC;
 }
 
 static void
@@ -1290,7 +1290,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
 
-	return OP_STATUS_ASYNC;
+	return IO_STATUS_ASYNC;
 }
 
 static int
@@ -1707,35 +1707,6 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
-#ifndef __linux__
-static int
-lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return -ENOSYS;
-}
-
-static int
-lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return -ENOSYS;
-}
-
-static int
-lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return -ENOSYS;
-}
-
-static int
-lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	SPDK_INFOLOG(fsdev_aio, "xattr is not supported\n");
-	return -ENOSYS;
-}
-#else
 static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -1956,7 +1927,6 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	return 0;
 }
-#endif /* __linux__ */
 
 static int
 lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
@@ -2297,53 +2267,53 @@ fsdev_aio_destruct(void *ctx)
 typedef int (*fsdev_op_handler_func)(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io);
 
 static fsdev_op_handler_func handlers[] = {
-	[SPDK_FSDEV_OP_LOOKUP] = lo_lookup,
-	[SPDK_FSDEV_OP_FORGET] = lo_forget,
-	[SPDK_FSDEV_OP_GETATTR] = lo_getattr,
-	[SPDK_FSDEV_OP_SETATTR] = lo_setattr,
-	[SPDK_FSDEV_OP_READLINK] = lo_readlink,
-	[SPDK_FSDEV_OP_SYMLINK] = lo_symlink,
-	[SPDK_FSDEV_OP_MKNOD] = lo_mknod,
-	[SPDK_FSDEV_OP_MKDIR] = lo_mkdir,
-	[SPDK_FSDEV_OP_UNLINK] = lo_unlink,
-	[SPDK_FSDEV_OP_RMDIR] = lo_rmdir,
-	[SPDK_FSDEV_OP_RENAME] = lo_rename,
-	[SPDK_FSDEV_OP_LINK] = lo_link,
-	[SPDK_FSDEV_OP_OPEN] = lo_open,
-	[SPDK_FSDEV_OP_READ] = lo_read,
-	[SPDK_FSDEV_OP_WRITE] = lo_write,
-	[SPDK_FSDEV_OP_STATFS] =  lo_statfs,
-	[SPDK_FSDEV_OP_RELEASE] = lo_release,
-	[SPDK_FSDEV_OP_FSYNC] = lo_fsync,
-	[SPDK_FSDEV_OP_SETXATTR] =  lo_setxattr,
-	[SPDK_FSDEV_OP_GETXATTR] =  lo_getxattr,
-	[SPDK_FSDEV_OP_LISTXATTR] = lo_listxattr,
-	[SPDK_FSDEV_OP_REMOVEXATTR] =  lo_removexattr,
-	[SPDK_FSDEV_OP_FLUSH] =  lo_flush,
-	[SPDK_FSDEV_OP_OPENDIR] =  lo_opendir,
-	[SPDK_FSDEV_OP_READDIR] =  lo_readdir,
-	[SPDK_FSDEV_OP_RELEASEDIR] = lo_releasedir,
-	[SPDK_FSDEV_OP_FSYNCDIR] = lo_fsyncdir,
-	[SPDK_FSDEV_OP_FLOCK] = lo_flock,
-	[SPDK_FSDEV_OP_CREATE] = lo_create,
-	[SPDK_FSDEV_OP_ABORT] = lo_abort,
-	[SPDK_FSDEV_OP_FALLOCATE] = lo_fallocate,
-	[SPDK_FSDEV_OP_COPY_FILE_RANGE] = lo_copy_file_range,
-	[SPDK_FSDEV_OP_SYNCFS] = lo_syncfs,
-	[SPDK_FSDEV_OP_LSEEK] = lo_lseek,
-	[SPDK_FSDEV_OP_IOCTL] = lo_ioctl,
+	[SPDK_FSDEV_IO_LOOKUP] = lo_lookup,
+	[SPDK_FSDEV_IO_FORGET] = lo_forget,
+	[SPDK_FSDEV_IO_GETATTR] = lo_getattr,
+	[SPDK_FSDEV_IO_SETATTR] = lo_setattr,
+	[SPDK_FSDEV_IO_READLINK] = lo_readlink,
+	[SPDK_FSDEV_IO_SYMLINK] = lo_symlink,
+	[SPDK_FSDEV_IO_MKNOD] = lo_mknod,
+	[SPDK_FSDEV_IO_MKDIR] = lo_mkdir,
+	[SPDK_FSDEV_IO_UNLINK] = lo_unlink,
+	[SPDK_FSDEV_IO_RMDIR] = lo_rmdir,
+	[SPDK_FSDEV_IO_RENAME] = lo_rename,
+	[SPDK_FSDEV_IO_LINK] = lo_link,
+	[SPDK_FSDEV_IO_OPEN] = lo_open,
+	[SPDK_FSDEV_IO_READ] = lo_read,
+	[SPDK_FSDEV_IO_WRITE] = lo_write,
+	[SPDK_FSDEV_IO_STATFS] =  lo_statfs,
+	[SPDK_FSDEV_IO_RELEASE] = lo_release,
+	[SPDK_FSDEV_IO_FSYNC] = lo_fsync,
+	[SPDK_FSDEV_IO_SETXATTR] =  lo_setxattr,
+	[SPDK_FSDEV_IO_GETXATTR] =  lo_getxattr,
+	[SPDK_FSDEV_IO_LISTXATTR] = lo_listxattr,
+	[SPDK_FSDEV_IO_REMOVEXATTR] =  lo_removexattr,
+	[SPDK_FSDEV_IO_FLUSH] =  lo_flush,
+	[SPDK_FSDEV_IO_OPENDIR] =  lo_opendir,
+	[SPDK_FSDEV_IO_READDIR] =  lo_readdir,
+	[SPDK_FSDEV_IO_RELEASEDIR] = lo_releasedir,
+	[SPDK_FSDEV_IO_FSYNCDIR] = lo_fsyncdir,
+	[SPDK_FSDEV_IO_FLOCK] = lo_flock,
+	[SPDK_FSDEV_IO_CREATE] = lo_create,
+	[SPDK_FSDEV_IO_ABORT] = lo_abort,
+	[SPDK_FSDEV_IO_FALLOCATE] = lo_fallocate,
+	[SPDK_FSDEV_IO_COPY_FILE_RANGE] = lo_copy_file_range,
+	[SPDK_FSDEV_IO_SYNCFS] = lo_syncfs,
+	[SPDK_FSDEV_IO_LSEEK] = lo_lseek,
+	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
 };
 
 static void
 fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int status;
-	enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
+	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 
-	assert(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
+	assert(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
 
-	status = handlers[op](ch, fsdev_io);
-	if (status != OP_STATUS_ASYNC) {
+	status = handlers[type](ch, fsdev_io);
+	if (status != IO_STATUS_ASYNC) {
 		spdk_fsdev_io_complete(fsdev_io, status);
 	}
 }
@@ -2691,13 +2661,11 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-#ifndef __linux__
 	if (opts->xattr_enabled) {
 		SPDK_ERRLOG("Extended attributes can only be enabled in Linux\n");
 		fsdev_aio_free(vfsdev);
 		return rc;
 	}
-#endif
 
 	vfsdev->xattr_enabled = opts->xattr_enabled;
 	vfsdev->fsdev.ctxt = vfsdev;

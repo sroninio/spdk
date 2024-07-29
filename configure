@@ -712,6 +712,7 @@ for i in "$@"; do
 			;;
 		--with-aio-fsdev)
 			CONFIG[AIO_FSDEV]=y
+			AIO_FSDEV_REQUIRED=y
 			;;
 		--without-aio-fsdev)
 			CONFIG[AIO_FSDEV]=n
@@ -853,6 +854,7 @@ if [[ $sys_name == "FreeBSD" ]]; then
 		echo "ERROR: CONFIG_COVERAGE not available on FreeBSD"
 		exit 1
 	fi
+	CONFIG[FSDEV]=n
 fi
 
 if [[ $sys_name == "Linux" ]]; then
@@ -1357,6 +1359,16 @@ if [[ -n ${CONFIG[MAX_LCORES]} ]]; then
 		echo "ERROR: Max number of lcores must be a decimal number in range [1..1024] or 'detect' (given: ${CONFIG[MAX_LCORES]})"
 		exit 1
 	fi
+fi
+
+if [[ "${CONFIG[FSDEV]}" = "n" ]]; then
+	if [[ "$AIO_FSDEV_REQUIRED" = "y" ]]; then
+		echo "ERROR: --with-aio-fsdev cannot be specified as fsdev is disabled."
+		exit 1
+	fi
+
+	# if AIO_FSDEV is not explicitly required by user, we just silently disable it
+	CONFIG[AIO_FSDEV]=n
 fi
 
 if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then

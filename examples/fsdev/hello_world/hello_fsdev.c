@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -96,9 +96,9 @@ hello_root_release(struct hello_context_t *hello_context)
 	int res;
 
 	SPDK_NOTICELOG("Forget root\n");
-	res = spdk_fsdev_op_forget(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
-				   hello_context->root_fobject, 1,
-				   root_forget_complete, hello_context);
+	res = spdk_fsdev_forget(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
+				hello_context->root_fobject, 1,
+				root_forget_complete, hello_context);
 	if (res) {
 		SPDK_ERRLOG("Failed to forget root (err=%d)\n", res);
 		hello_app_done(hello_context, EINVAL);
@@ -171,9 +171,9 @@ hello_unlink(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Unlink file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_op_unlink(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				   hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-				   unlink_complete, hello_thread);
+	res = spdk_fsdev_unlink(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
+				unlink_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("unlink failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -202,9 +202,9 @@ hello_release(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Release file handle %p\n", hello_thread->fhandle);
 
-	res = spdk_fsdev_op_release(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				    hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-				    release_complete, hello_thread);
+	res = spdk_fsdev_release(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				 hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
+				 release_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("release failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -251,10 +251,10 @@ hello_read(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	res = spdk_fsdev_op_read(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				 hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-				 DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
-				 read_complete, hello_thread);
+	res = spdk_fsdev_read(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			      hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
+			      DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
+			      read_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("write failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -291,10 +291,10 @@ hello_write(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	res = spdk_fsdev_op_write(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				  hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-				  DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
-				  write_complete, hello_thread);
+	res = spdk_fsdev_write(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			       hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
+			       DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
+			       write_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("write failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -302,8 +302,8 @@ hello_write(struct hello_thread_t *hello_thread)
 }
 
 static void
-open_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-	      struct spdk_fsdev_file_handle *fhandle)
+fopen_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+	       struct spdk_fsdev_file_handle *fhandle)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -324,9 +324,9 @@ hello_open(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Open fobject %p\n", hello_thread->fobject);
 
-	res = spdk_fsdev_op_open(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				 hello_thread->unique, hello_thread->fobject, O_RDWR,
-				 open_complete, hello_thread);
+	res = spdk_fsdev_fopen(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			       hello_thread->unique, hello_thread->fobject, O_RDWR,
+			       fopen_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("open failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -356,9 +356,9 @@ hello_lookup(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Lookup file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_op_lookup(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				   hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-				   lookup_complete, hello_thread);
+	res = spdk_fsdev_lookup(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
+				lookup_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("lookup failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -389,9 +389,9 @@ hello_mknod(void *ctx)
 
 	SPDK_NOTICELOG("Mknod file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_op_mknod(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				  hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-				  S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0, 0, mknod_complete, hello_thread);
+	res = spdk_fsdev_mknod(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			       hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
+			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0, 0, mknod_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("mknod failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -495,8 +495,8 @@ root_lookup(struct hello_context_t *hello_context)
 
 	SPDK_NOTICELOG("Lookup for the root\n");
 
-	res = spdk_fsdev_op_lookup(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
-				   NULL /* root */, "" /* will be ignored */, root_lookup_complete, hello_context);
+	res = spdk_fsdev_lookup(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
+				NULL /* root */, "" /* will be ignored */, root_lookup_complete, hello_context);
 	if (res) {
 		SPDK_ERRLOG("Failed to initiate lookup for the root (err=%d)\n", res);
 		hello_app_done(hello_context, res);

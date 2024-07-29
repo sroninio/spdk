@@ -236,6 +236,9 @@ CONFIG_XLIO_DIR=
 CONFIG_STATIC_XLIO=n
 CONFIG_DPCP_DIR=
 
+# Build fsdev
+CONFIG_FSDEV=y
+
 # Build with aio fsdev
 CONFIG_AIO_FSDEV=y
 

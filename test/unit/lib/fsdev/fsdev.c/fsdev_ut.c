@@ -1,7 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (C) 2017 Intel Corporation. All rights reserved.
- *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_internal/cunit.h"
@@ -300,54 +298,54 @@ static struct spdk_fsdev_io *ut_oustanding_io = NULL;
 static void
 ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
+	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 	struct ut_fsdev *utfsdev = fsdev_to_ut_fsdev(fsdev_io->fsdev);
 	struct ut_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	uint64_t unique = spdk_fsdev_io_get_unique(fsdev_io);
 	int res, i = 0;
 
-	CU_ASSERT(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
+	CU_ASSERT(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
 
 	ut_call_record_begin(ut_fsdev_submit_request);
 
 	/* Common params */
-	ut_call_record_param_int(op);
+	ut_call_record_param_int(type);
 	/* There's no unique for abort so we just add UT_UNIQUE to pass the test */
-	ut_call_record_param_int((op != SPDK_FSDEV_OP_ABORT) ? unique : UT_UNIQUE);
+	ut_call_record_param_int((type != SPDK_FSDEV_IO_ABORT) ? unique : UT_UNIQUE);
 	ut_call_record_param_ptr(ch);
 	ut_call_record_param_ptr(utfsdev);
 
 	CU_ASSERT(ut_call_record_get_current_param_count() == UT_SUBMIT_IO_NUM_COMMON_PARAMS);
 
-	switch (op) {
-	case SPDK_FSDEV_OP_LOOKUP:
+	switch (type) {
+	case SPDK_FSDEV_IO_LOOKUP:
 		ut_call_record_param_str(fsdev_io->u_in.lookup.name);
 		ut_call_record_param_ptr(fsdev_io->u_in.lookup.parent_fobject);
 		fsdev_io->u_out.lookup.fobject = &ut_fsdev_fobject;
 		fsdev_io->u_out.lookup.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_FORGET:
+	case SPDK_FSDEV_IO_FORGET:
 		ut_call_record_param_ptr(fsdev_io->u_in.forget.fobject);
 		ut_call_record_param_int(fsdev_io->u_in.forget.nlookup);
 		break;
-	case SPDK_FSDEV_OP_GETATTR:
+	case SPDK_FSDEV_IO_GETATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.getattr.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.getattr.fhandle);
 		fsdev_io->u_out.getattr.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_SETATTR:
+	case SPDK_FSDEV_IO_SETATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.setattr.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.setattr.fhandle);
 		ut_call_record_param_hash(&fsdev_io->u_in.setattr.attr, sizeof(fsdev_io->u_in.setattr.attr));
 		ut_call_record_param_int(fsdev_io->u_in.setattr.to_set);
 		fsdev_io->u_out.getattr.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_READLINK:
+	case SPDK_FSDEV_IO_READLINK:
 		ut_call_record_param_ptr(fsdev_io->u_in.readlink.fobject);
 		fsdev_io->u_out.readlink.linkname = strdup(UT_FNAME);
 		SPDK_CU_ASSERT_FATAL(fsdev_io->u_out.readlink.linkname != NULL);
 		break;
-	case SPDK_FSDEV_OP_SYMLINK:
+	case SPDK_FSDEV_IO_SYMLINK:
 		ut_call_record_param_ptr(fsdev_io->u_in.symlink.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.symlink.target);
 		ut_call_record_param_str(fsdev_io->u_in.symlink.linkpath);
@@ -356,7 +354,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		fsdev_io->u_out.symlink.fobject = UT_FOBJECT + 1;
 		fsdev_io->u_out.symlink.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_MKNOD:
+	case SPDK_FSDEV_IO_MKNOD:
 		ut_call_record_param_ptr(fsdev_io->u_in.mknod.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.mknod.name);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.mode);
@@ -366,7 +364,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		fsdev_io->u_out.mknod.fobject = UT_FOBJECT + 1;
 		fsdev_io->u_out.mknod.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_MKDIR:
+	case SPDK_FSDEV_IO_MKDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.mkdir.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.mkdir.name);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.mode);
@@ -375,34 +373,34 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		fsdev_io->u_out.mkdir.fobject = UT_FOBJECT + 1;
 		fsdev_io->u_out.mkdir.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_UNLINK:
+	case SPDK_FSDEV_IO_UNLINK:
 		ut_call_record_param_ptr(fsdev_io->u_in.unlink.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.unlink.name);
 		break;
-	case SPDK_FSDEV_OP_RMDIR:
+	case SPDK_FSDEV_IO_RMDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.rmdir.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.rmdir.name);
 		break;
-	case SPDK_FSDEV_OP_RENAME:
+	case SPDK_FSDEV_IO_RENAME:
 		ut_call_record_param_ptr(fsdev_io->u_in.rename.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.rename.name);
 		ut_call_record_param_ptr(fsdev_io->u_in.rename.new_parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.rename.new_name);
 		ut_call_record_param_int(fsdev_io->u_in.rename.flags);
 		break;
-	case SPDK_FSDEV_OP_LINK:
+	case SPDK_FSDEV_IO_LINK:
 		ut_call_record_param_ptr(fsdev_io->u_in.link.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.link.new_parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.link.name);
 		fsdev_io->u_out.link.fobject = UT_FOBJECT + 1;
 		fsdev_io->u_out.link.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_OPEN:
+	case SPDK_FSDEV_IO_OPEN:
 		ut_call_record_param_ptr(fsdev_io->u_in.open.fobject);
 		ut_call_record_param_int(fsdev_io->u_in.open.flags);
 		fsdev_io->u_out.open.fhandle = UT_FHANDLE;
 		break;
-	case SPDK_FSDEV_OP_READ:
+	case SPDK_FSDEV_IO_READ:
 		ut_call_record_param_ptr(fsdev_io->u_in.read.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.read.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.read.size);
@@ -414,7 +412,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.read.opts);
 		fsdev_io->u_out.read.data_size = UT_DATA_SIZE;
 		break;
-	case SPDK_FSDEV_OP_WRITE:
+	case SPDK_FSDEV_IO_WRITE:
 		ut_call_record_param_ptr(fsdev_io->u_in.write.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.write.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.write.size);
@@ -426,27 +424,27 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.write.opts);
 		fsdev_io->u_out.write.data_size = UT_DATA_SIZE;
 		break;
-	case SPDK_FSDEV_OP_STATFS:
+	case SPDK_FSDEV_IO_STATFS:
 		ut_call_record_param_ptr(fsdev_io->u_in.statfs.fobject);
 		fsdev_io->u_out.statfs.statfs = ut_statfs;
 		break;
-	case SPDK_FSDEV_OP_RELEASE:
+	case SPDK_FSDEV_IO_RELEASE:
 		ut_call_record_param_ptr(fsdev_io->u_in.release.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.release.fhandle);
 		break;
-	case SPDK_FSDEV_OP_FSYNC:
+	case SPDK_FSDEV_IO_FSYNC:
 		ut_call_record_param_ptr(fsdev_io->u_in.fsync.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.fsync.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.fsync.datasync);
 		break;
-	case SPDK_FSDEV_OP_SETXATTR:
+	case SPDK_FSDEV_IO_SETXATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.setxattr.fobject);
 		ut_call_record_param_str(fsdev_io->u_in.setxattr.name);
 		ut_call_record_param_str(fsdev_io->u_in.setxattr.value);
 		ut_call_record_param_int(fsdev_io->u_in.setxattr.size);
 		ut_call_record_param_int(fsdev_io->u_in.setxattr.flags);
 		break;
-	case SPDK_FSDEV_OP_GETXATTR:
+	case SPDK_FSDEV_IO_GETXATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.getxattr.fobject);
 		ut_call_record_param_str(fsdev_io->u_in.getxattr.name);
 		ut_call_record_param_ptr(fsdev_io->u_in.getxattr.buffer);
@@ -455,7 +453,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 				fsdev_io->u_in.getxattr.size - 1, 0);
 		fsdev_io->u_out.getxattr.value_size = sizeof(UT_AVALUE);
 		break;
-	case SPDK_FSDEV_OP_LISTXATTR:
+	case SPDK_FSDEV_IO_LISTXATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.listxattr.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.listxattr.buffer);
 		ut_call_record_param_int(fsdev_io->u_in.listxattr.size);
@@ -474,20 +472,20 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 			}
 		}
 		break;
-	case SPDK_FSDEV_OP_REMOVEXATTR:
+	case SPDK_FSDEV_IO_REMOVEXATTR:
 		ut_call_record_param_ptr(fsdev_io->u_in.removexattr.fobject);
 		ut_call_record_param_str(fsdev_io->u_in.removexattr.name);
 		break;
-	case SPDK_FSDEV_OP_FLUSH:
+	case SPDK_FSDEV_IO_FLUSH:
 		ut_call_record_param_ptr(fsdev_io->u_in.flush.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.flush.fhandle);
 		break;
-	case SPDK_FSDEV_OP_OPENDIR:
+	case SPDK_FSDEV_IO_OPENDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.opendir.fobject);
 		ut_call_record_param_int(fsdev_io->u_in.opendir.flags);
 		fsdev_io->u_out.opendir.fhandle = UT_FHANDLE;
 		break;
-	case SPDK_FSDEV_OP_READDIR:
+	case SPDK_FSDEV_IO_READDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.readdir.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.readdir.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.readdir.offset);
@@ -503,21 +501,21 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		} while (!res);
 
 		break;
-	case SPDK_FSDEV_OP_RELEASEDIR:
+	case SPDK_FSDEV_IO_RELEASEDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.releasedir.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.releasedir.fhandle);
 		break;
-	case SPDK_FSDEV_OP_FSYNCDIR:
+	case SPDK_FSDEV_IO_FSYNCDIR:
 		ut_call_record_param_ptr(fsdev_io->u_in.fsyncdir.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.fsyncdir.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.fsyncdir.datasync);
 		break;
-	case SPDK_FSDEV_OP_FLOCK:
+	case SPDK_FSDEV_IO_FLOCK:
 		ut_call_record_param_ptr(fsdev_io->u_in.flock.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.flock.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.flock.operation);
 		break;
-	case SPDK_FSDEV_OP_CREATE:
+	case SPDK_FSDEV_IO_CREATE:
 		ut_call_record_param_ptr(fsdev_io->u_in.create.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.create.name);
 		ut_call_record_param_int(fsdev_io->u_in.create.mode);
@@ -529,17 +527,17 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		fsdev_io->u_out.create.fhandle = UT_FHANDLE;
 		fsdev_io->u_out.create.attr = ut_fsdev_attr;
 		break;
-	case SPDK_FSDEV_OP_ABORT:
+	case SPDK_FSDEV_IO_ABORT:
 		ut_call_record_param_int(fsdev_io->u_in.abort.unique_to_abort);
 		break;
-	case SPDK_FSDEV_OP_FALLOCATE:
+	case SPDK_FSDEV_IO_FALLOCATE:
 		ut_call_record_param_ptr(fsdev_io->u_in.fallocate.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.fallocate.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.fallocate.mode);
 		ut_call_record_param_int(fsdev_io->u_in.fallocate.offset);
 		ut_call_record_param_int(fsdev_io->u_in.fallocate.length);
 		break;
-	case SPDK_FSDEV_OP_COPY_FILE_RANGE:
+	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		ut_call_record_param_ptr(fsdev_io->u_in.copy_file_range.fobject_in);
 		ut_call_record_param_ptr(fsdev_io->u_in.copy_file_range.fhandle_in);
 		ut_call_record_param_int(fsdev_io->u_in.copy_file_range.off_in);
@@ -550,28 +548,28 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_int(fsdev_io->u_in.copy_file_range.flags);
 		fsdev_io->u_out.copy_file_range.data_size = UT_DATA_SIZE;
 		break;
-	case SPDK_FSDEV_OP_SYNCFS:
+	case SPDK_FSDEV_IO_SYNCFS:
 		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fobject);
 		break;
-	case SPDK_FSDEV_OP_ACCESS:
+	case SPDK_FSDEV_IO_ACCESS:
 		ut_call_record_param_ptr(fsdev_io->u_in.access.fobject);
 		ut_call_record_param_int(fsdev_io->u_in.access.mask);
 		ut_call_record_param_int(fsdev_io->u_in.access.uid);
 		ut_call_record_param_int(fsdev_io->u_in.access.gid);
 		break;
-	case SPDK_FSDEV_OP_LSEEK:
+	case SPDK_FSDEV_IO_LSEEK:
 		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.lseek.offset);
 		ut_call_record_param_int(fsdev_io->u_in.lseek.whence);
 		break;
-	case SPDK_FSDEV_OP_IOCTL:
+	case SPDK_FSDEV_IO_IOCTL:
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.ioctl.request);
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.argp);
 		break;
-	case __SPDK_FSDEV_OP_LAST:
+	case __SPDK_FSDEV_IO_LAST:
 	default:
 		break;
 	}
@@ -1104,8 +1102,8 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 
 	ut_calls_reset();
 	ut_complete_next_request = false; /* Make sure the flush IO won't be completed */
-	rc =  spdk_fsdev_op_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				  ut_fsdev_reset_flush_cpl_cb, utfsdev);
+	rc =  spdk_fsdev_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+			       ut_fsdev_reset_flush_cpl_cb, utfsdev);
 	CU_ASSERT(rc == 0);
 
 	poll_thread(0);
@@ -1170,13 +1168,13 @@ ut_fsdev_test_reset_module_reset_fails(void)
 	ut_fsdev_do_test_reset(true, false);
 }
 
-typedef int (*execute_op_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-			      struct spdk_fsdev_desc *fsdev_desc, int *status);
-typedef void (*check_op_clb)(void);
+typedef int (*execute_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status);
+typedef void (*check_clb)(void);
 
 static void
-ut_fsdev_test_op(enum spdk_fsdev_op op, int desired_io_status, size_t num_priv_params,
-		 execute_op_clb execute_cb, check_op_clb check_cb)
+ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, size_t num_priv_params,
+		 execute_clb execute_cb, check_clb check_cb)
 {
 	struct ut_fsdev *utfsdev;
 	struct spdk_io_channel *ch;
@@ -1206,7 +1204,7 @@ ut_fsdev_test_op(enum spdk_fsdev_op op, int desired_io_status, size_t num_priv_p
 	CU_ASSERT(ut_calls_get_param_count(0) == UT_SUBMIT_IO_NUM_COMMON_PARAMS + num_priv_params);
 
 	/* Common params */
-	CU_ASSERT(ut_calls_param_get_int(0, 0) == op);
+	CU_ASSERT(ut_calls_param_get_int(0, 0) == type);
 	CU_ASSERT(ut_calls_param_get_int(0, 1) == UT_UNIQUE);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 2) == g_ut_io_channel);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 3) == utfsdev);
@@ -1226,8 +1224,8 @@ ut_fsdev_test_op(enum spdk_fsdev_op op, int desired_io_status, size_t num_priv_p
 }
 
 static void
-ut_fsdev_op_lookup_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_lookup_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1238,16 +1236,16 @@ ut_fsdev_op_lookup_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_lookup_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_lookup_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_lookup(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
-				    ut_fsdev_op_lookup_cpl_cb,
-				    status);
+	return spdk_fsdev_lookup(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
+				 ut_fsdev_lookup_cpl_cb,
+				 status);
 }
 
 static void
-ut_fsdev_op_lookup_check_op_clb(void)
+ut_fsdev_lookup_check_clb(void)
 {
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS), UT_FNAME,
 			   UT_CALL_REC_MAX_STR_SIZE));
@@ -1255,81 +1253,81 @@ ut_fsdev_op_lookup_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_lookup_ok(void)
+ut_fsdev_test_lookup_ok(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LOOKUP, 0, 2, ut_fsdev_op_lookup_execute_op_clb,
-			 ut_fsdev_op_lookup_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LOOKUP, 0, 2, ut_fsdev_lookup_execute_clb,
+			 ut_fsdev_lookup_check_clb);
 }
 
 static void
-ut_fsdev_test_op_lookup_err(void)
+ut_fsdev_test_lookup_err(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LOOKUP, -EBUSY, 2, ut_fsdev_op_lookup_execute_op_clb,
-			 ut_fsdev_op_lookup_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LOOKUP, -EBUSY, 2, ut_fsdev_lookup_execute_clb,
+			 ut_fsdev_lookup_check_clb);
 }
 
 static void
-ut_fsdev_op_forget_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_forget_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_forget_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_forget_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_forget(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_NUM_LOOKUPS,
-				    ut_fsdev_op_forget_cpl_cb, status);
+	return spdk_fsdev_forget(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_NUM_LOOKUPS,
+				 ut_fsdev_forget_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_forget_check_op_clb(void)
+ut_fsdev_forget_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_NUM_LOOKUPS);
 }
 
 static void
-ut_fsdev_test_op_forget(void)
+ut_fsdev_test_forget(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FORGET, 0, 2, ut_fsdev_op_forget_execute_op_clb,
-			 ut_fsdev_op_forget_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FORGET, 0, 2, ut_fsdev_forget_execute_clb,
+			 ut_fsdev_forget_check_clb);
 }
 
 static void
-ut_fsdev_op_getattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			   const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_getattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_getattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_getattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_getattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				     ut_fsdev_op_getattr_cpl_cb, status);
+	return spdk_fsdev_getattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				  ut_fsdev_getattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_getattr_check_op_clb(void)
+ut_fsdev_getattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 }
 
 static void
-ut_fsdev_test_op_getattr(void)
+ut_fsdev_test_getattr(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_GETATTR, 0, 2, ut_fsdev_op_getattr_execute_op_clb,
-			 ut_fsdev_op_getattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_GETATTR, 0, 2, ut_fsdev_getattr_execute_clb,
+			 ut_fsdev_getattr_check_clb);
 }
 
 static void
-ut_fsdev_op_setattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			   const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_setattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
@@ -1337,16 +1335,16 @@ ut_fsdev_op_setattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_setattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_setattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_setattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				     &ut_fsdev_attr, 0x11111111, ut_fsdev_op_setattr_cpl_cb, status);
+	return spdk_fsdev_setattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				  &ut_fsdev_attr, 0x11111111, ut_fsdev_setattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_setattr_check_op_clb(void)
+ut_fsdev_setattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -1356,15 +1354,15 @@ ut_fsdev_op_setattr_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_setattr(void)
+ut_fsdev_test_setattr(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_SETATTR, 0, 4, ut_fsdev_op_setattr_execute_op_clb,
-			 ut_fsdev_op_setattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SETATTR, 0, 4, ut_fsdev_setattr_execute_clb,
+			 ut_fsdev_setattr_check_clb);
 }
 
 static void
-ut_fsdev_op_readlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			    const char *linkname)
+ut_fsdev_readlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			 const char *linkname)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(!strcmp(linkname, UT_FNAME));
@@ -1372,29 +1370,29 @@ ut_fsdev_op_readlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status
 }
 
 static int
-ut_fsdev_op_readlink_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				    struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_readlink_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_readlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, ut_fsdev_op_readlink_cpl_cb,
-				      status);
+	return spdk_fsdev_readlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, ut_fsdev_readlink_cpl_cb,
+				   status);
 }
 
 static void
-ut_fsdev_op_readlink_check_op_clb(void)
+ut_fsdev_readlink_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 }
 
 static void
-ut_fsdev_test_op_readlink(void)
+ut_fsdev_test_readlink(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_READLINK, 0, 1, ut_fsdev_op_readlink_execute_op_clb,
-			 ut_fsdev_op_readlink_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_READLINK, 0, 1, ut_fsdev_readlink_execute_clb,
+			 ut_fsdev_readlink_check_clb);
 }
 
 static void
-ut_fsdev_op_symlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			   struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_symlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fobject == UT_FOBJECT + 1);
@@ -1403,16 +1401,16 @@ ut_fsdev_op_symlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_symlink_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_symlink_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_symlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, UT_LNAME, 100, 200,
-				     ut_fsdev_op_symlink_cpl_cb, status);
+	return spdk_fsdev_symlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, UT_LNAME, 100, 200,
+				  ut_fsdev_symlink_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_symlink_check_op_clb(void)
+ut_fsdev_symlink_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1424,15 +1422,15 @@ ut_fsdev_op_symlink_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_symlink(void)
+ut_fsdev_test_symlink(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_SYMLINK, 0, 5, ut_fsdev_op_symlink_execute_op_clb,
-			 ut_fsdev_op_symlink_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SYMLINK, 0, 5, ut_fsdev_symlink_execute_clb,
+			 ut_fsdev_symlink_check_clb);
 }
 
 static void
-ut_fsdev_op_mknod_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_mknod_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fobject == UT_FOBJECT + 1);
@@ -1441,16 +1439,16 @@ ut_fsdev_op_mknod_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_mknod_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_mknod_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50, 100, 200,
-				   ut_fsdev_op_mknod_cpl_cb, status);
+	return spdk_fsdev_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50, 100, 200,
+				ut_fsdev_mknod_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_mknod_check_op_clb(void)
+ut_fsdev_mknod_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1462,15 +1460,15 @@ ut_fsdev_op_mknod_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_mknod(void)
+ut_fsdev_test_mknod(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_MKNOD, 0, 6, ut_fsdev_op_mknod_execute_op_clb,
-			 ut_fsdev_op_mknod_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKNOD, 0, 6, ut_fsdev_mknod_execute_clb,
+			 ut_fsdev_mknod_check_clb);
 }
 
 static void
-ut_fsdev_op_mkdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_mkdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fobject == UT_FOBJECT + 1);
@@ -1479,16 +1477,16 @@ ut_fsdev_op_mkdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_mkdir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_mkdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 100, 200,
-				   ut_fsdev_op_mkdir_cpl_cb, status);
+	return spdk_fsdev_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 100, 200,
+				ut_fsdev_mkdir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_mkdir_check_op_clb(void)
+ut_fsdev_mkdir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1499,29 +1497,29 @@ ut_fsdev_op_mkdir_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_mkdir(void)
+ut_fsdev_test_mkdir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_MKDIR, 0, 5, ut_fsdev_op_mkdir_execute_op_clb,
-			 ut_fsdev_op_mkdir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKDIR, 0, 5, ut_fsdev_mkdir_execute_clb,
+			 ut_fsdev_mkdir_check_clb);
 }
 
 static void
-ut_fsdev_op_unlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_unlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_unlink_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_unlink_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_unlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
-				    ut_fsdev_op_unlink_cpl_cb, status);
+	return spdk_fsdev_unlink(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
+				 ut_fsdev_unlink_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_unlink_check_op_clb(void)
+ut_fsdev_unlink_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1529,29 +1527,29 @@ ut_fsdev_op_unlink_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_unlink(void)
+ut_fsdev_test_unlink(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_UNLINK, 0, 2, ut_fsdev_op_unlink_execute_op_clb,
-			 ut_fsdev_op_unlink_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_UNLINK, 0, 2, ut_fsdev_unlink_execute_clb,
+			 ut_fsdev_unlink_check_clb);
 }
 
 static void
-ut_fsdev_op_rmdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_rmdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_rmdir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_rmdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_rmdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
-				   ut_fsdev_op_rmdir_cpl_cb, status);
+	return spdk_fsdev_rmdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME,
+				ut_fsdev_rmdir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_rmdir_check_op_clb(void)
+ut_fsdev_rmdir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1559,29 +1557,29 @@ ut_fsdev_op_rmdir_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_rmdir(void)
+ut_fsdev_test_rmdir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_RMDIR, 0, 2, ut_fsdev_op_rmdir_execute_op_clb,
-			 ut_fsdev_op_rmdir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_RMDIR, 0, 2, ut_fsdev_rmdir_execute_clb,
+			 ut_fsdev_rmdir_check_clb);
 }
 
 static void
-ut_fsdev_op_rename_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_rename_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_rename_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_rename_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_rename(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, UT_FOBJECT + 2,
-				    UT_LNAME, 0xFFFF, ut_fsdev_op_rename_cpl_cb, status);
+	return spdk_fsdev_rename(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, UT_FOBJECT + 2,
+				 UT_LNAME, 0xFFFF, ut_fsdev_rename_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_rename_check_op_clb(void)
+ut_fsdev_rename_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
@@ -1593,15 +1591,15 @@ ut_fsdev_op_rename_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_rename(void)
+ut_fsdev_test_rename(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_RENAME, 0, 5, ut_fsdev_op_rename_execute_op_clb,
-			 ut_fsdev_op_rename_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_RENAME, 0, 5, ut_fsdev_rename_execute_clb,
+			 ut_fsdev_rename_check_clb);
 }
 
 static void
-ut_fsdev_op_link_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_link_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fobject == UT_FOBJECT + 1);
@@ -1610,15 +1608,15 @@ ut_fsdev_op_link_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_link_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_link_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			  struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_link(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FOBJECT + 2, UT_LNAME,
-				  ut_fsdev_op_link_cpl_cb, status);
+	return spdk_fsdev_link(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FOBJECT + 2, UT_LNAME,
+			       ut_fsdev_link_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_link_check_op_clb(void)
+ut_fsdev_link_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FOBJECT + 2);
@@ -1627,15 +1625,15 @@ ut_fsdev_op_link_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_link(void)
+ut_fsdev_test_link(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LINK, 0, 3, ut_fsdev_op_link_execute_op_clb,
-			 ut_fsdev_op_link_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LINK, 0, 3, ut_fsdev_link_execute_clb,
+			 ut_fsdev_link_check_clb);
 }
 
 static void
-ut_fsdev_op_open_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_fopen_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      struct spdk_fsdev_file_handle *fhandle)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fhandle == UT_FHANDLE);
@@ -1643,30 +1641,30 @@ ut_fsdev_op_open_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_open_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_fopen_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_open(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, 0xFEAD,
-				  ut_fsdev_op_open_cpl_cb, status);
+	return spdk_fsdev_fopen(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, 0xFEAD,
+				ut_fsdev_fopen_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_open_check_op_clb(void)
+ut_fsdev_fopen_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == 0xFEAD);
 }
 
 static void
-ut_fsdev_test_op_open(void)
+ut_fsdev_test_fopen(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_OPEN, 0, 2, ut_fsdev_op_open_execute_op_clb,
-			 ut_fsdev_op_open_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_OPEN, 0, 2, ut_fsdev_fopen_execute_clb,
+			 ut_fsdev_fopen_check_clb);
 }
 
 static void
-ut_fsdev_op_read_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			uint32_t data_size)
+ut_fsdev_read_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		     uint32_t data_size)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(data_size == UT_DATA_SIZE);
@@ -1674,17 +1672,17 @@ ut_fsdev_op_read_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_read_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_read_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			  struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_iov, rand(), sizeof(ut_iov));
-	return spdk_fsdev_op_read(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 100, 200, 0x1111,
-				  ut_iov, SPDK_COUNTOF(ut_iov), (struct spdk_fsdev_ext_op_opts *)0xAAAAAAAA,
-				  ut_fsdev_op_read_cpl_cb, status);
+	return spdk_fsdev_read(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 100, 200, 0x1111,
+			       ut_iov, SPDK_COUNTOF(ut_iov), (struct spdk_fsdev_io_opts *)0xAAAAAAAA,
+			       ut_fsdev_read_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_read_check_op_clb(void)
+ut_fsdev_read_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -1698,15 +1696,15 @@ ut_fsdev_op_read_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_read(void)
+ut_fsdev_test_read(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_READ, 0, 8, ut_fsdev_op_read_execute_op_clb,
-			 ut_fsdev_op_read_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_READ, 0, 8, ut_fsdev_read_execute_clb,
+			 ut_fsdev_read_check_clb);
 }
 
 static void
-ut_fsdev_op_write_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 uint32_t data_size)
+ut_fsdev_write_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      uint32_t data_size)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(data_size == UT_DATA_SIZE);
@@ -1714,17 +1712,17 @@ ut_fsdev_op_write_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_write_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_write_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_iov, rand(), sizeof(ut_iov));
-	return spdk_fsdev_op_write(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 100, 200, 0x1111,
-				   ut_iov, SPDK_COUNTOF(ut_iov), (struct spdk_fsdev_ext_op_opts *)0xAAAAAAAA,
-				   ut_fsdev_op_write_cpl_cb, status);
+	return spdk_fsdev_write(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 100, 200, 0x1111,
+				ut_iov, SPDK_COUNTOF(ut_iov), (struct spdk_fsdev_io_opts *)0xAAAAAAAA,
+				ut_fsdev_write_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_write_check_op_clb(void)
+ut_fsdev_write_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -1738,15 +1736,15 @@ ut_fsdev_op_write_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_write(void)
+ut_fsdev_test_write(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_WRITE, 0, 8, ut_fsdev_op_write_execute_op_clb,
-			 ut_fsdev_op_write_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_WRITE, 0, 8, ut_fsdev_write_execute_clb,
+			 ut_fsdev_write_check_clb);
 }
 
 static void
-ut_fsdev_op_statfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			  const struct spdk_fsdev_file_statfs *statfs)
+ut_fsdev_statfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		       const struct spdk_fsdev_file_statfs *statfs)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(ut_hash(&ut_statfs, sizeof(ut_statfs)) == ut_hash(statfs, sizeof(*statfs)));
@@ -1754,73 +1752,73 @@ ut_fsdev_op_statfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_statfs_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_statfs_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_statfs, rand(), sizeof(ut_statfs));
-	return spdk_fsdev_op_statfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
-				    ut_fsdev_op_statfs_cpl_cb, status);
+	return spdk_fsdev_statfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				 ut_fsdev_statfs_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_statfs_check_op_clb(void)
+ut_fsdev_statfs_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 }
 
 static void
-ut_fsdev_test_op_statfs(void)
+ut_fsdev_test_statfs(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_STATFS, 0, 1, ut_fsdev_op_statfs_execute_op_clb,
-			 ut_fsdev_op_statfs_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_STATFS, 0, 1, ut_fsdev_statfs_execute_clb,
+			 ut_fsdev_statfs_check_clb);
 }
 
 static void
-ut_fsdev_op_release_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_release_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_release_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_release_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_release(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				     ut_fsdev_op_release_cpl_cb, status);
+	return spdk_fsdev_release(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				  ut_fsdev_release_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_release_check_op_clb(void)
+ut_fsdev_release_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 }
 
 static void
-ut_fsdev_test_op_release(void)
+ut_fsdev_test_release(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_RELEASE, 0, 2, ut_fsdev_op_release_execute_op_clb,
-			 ut_fsdev_op_release_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_RELEASE, 0, 2, ut_fsdev_release_execute_clb,
+			 ut_fsdev_release_check_clb);
 }
 
 static void
-ut_fsdev_op_fsync_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fsync_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_fsync_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_fsync_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_fsync(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, false,
-				   ut_fsdev_op_fsync_cpl_cb, status);
+	return spdk_fsdev_fsync(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, false,
+				ut_fsdev_fsync_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_fsync_check_op_clb(void)
+ut_fsdev_fsync_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -1828,15 +1826,15 @@ ut_fsdev_op_fsync_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_fsync(void)
+ut_fsdev_test_fsync(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FSYNC, 0, 3, ut_fsdev_op_fsync_execute_op_clb,
-			 ut_fsdev_op_fsync_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FSYNC, 0, 3, ut_fsdev_fsync_execute_clb,
+			 ut_fsdev_fsync_check_clb);
 }
 
 static void
-ut_fsdev_op_getxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			    size_t value_size)
+ut_fsdev_getxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			 size_t value_size)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(value_size == sizeof(UT_AVALUE));
@@ -1845,16 +1843,16 @@ ut_fsdev_op_getxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status
 }
 
 static int
-ut_fsdev_op_getxattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				    struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_getxattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(ut_buff, 0, sizeof(ut_buff));
-	return spdk_fsdev_op_getxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME, ut_buff,
-				      sizeof(ut_buff), ut_fsdev_op_getxattr_cpl_cb, status);
+	return spdk_fsdev_getxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME, ut_buff,
+				   sizeof(ut_buff), ut_fsdev_getxattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_getxattr_check_op_clb(void)
+ut_fsdev_getxattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_ANAME,
@@ -1864,29 +1862,29 @@ ut_fsdev_op_getxattr_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_getxattr(void)
+ut_fsdev_test_getxattr(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_GETXATTR, 0, 4, ut_fsdev_op_getxattr_execute_op_clb,
-			 ut_fsdev_op_getxattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_GETXATTR, 0, 4, ut_fsdev_getxattr_execute_clb,
+			 ut_fsdev_getxattr_check_clb);
 }
 
 static void
-ut_fsdev_op_setxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_setxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_setxattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				    struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_setxattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_setxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME, UT_AVALUE,
-				      sizeof(UT_AVALUE), 0xFF, ut_fsdev_op_setxattr_cpl_cb, status);
+	return spdk_fsdev_setxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME, UT_AVALUE,
+				   sizeof(UT_AVALUE), 0xFF, ut_fsdev_setxattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_setxattr_check_op_clb(void)
+ut_fsdev_setxattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_ANAME,
@@ -1898,15 +1896,15 @@ ut_fsdev_op_setxattr_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_setxattr(void)
+ut_fsdev_test_setxattr(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_SETXATTR, 0, 5, ut_fsdev_op_setxattr_execute_op_clb,
-			 ut_fsdev_op_setxattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SETXATTR, 0, 5, ut_fsdev_setxattr_execute_clb,
+			 ut_fsdev_setxattr_check_clb);
 }
 
 static void
-ut_fsdev_op_listxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, size_t size,
-			     bool size_only)
+ut_fsdev_listxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, size_t size,
+			  bool size_only)
 {
 	int *clb_status = cb_arg;
 	if (ut_listxattr_size_only) {
@@ -1928,16 +1926,16 @@ ut_fsdev_op_listxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int statu
 }
 
 static int
-ut_fsdev_op_listxattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				     struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_listxattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			       struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_listxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
-				       ut_listxattr_size_only ? NULL : ut_buff, ut_listxattr_size_only ? 0 : sizeof(ut_buff),
-				       ut_fsdev_op_listxattr_cpl_cb, status);
+	return spdk_fsdev_listxattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				    ut_listxattr_size_only ? NULL : ut_buff, ut_listxattr_size_only ? 0 : sizeof(ut_buff),
+				    ut_fsdev_listxattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_listxattr_check_op_clb(void)
+ut_fsdev_listxattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	if (ut_listxattr_size_only) {
@@ -1950,38 +1948,38 @@ ut_fsdev_op_listxattr_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_listxattr(void)
+ut_fsdev_test_listxattr(void)
 {
 	ut_listxattr_size_only = false;
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LISTXATTR, 0, 3, ut_fsdev_op_listxattr_execute_op_clb,
-			 ut_fsdev_op_listxattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LISTXATTR, 0, 3, ut_fsdev_listxattr_execute_clb,
+			 ut_fsdev_listxattr_check_clb);
 }
 
 static void
-ut_fsdev_test_op_listxattr_get_size(void)
+ut_fsdev_test_listxattr_get_size(void)
 {
 	ut_listxattr_size_only = true;
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LISTXATTR, 0, 3, ut_fsdev_op_listxattr_execute_op_clb,
-			 ut_fsdev_op_listxattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LISTXATTR, 0, 3, ut_fsdev_listxattr_execute_clb,
+			 ut_fsdev_listxattr_check_clb);
 }
 
 static void
-ut_fsdev_op_removexattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_removexattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_removexattr_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				       struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_removexattr_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				 struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_removexattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME,
-					 ut_fsdev_op_removexattr_cpl_cb, status);
+	return spdk_fsdev_removexattr(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_ANAME,
+				      ut_fsdev_removexattr_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_removexattr_check_op_clb(void)
+ut_fsdev_removexattr_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_ANAME,
@@ -1989,44 +1987,44 @@ ut_fsdev_op_removexattr_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_removexattr(void)
+ut_fsdev_test_removexattr(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_REMOVEXATTR, 0, 2, ut_fsdev_op_removexattr_execute_op_clb,
-			 ut_fsdev_op_removexattr_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_REMOVEXATTR, 0, 2, ut_fsdev_removexattr_execute_clb,
+			 ut_fsdev_removexattr_check_clb);
 }
 
 static void
-ut_fsdev_op_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_flush_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_flush_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				   ut_fsdev_op_flush_cpl_cb, status);
+	return spdk_fsdev_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				ut_fsdev_flush_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_flush_check_op_clb(void)
+ut_fsdev_flush_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 }
 
 static void
-ut_fsdev_test_op_flush(void)
+ut_fsdev_test_flush(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FLUSH, 0, 2, ut_fsdev_op_flush_execute_op_clb,
-			 ut_fsdev_op_flush_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FLUSH, 0, 2, ut_fsdev_flush_execute_clb,
+			 ut_fsdev_flush_check_clb);
 }
 
 static void
-ut_fsdev_op_opendir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			   struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_opendir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+			struct spdk_fsdev_file_handle *fhandle)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fhandle == UT_FHANDLE);
@@ -2034,31 +2032,31 @@ ut_fsdev_op_opendir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_opendir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_opendir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_opendir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, 0x1111,
-				     ut_fsdev_op_opendir_cpl_cb, status);
+	return spdk_fsdev_opendir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, 0x1111,
+				  ut_fsdev_opendir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_opendir_check_op_clb(void)
+ut_fsdev_opendir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == 0x1111);
 }
 
 static void
-ut_fsdev_test_op_opendir(void)
+ut_fsdev_test_opendir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_OPENDIR, 0, 2, ut_fsdev_op_opendir_execute_op_clb,
-			 ut_fsdev_op_opendir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_OPENDIR, 0, 2, ut_fsdev_opendir_execute_clb,
+			 ut_fsdev_opendir_check_clb);
 }
 
 static int
-ut_fsdev_op_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
-			     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			     off_t offset)
+ut_fsdev_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
+			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+			  off_t offset)
 {
 	CU_ASSERT(!strcmp(name, UT_FNAME));
 	CU_ASSERT(fobject == UT_FOBJECT + ut_readdir_num_entry_cb_calls);
@@ -2070,88 +2068,88 @@ ut_fsdev_op_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const cha
 }
 
 static void
-ut_fsdev_op_readdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_readdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_readdir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				   struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_readdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	ut_readdir_num_entries = 20;
 	ut_readdir_num_entry_cb_calls = 0;
 	ut_readdir_offset = (uint64_t)rand();
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_readdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 10000,
-				     ut_fsdev_op_readdir_entry_cb, ut_fsdev_op_readdir_cpl_cb, status);
+	return spdk_fsdev_readdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 10000,
+				  ut_fsdev_readdir_entry_cb, ut_fsdev_readdir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_readdir_check_op_clb(void)
+ut_fsdev_readdir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 10000);
 	CU_ASSERT(ut_calls_param_get_ptr(0,
-					 UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == ut_fsdev_op_readdir_entry_cb);
+					 UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == ut_fsdev_readdir_entry_cb);
 	CU_ASSERT(ut_readdir_num_entry_cb_calls == ut_readdir_num_entries);
 }
 
 static void
-ut_fsdev_test_op_readdir(void)
+ut_fsdev_test_readdir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_READDIR, 0, 4, ut_fsdev_op_readdir_execute_op_clb,
-			 ut_fsdev_op_readdir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_READDIR, 0, 4, ut_fsdev_readdir_execute_clb,
+			 ut_fsdev_readdir_check_clb);
 }
 
 static void
-ut_fsdev_op_releasedir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_releasedir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_releasedir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				      struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_releasedir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_releasedir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-					ut_fsdev_op_releasedir_cpl_cb, status);
+	return spdk_fsdev_releasedir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				     ut_fsdev_releasedir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_releasedir_check_op_clb(void)
+ut_fsdev_releasedir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 }
 
 static void
-ut_fsdev_test_op_releasedir(void)
+ut_fsdev_test_releasedir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_RELEASEDIR, 0, 2, ut_fsdev_op_releasedir_execute_op_clb,
-			 ut_fsdev_op_releasedir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_RELEASEDIR, 0, 2, ut_fsdev_releasedir_execute_clb,
+			 ut_fsdev_releasedir_check_clb);
 }
 
 static void
-ut_fsdev_op_fsyncdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fsyncdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_fsyncdir_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				    struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_fsyncdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_fsyncdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, true,
-				      ut_fsdev_op_fsyncdir_cpl_cb, status);
+	return spdk_fsdev_fsyncdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, true,
+				   ut_fsdev_fsyncdir_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_fsyncdir_check_op_clb(void)
+ut_fsdev_fsyncdir_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2159,58 +2157,58 @@ ut_fsdev_op_fsyncdir_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_fsyncdir(void)
+ut_fsdev_test_fsyncdir(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FSYNCDIR, 0, 3, ut_fsdev_op_fsyncdir_execute_op_clb,
-			 ut_fsdev_op_fsyncdir_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FSYNCDIR, 0, 3, ut_fsdev_fsyncdir_execute_clb,
+			 ut_fsdev_fsyncdir_check_clb);
 }
 
 static void
-ut_fsdev_op_syncfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_syncfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_syncfs_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_syncfs_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_syncfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
-				    ut_fsdev_op_syncfs_cpl_cb, status);
+	return spdk_fsdev_syncfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				 ut_fsdev_syncfs_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_syncfs_check_op_clb(void)
+ut_fsdev_syncfs_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 }
 
 static void
-ut_fsdev_test_op_syncfs(void)
+ut_fsdev_test_syncfs(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_SYNCFS, 0, 1, ut_fsdev_op_syncfs_execute_op_clb,
-			 ut_fsdev_op_syncfs_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SYNCFS, 0, 1, ut_fsdev_syncfs_execute_clb,
+			 ut_fsdev_syncfs_check_clb);
 }
 
 static void
-ut_fsdev_op_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			  uint32_t mask, uid_t uid, uid_t gid)
+ut_fsdev_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		       uint32_t mask, uid_t uid, uid_t gid)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_access_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_access_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_access(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
-				    F_OK | R_OK, 42, 43, ut_fsdev_op_access_cpl_cb, status);
+	return spdk_fsdev_access(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				 F_OK | R_OK, 42, 43, ut_fsdev_access_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_access_check_op_clb(void)
+ut_fsdev_access_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 	int mask = (int)ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1);
@@ -2220,30 +2218,30 @@ ut_fsdev_op_access_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_access(void)
+ut_fsdev_test_access(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_ACCESS, 0, 4, ut_fsdev_op_access_execute_op_clb,
-			 ut_fsdev_op_access_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_ACCESS, 0, 4, ut_fsdev_access_execute_clb,
+			 ut_fsdev_access_check_clb);
 }
 
 static void
-ut_fsdev_op_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 off_t offset, enum spdk_fsdev_seek_whence whence)
+ut_fsdev_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      off_t offset, enum spdk_fsdev_seek_whence whence)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_lseek_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_lseek_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_lseek(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				   4096, SPDK_FSDEV_SEEK_SET, ut_fsdev_op_lseek_cpl_cb, status);
+	return spdk_fsdev_lseek(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				4096, SPDK_FSDEV_SEEK_SET, ut_fsdev_lseek_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_lseek_check_op_clb(void)
+ut_fsdev_lseek_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2254,31 +2252,31 @@ ut_fsdev_op_lseek_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_lseek(void)
+ut_fsdev_test_lseek(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_LSEEK, 0, 4, ut_fsdev_op_lseek_execute_op_clb,
-			 ut_fsdev_op_lseek_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LSEEK, 0, 4, ut_fsdev_lseek_execute_op_clb,
+			 ut_fsdev_lseek_check_clb);
 }
 
 static void
-ut_fsdev_op_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 uint32_t request, void *argp)
+ut_fsdev_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      uint32_t request, void *argp)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_ioctl_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_ioctl_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_ioctl(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				   UT_IOCTL_CMD, UT_IOCTL_DATA, ut_fsdev_op_ioctl_cpl_cb,
-				   status);
+	return spdk_fsdev_ioctl(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				UT_IOCTL_CMD, UT_IOCTL_DATA, ut_fsdev_ioctl_cpl_cb,
+				status);
 }
 
 static void
-ut_fsdev_op_ioctl_check_op_clb(void)
+ut_fsdev_ioctl_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2287,29 +2285,29 @@ ut_fsdev_op_ioctl_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_ioctl(void)
+ut_fsdev_test_ioctl(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_IOCTL, 0, 4, ut_fsdev_op_ioctl_execute_op_clb,
-			 ut_fsdev_op_ioctl_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_IOCTL, 0, 4, ut_fsdev_ioctl_execute_clb,
+			 ut_fsdev_ioctl_check_clb);
 }
 
 static void
-ut_fsdev_op_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_flock_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_flock_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_flock(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 111,
-				   ut_fsdev_op_flock_cpl_cb, status);
+	return spdk_fsdev_flock(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 111,
+				ut_fsdev_flock_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_flock_check_op_clb(void)
+ut_fsdev_flock_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2317,16 +2315,16 @@ ut_fsdev_op_flock_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_flock(void)
+ut_fsdev_test_flock(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FLOCK, 0, 3, ut_fsdev_op_flock_execute_op_clb,
-			 ut_fsdev_op_flock_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FLOCK, 0, 3, ut_fsdev_flock_execute_clb,
+			 ut_fsdev_flock_check_clb);
 }
 
 static void
-ut_fsdev_op_create_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			  struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_create_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+		       struct spdk_fsdev_file_handle *fhandle)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(fobject == UT_FOBJECT + 1);
@@ -2336,16 +2334,16 @@ ut_fsdev_op_create_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 }
 
 static int
-ut_fsdev_op_create_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				  struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_create_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_op_create(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_LNAME, 100, 0x2222, 0x666,
-				    200, 300, ut_fsdev_op_create_cpl_cb, status);
+	return spdk_fsdev_create(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_LNAME, 100, 0x2222, 0x666,
+				 200, 300, ut_fsdev_create_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_create_check_op_clb(void)
+ut_fsdev_create_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_LNAME,
@@ -2358,57 +2356,57 @@ ut_fsdev_op_create_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_create(void)
+ut_fsdev_test_create(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_CREATE, 0, 7, ut_fsdev_op_create_execute_op_clb,
-			 ut_fsdev_op_create_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_CREATE, 0, 7, ut_fsdev_create_execute_clb,
+			 ut_fsdev_create_check_clb);
 }
 
 static void
-ut_fsdev_op_abort_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_abort_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_abort_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				 struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_abort_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_abort(fsdev_desc, ch, UT_UNIQUE,
-				   ut_fsdev_op_abort_cpl_cb, status);
+	return spdk_fsdev_abort(fsdev_desc, ch, UT_UNIQUE,
+				ut_fsdev_abort_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_abort_check_op_clb(void)
+ut_fsdev_abort_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_UNIQUE);
 }
 
 static void
-ut_fsdev_test_op_abort(void)
+ut_fsdev_test_abort(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_ABORT, 0, 1, ut_fsdev_op_abort_execute_op_clb,
-			 ut_fsdev_op_abort_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_ABORT, 0, 1, ut_fsdev_abort_execute_clb,
+			 ut_fsdev_abort_check_clb);
 }
 
 static void
-ut_fsdev_op_fallocate_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fallocate_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 }
 
 static int
-ut_fsdev_op_fallocate_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-				     struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_fallocate_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			       struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_fallocate(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 0x1111, 2000,
-				       1002, ut_fsdev_op_fallocate_cpl_cb, status);
+	return spdk_fsdev_fallocate(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 0x1111, 2000,
+				    1002, ut_fsdev_fallocate_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_fallocate_check_op_clb(void)
+ut_fsdev_fallocate_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2418,15 +2416,15 @@ ut_fsdev_op_fallocate_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_fallocate(void)
+ut_fsdev_test_fallocate(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_FALLOCATE, 0, 5, ut_fsdev_op_fallocate_execute_op_clb,
-			 ut_fsdev_op_fallocate_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_FALLOCATE, 0, 5, ut_fsdev_fallocate_execute_clb,
+			 ut_fsdev_fallocate_check_clb);
 }
 
 static void
-ut_fsdev_op_copy_file_range_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-				   uint32_t data_size)
+ut_fsdev_copy_file_range_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+				uint32_t data_size)
 {
 	int *clb_status = cb_arg;
 	CU_ASSERT(data_size == UT_DATA_SIZE);
@@ -2434,16 +2432,16 @@ ut_fsdev_op_copy_file_range_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int
 }
 
 static int
-ut_fsdev_op_copy_file_range_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
-		struct spdk_fsdev_desc *fsdev_desc, int *status)
+ut_fsdev_copy_file_range_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+				     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_copy_file_range(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 1000,
-					     UT_FOBJECT + 2, UT_FHANDLE + 2, 3000, 50000, 0x77777777,
-					     ut_fsdev_op_copy_file_range_cpl_cb, status);
+	return spdk_fsdev_copy_file_range(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE, 1000,
+					  UT_FOBJECT + 2, UT_FHANDLE + 2, 3000, 50000, 0x77777777,
+					  ut_fsdev_copy_file_range_cpl_cb, status);
 }
 
 static void
-ut_fsdev_op_copy_file_range_check_op_clb(void)
+ut_fsdev_copy_file_range_check_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
@@ -2456,10 +2454,10 @@ ut_fsdev_op_copy_file_range_check_op_clb(void)
 }
 
 static void
-ut_fsdev_test_op_copy_file_range(void)
+ut_fsdev_test_copy_file_range(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_COPY_FILE_RANGE, 0, 8, ut_fsdev_op_copy_file_range_execute_op_clb,
-			 ut_fsdev_op_copy_file_range_check_op_clb);
+	ut_fsdev_test_io(SPDK_FSDEV_IO_COPY_FILE_RANGE, 0, 8, ut_fsdev_copy_file_range_execute_clb,
+			 ut_fsdev_copy_file_range_check_clb);
 }
 
 static int
@@ -2478,44 +2476,44 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_fails);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_lookup_ok);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_lookup_err);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_forget);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_getattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_setattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_readlink);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_symlink);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_mknod);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_mkdir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_unlink);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_rmdir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_rename);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_link);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_open);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_read);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_write);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_statfs);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_release);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_fsync);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_getxattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_setxattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_listxattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_listxattr_get_size);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_removexattr);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_flush);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_opendir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_readdir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_releasedir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_fsyncdir);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_flock);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_create);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_abort);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_fallocate);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_copy_file_range);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_syncfs);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_access);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_lseek);
-	CU_ADD_TEST(suite, ut_fsdev_test_op_ioctl);
+	CU_ADD_TEST(suite, ut_fsdev_test_lookup_ok);
+	CU_ADD_TEST(suite, ut_fsdev_test_lookup_err);
+	CU_ADD_TEST(suite, ut_fsdev_test_forget);
+	CU_ADD_TEST(suite, ut_fsdev_test_getattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_setattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_readlink);
+	CU_ADD_TEST(suite, ut_fsdev_test_symlink);
+	CU_ADD_TEST(suite, ut_fsdev_test_mknod);
+	CU_ADD_TEST(suite, ut_fsdev_test_mkdir);
+	CU_ADD_TEST(suite, ut_fsdev_test_unlink);
+	CU_ADD_TEST(suite, ut_fsdev_test_rmdir);
+	CU_ADD_TEST(suite, ut_fsdev_test_rename);
+	CU_ADD_TEST(suite, ut_fsdev_test_link);
+	CU_ADD_TEST(suite, ut_fsdev_test_fopen);
+	CU_ADD_TEST(suite, ut_fsdev_test_read);
+	CU_ADD_TEST(suite, ut_fsdev_test_write);
+	CU_ADD_TEST(suite, ut_fsdev_test_statfs);
+	CU_ADD_TEST(suite, ut_fsdev_test_release);
+	CU_ADD_TEST(suite, ut_fsdev_test_fsync);
+	CU_ADD_TEST(suite, ut_fsdev_test_getxattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_setxattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_listxattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_listxattr_get_size);
+	CU_ADD_TEST(suite, ut_fsdev_test_removexattr);
+	CU_ADD_TEST(suite, ut_fsdev_test_flush);
+	CU_ADD_TEST(suite, ut_fsdev_test_opendir);
+	CU_ADD_TEST(suite, ut_fsdev_test_readdir);
+	CU_ADD_TEST(suite, ut_fsdev_test_releasedir);
+	CU_ADD_TEST(suite, ut_fsdev_test_fsyncdir);
+	CU_ADD_TEST(suite, ut_fsdev_test_flock);
+	CU_ADD_TEST(suite, ut_fsdev_test_create);
+	CU_ADD_TEST(suite, ut_fsdev_test_abort);
+	CU_ADD_TEST(suite, ut_fsdev_test_fallocate);
+	CU_ADD_TEST(suite, ut_fsdev_test_copy_file_range);
+	CU_ADD_TEST(suite, ut_fsdev_test_syncfs);
+	CU_ADD_TEST(suite, ut_fsdev_test_access);
+	CU_ADD_TEST(suite, ut_fsdev_test_lseek);
+	CU_ADD_TEST(suite, ut_fsdev_test_ioctl);
 
 	allocate_cores(1);
 	allocate_threads(1);

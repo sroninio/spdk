@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -102,21 +102,22 @@ struct spdk_fsdev_open_opts {
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_open_opts) == 9, "Incorrect size");
 
 /**
- * Structure with optional File Operation parameters
- * The content of this structure must be valid until the File Operation is completed
+ * Structure with optional fsdev IO parameters
+ * The content of this structure must be valid until the IO is completed
  */
-struct spdk_fsdev_ext_op_opts {
+struct spdk_fsdev_io_opts {
 	/** Size of this structure in bytes */
 	size_t size;
-	/** Memory domain which describes payload in this File Operation. fsdev must support DMA device type that
-	 * can access this memory domain, refer to \ref spdk_fsdev_get_memory_domains and \ref spdk_memory_domain_get_dma_device_type
+	/** Memory domain which describes payload in this IO. fsdev must support DMA device type that
+	 * can access this memory domain, refer to \ref spdk_fsdev_get_memory_domains and
+	 * \ref spdk_memory_domain_get_dma_device_type
 	 * If set, that means that data buffers can't be accessed directly and the memory domain must
 	 * be used to fetch data to local buffers or to translate data to another memory domain */
 	struct spdk_memory_domain *memory_domain;
 	/** Context to be passed to memory domain operations */
 	void *memory_domain_ctx;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_ext_op_opts) == 24, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_io_opts) == 24, "Incorrect size");
 
 /**
  * \brief Handle to an opened SPDK filesystem device.
@@ -381,7 +382,7 @@ int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_c
  */
 bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
 
-/* 'to_set' flags in spdk_fsdev_op_setattr */
+/* 'to_set' flags in spdk_fsdev_setattr */
 #define FSDEV_SET_ATTR_MODE	(1 << 0)
 #define FSDEV_SET_ATTR_UID	(1 << 1)
 #define FSDEV_SET_ATTR_GID	(1 << 2)
@@ -428,12 +429,12 @@ struct spdk_fsdev_file_statfs {
 /**
  * Syncfs operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation status, 0 on success or error code otherwise.
  */
-typedef void (spdk_fsdev_op_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status);
+typedef void (spdk_fsdev_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+					int status);
 
 /**
  * Sync entire filesystem referred by the file handle.
@@ -449,22 +450,22 @@ typedef void (spdk_fsdev_op_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * be called (even if the request ultimately failed). Return
  * negated errno on failure, in which case the callback will not be called.
  */
-int spdk_fsdev_op_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			 spdk_fsdev_op_syncfs_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		      uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		      spdk_fsdev_syncfs_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Lookup file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
  */
-typedef void (spdk_fsdev_op_lookup_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+typedef void (spdk_fsdev_lookup_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+					struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
  * Look up a directory entry by name and get its attributes
@@ -483,22 +484,22 @@ typedef void (spdk_fsdev_op_lookup_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *parent_fobject, const char *name,
-			 spdk_fsdev_op_lookup_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
+		      spdk_fsdev_lookup_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Access operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation status, 0 on success or error code otherwise.
  * \param mask Access mask to check.
  * \param uid Uid that was used for checking access.
  * \param gid Gid that was used for checking access.
  */
-typedef void (spdk_fsdev_op_access_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status, uint32_t mask, uid_t uid, uid_t gid);
+typedef void (spdk_fsdev_access_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+					int status, uint32_t mask, uid_t uid, uid_t gid);
 
 /**
  * Check the file access flags for passed mask.
@@ -518,19 +519,19 @@ typedef void (spdk_fsdev_op_access_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * negated errno on failure, in which case the callback will not be called.
  * - -EACCESS - access is not allowed.
  */
-int spdk_fsdev_op_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			 uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_op_access_cpl_cb cb_fn,
-			 void *cb_arg);
+int spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		      uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		      uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_access_cpl_cb cb_fn,
+		      void *cb_arg);
 
 /**
  * Look up file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Remove file object from internal cache
@@ -548,9 +549,9 @@ typedef void (spdk_fsdev_op_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
-			 spdk_fsdev_op_forget_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
+		      spdk_fsdev_forget_cpl_cb cb_fn, void *cb_arg);
 
 enum spdk_fsdev_seek_whence {
 	SPDK_FSDEV_SEEK_SET = (1 << 0),
@@ -563,14 +564,14 @@ enum spdk_fsdev_seek_whence {
 /**
  * Reposition read/write file offset callback.
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation status, 0 on success or error code otherwise.
  * \param offset Resulting offset.
  * \param whence Used whence.
  */
-typedef void (spdk_fsdev_op_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status, off_t offset, enum spdk_fsdev_seek_whence whence);
+typedef void (spdk_fsdev_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+				       int status, off_t offset, enum spdk_fsdev_seek_whence whence);
 
 /**
  * Reposition read/write file offset operation.
@@ -596,22 +597,22 @@ typedef void (spdk_fsdev_op_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * be called (even if the request ultimately failed). Return
  * negated errno on failure, in which case the callback will not be called.
  */
-int spdk_fsdev_op_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			struct spdk_fsdev_file_handle *fhandle, off_t offset,
-			enum spdk_fsdev_seek_whence whence, spdk_fsdev_op_lseek_cpl_cb cb_fn,
-			void *cb_arg);
+int spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		     struct spdk_fsdev_file_handle *fhandle, off_t offset,
+		     enum spdk_fsdev_seek_whence whence, spdk_fsdev_lseek_cpl_cb cb_fn,
+		     void *cb_arg);
 
 /**
  * Read symbolic link operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param linkname symbolic link contents
  */
-typedef void (spdk_fsdev_op_readlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_readlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		const char *linkname);
 
 /**
@@ -629,34 +630,34 @@ typedef void (spdk_fsdev_op_readlink_cpl_cb)(void *cb_arg, struct spdk_io_channe
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			   uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			   spdk_fsdev_op_readlink_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject,
+			spdk_fsdev_readlink_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a symbolic link operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
  */
-typedef void (spdk_fsdev_op_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
  * Ioctl operation completion callback.
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation status, 0 on success or error code otherwise.
  * \param request A device-dependent request cmd.
  * \param argp Command arguments.
  */
-typedef void (spdk_fsdev_op_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status, uint32_t request, void *argp);
+typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+				       int status, uint32_t request, void *argp);
 
 /**
  * Ioctl operation.
@@ -675,10 +676,10 @@ typedef void (spdk_fsdev_op_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * be called (even if the request ultimately failed). Return
  * negated errno on failure, in which case the callback will not be called.
  */
-int spdk_fsdev_op_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			struct spdk_fsdev_file_handle *fhandle, uint32_t request,
-			void *argp, spdk_fsdev_op_ioctl_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		     struct spdk_fsdev_file_handle *fhandle, uint32_t request,
+		     void *argp, spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a symbolic link
@@ -700,23 +701,23 @@ int spdk_fsdev_op_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			  struct spdk_fsdev_file_object *parent_fobject, const char *target,
-			  const char *linkpath, uid_t euid, gid_t egid,
-			  spdk_fsdev_op_symlink_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		       struct spdk_fsdev_file_object *parent_fobject, const char *target,
+		       const char *linkpath, uid_t euid, gid_t egid,
+		       spdk_fsdev_symlink_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create file node operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
  */
-typedef void (spdk_fsdev_op_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+typedef void (spdk_fsdev_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
  * Create file node
@@ -739,22 +740,22 @@ typedef void (spdk_fsdev_op_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-			uid_t euid, gid_t egid, spdk_fsdev_op_mknod_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
+		     uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a directory operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
  */
-typedef void (spdk_fsdev_op_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+typedef void (spdk_fsdev_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
  * Create a directory
@@ -776,19 +777,19 @@ typedef void (spdk_fsdev_op_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-			uid_t euid, gid_t egid, spdk_fsdev_op_mkdir_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
+		     uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg);
 
 
 /**
  * Remove a file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_unlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_unlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Remove a file
@@ -807,18 +808,18 @@ typedef void (spdk_fsdev_op_unlink_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_unlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *parent_fobject, const char *name,
-			 spdk_fsdev_op_unlink_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_unlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
+		      spdk_fsdev_unlink_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Remove a directory operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_rmdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_rmdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Remove a directory
@@ -837,18 +838,18 @@ typedef void (spdk_fsdev_op_rmdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *parent_fobject, const char *name,
-			spdk_fsdev_op_rmdir_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *parent_fobject, const char *name,
+		     spdk_fsdev_rmdir_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Rename a file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Rename a file
@@ -870,23 +871,23 @@ typedef void (spdk_fsdev_op_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_rename(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *parent_fobject, const char *name,
-			 struct spdk_fsdev_file_object *new_parent_fobject, const char *new_name,
-			 uint32_t flags, spdk_fsdev_op_rename_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_rename(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
+		      struct spdk_fsdev_file_object *new_parent_fobject, const char *new_name,
+		      uint32_t flags, spdk_fsdev_rename_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a hard link operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
  */
-typedef void (spdk_fsdev_op_link_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+typedef void (spdk_fsdev_link_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
 
 /**
  * Create a hard link
@@ -906,21 +907,21 @@ typedef void (spdk_fsdev_op_link_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_link(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_object *new_parent_fobject,
-		       const char *name, spdk_fsdev_op_link_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_link(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_object *new_parent_fobject,
+		    const char *name, spdk_fsdev_link_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Get file system statistic operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param statfs filesystem statistics
  */
-typedef void (spdk_fsdev_op_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		const struct spdk_fsdev_file_statfs *statfs);
+typedef void (spdk_fsdev_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+					const struct spdk_fsdev_file_statfs *statfs);
 
 /**
  * Get file system statistics
@@ -937,17 +938,17 @@ typedef void (spdk_fsdev_op_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *fobject, spdk_fsdev_op_statfs_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *fobject, spdk_fsdev_statfs_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Set an extended attribute operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Set an extended attribute
@@ -969,19 +970,19 @@ typedef void (spdk_fsdev_op_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channe
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, const char *value,
-			   size_t size, uint32_t flags, spdk_fsdev_op_setxattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, const char *value,
+			size_t size, uint32_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg);
 /**
  * Get an extended attribute operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param value_size Size of an data copied to the value buffer.
  */
-typedef void (spdk_fsdev_op_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		size_t value_size);
 
 /**
@@ -1003,21 +1004,21 @@ typedef void (spdk_fsdev_op_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channe
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, void *buffer,
-			   size_t size, spdk_fsdev_op_getxattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, void *buffer,
+			size_t size, spdk_fsdev_getxattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * List extended attribute names operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param size Size of an extended attribute list.
- * \param size_only true if buffer was NULL or size was 0 upon the \ref spdk_fsdev_op_listxattr call
+ * \param size_only true if buffer was NULL or size was 0 upon the \ref spdk_fsdev_listxattr call
  */
-typedef void (spdk_fsdev_op_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		size_t size, bool size_only);
 
 /**
@@ -1037,18 +1038,18 @@ typedef void (spdk_fsdev_op_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_chann
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_listxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			    uint64_t unique, struct spdk_fsdev_file_object *fobject, char *buffer, size_t size,
-			    spdk_fsdev_op_listxattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_listxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			 uint64_t unique, struct spdk_fsdev_file_object *fobject, char *buffer, size_t size,
+			 spdk_fsdev_listxattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Remove an extended attribute operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_removexattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+typedef void (spdk_fsdev_removexattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		int status);
 
 /**
@@ -1068,21 +1069,21 @@ typedef void (spdk_fsdev_op_removexattr_cpl_cb)(void *cb_arg, struct spdk_io_cha
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			      uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name,
-			      spdk_fsdev_op_removexattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name,
+			   spdk_fsdev_removexattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Open a file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fhandle File handle
  */
-typedef void (spdk_fsdev_op_open_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_handle *fhandle);
+typedef void (spdk_fsdev_fopen_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				       struct spdk_fsdev_file_handle *fhandle);
 
 /**
  * Open a file
@@ -1100,24 +1101,24 @@ typedef void (spdk_fsdev_op_open_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_open(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		       struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_op_open_cpl_cb cb_fn,
-		       void *cb_arg);
+int spdk_fsdev_fopen(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_fopen_cpl_cb cb_fn,
+		     void *cb_arg);
 
 
 /**
  * Create and open a file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  * \param fobject File object.
  * \param attr File attributes.
  * \param fhandle File handle.
  */
-typedef void (spdk_fsdev_op_create_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-		struct spdk_fsdev_file_handle *fhandle);
+typedef void (spdk_fsdev_create_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+					struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+					struct spdk_fsdev_file_handle *fhandle);
 
 /**
  * Create and open a file
@@ -1141,19 +1142,19 @@ typedef void (spdk_fsdev_op_create_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  *  -ENOMEM - operation cannot be initiated as a buffer cannot be allocated
  */
-int spdk_fsdev_op_create(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			 struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, uint32_t flags,
-			 mode_t umask, uid_t euid, gid_t egid,
-			 spdk_fsdev_op_create_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_create(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		      struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, uint32_t flags,
+		      mode_t umask, uid_t euid, gid_t egid,
+		      spdk_fsdev_create_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Release an open file operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_release_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_release_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Release an open file
@@ -1171,20 +1172,20 @@ typedef void (spdk_fsdev_op_release_cpl_cb)(void *cb_arg, struct spdk_io_channel
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_release(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			  struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			  spdk_fsdev_op_release_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_release(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		       spdk_fsdev_release_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Get file attributes operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param attr file attributes.
  */
-typedef void (spdk_fsdev_op_getattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_getattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		const struct spdk_fsdev_file_attr *attr);
 
 /**
@@ -1203,20 +1204,20 @@ typedef void (spdk_fsdev_op_getattr_cpl_cb)(void *cb_arg, struct spdk_io_channel
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_getattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			  uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			  spdk_fsdev_op_getattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_getattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		       uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		       spdk_fsdev_getattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Set file attributes operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param attr file attributes.
  */
-typedef void (spdk_fsdev_op_setattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_setattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		const struct spdk_fsdev_file_attr *attr);
 
 /**
@@ -1237,21 +1238,21 @@ typedef void (spdk_fsdev_op_setattr_cpl_cb)(void *cb_arg, struct spdk_io_channel
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			  struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			  const struct spdk_fsdev_file_attr *attr, uint32_t to_set,
-			  spdk_fsdev_op_setattr_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		       const struct spdk_fsdev_file_attr *attr, uint32_t to_set,
+		       spdk_fsdev_setattr_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read data operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  * \param data_size Number of bytes read.
  */
-typedef void (spdk_fsdev_op_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		uint32_t data_size);
+typedef void (spdk_fsdev_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				      uint32_t data_size);
 
 /**
  * Read data
@@ -1268,7 +1269,7 @@ typedef void (spdk_fsdev_op_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  * \param iovcnt Size of the \b iov array.
  * \param opts Optional structure with extended File Operation options. If set, this structure must be
  * valid until the operation is completed. `size` member of this structure is used for ABI compatibility and
- * must be set to sizeof(struct spdk_fsdev_ext_op_opts).
+ * must be set to sizeof(struct spdk_fsdev_io_opts).
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1277,22 +1278,22 @@ typedef void (spdk_fsdev_op_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_read(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		       size_t size, uint64_t offs, uint32_t flags,
-		       struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_ext_op_opts *opts,
-		       spdk_fsdev_op_read_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_read(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		    size_t size, uint64_t offs, uint32_t flags,
+		    struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
+		    spdk_fsdev_read_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Write data operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  * \param data_size Number of bytes written.
  */
-typedef void (spdk_fsdev_op_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		uint32_t data_size);
+typedef void (spdk_fsdev_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+				       uint32_t data_size);
 
 /**
  * Write data
@@ -1309,7 +1310,7 @@ typedef void (spdk_fsdev_op_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * \param iovcnt Size of the \b iov array.
  * \param opts Optional structure with extended File Operation options. If set, this structure must be
  * valid until the operation is completed. `size` member of this structure is used for ABI compatibility and
- * must be set to sizeof(struct spdk_fsdev_ext_op_opts).
+ * must be set to sizeof(struct spdk_fsdev_io_opts).
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1318,20 +1319,20 @@ typedef void (spdk_fsdev_op_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_write(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, size_t size,
-			uint64_t offs, uint64_t flags,
-			const struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_ext_op_opts *opts,
-			spdk_fsdev_op_write_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_write(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, size_t size,
+		     uint64_t offs, uint64_t flags,
+		     const struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
+		     spdk_fsdev_write_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Synchronize file contents operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_fsync_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_fsync_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Synchronize file contents
@@ -1350,18 +1351,18 @@ typedef void (spdk_fsdev_op_fsync_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_fsync(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, bool datasync,
-			spdk_fsdev_op_fsync_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_fsync(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, bool datasync,
+		     spdk_fsdev_fsync_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Flush operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_flush_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_flush_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Flush
@@ -1379,21 +1380,21 @@ typedef void (spdk_fsdev_op_flush_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			spdk_fsdev_op_flush_cpl_cb cb_fn,
-			void *cb_arg);
+int spdk_fsdev_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		     spdk_fsdev_flush_cpl_cb cb_fn,
+		     void *cb_arg);
 
 /**
  * Open a directory operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  *  Following parameters should be ignored if status != 0.
  * \param fhandle File handle
  */
-typedef void (spdk_fsdev_op_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
+typedef void (spdk_fsdev_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		struct spdk_fsdev_file_handle *fhandle);
 
 /**
@@ -1412,14 +1413,14 @@ typedef void (spdk_fsdev_op_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			  uint64_t unique, struct spdk_fsdev_file_object *fobject, uint32_t flags,
-			  spdk_fsdev_op_opendir_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		       uint64_t unique, struct spdk_fsdev_file_object *fobject, uint32_t flags,
+		       spdk_fsdev_opendir_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read directory per-entry callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param name Name of the entry
  * \param fobject File object. NULL for "." and "..".
@@ -1428,18 +1429,18 @@ int spdk_fsdev_op_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *
  *
  * \return 0 to continue the enumeration, an error code otherwice.
  */
-typedef int (spdk_fsdev_op_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
+typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
 		off_t offset);
 
 /**
  * Read directory operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_readdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_readdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Read directory
@@ -1459,19 +1460,19 @@ typedef void (spdk_fsdev_op_readdir_cpl_cb)(void *cb_arg, struct spdk_io_channel
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			  uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			  uint64_t offset,
-			  spdk_fsdev_op_readdir_entry_cb entry_cb_fn, spdk_fsdev_op_readdir_cpl_cb cpl_cb_fn, void *cb_arg);
+int spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		       uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		       uint64_t offset,
+		       spdk_fsdev_readdir_entry_cb entry_cb_fn, spdk_fsdev_readdir_cpl_cb cpl_cb_fn, void *cb_arg);
 
 /**
  * Open a directory operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_releasedir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+typedef void (spdk_fsdev_releasedir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		int status);
 
 /**
@@ -1490,18 +1491,18 @@ typedef void (spdk_fsdev_op_releasedir_cpl_cb)(void *cb_arg, struct spdk_io_chan
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_releasedir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			     uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			     spdk_fsdev_op_releasedir_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_releasedir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			  uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+			  spdk_fsdev_releasedir_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Synchronize directory contents operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_fsyncdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_fsyncdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Synchronize directory contents
@@ -1520,19 +1521,19 @@ typedef void (spdk_fsdev_op_fsyncdir_cpl_cb)(void *cb_arg, struct spdk_io_channe
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_fsyncdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			   uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			   bool datasync,
-			   spdk_fsdev_op_fsyncdir_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_fsyncdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+			bool datasync,
+			spdk_fsdev_fsyncdir_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Acquire, modify or release a BSD file lock operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Acquire, modify or release a BSD file lock
@@ -1551,18 +1552,18 @@ typedef void (spdk_fsdev_op_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-			struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			int operation, spdk_fsdev_op_flock_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
+		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		     int operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Allocate requested space operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_fallocate_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_fallocate_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Allocate requested space.
@@ -1583,20 +1584,20 @@ typedef void (spdk_fsdev_op_fallocate_cpl_cb)(void *cb_arg, struct spdk_io_chann
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_fallocate(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			    uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			    int mode, off_t offset, off_t length,
-			    spdk_fsdev_op_fallocate_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_fallocate(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			 uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+			 int mode, off_t offset, off_t length,
+			 spdk_fsdev_fallocate_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Copy a range of data from one file to another operation completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  * \param data_size Number of bytes written.
  */
-typedef void (spdk_fsdev_op_copy_file_range_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+typedef void (spdk_fsdev_copy_file_range_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		int status, uint32_t data_size);
 
 /**
@@ -1621,22 +1622,22 @@ typedef void (spdk_fsdev_op_copy_file_range_cpl_cb)(void *cb_arg, struct spdk_io
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_copy_file_range(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-				  uint64_t unique,
-				  struct spdk_fsdev_file_object *fobject_in, struct spdk_fsdev_file_handle *fhandle_in, off_t off_in,
-				  struct spdk_fsdev_file_object *fobject_out, struct spdk_fsdev_file_handle *fhandle_out,
-				  off_t off_out, size_t len, uint32_t flags,
-				  spdk_fsdev_op_copy_file_range_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_copy_file_range(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+			       uint64_t unique,
+			       struct spdk_fsdev_file_object *fobject_in, struct spdk_fsdev_file_handle *fhandle_in, off_t off_in,
+			       struct spdk_fsdev_file_object *fobject_out, struct spdk_fsdev_file_handle *fhandle_out,
+			       off_t off_out, size_t len, uint32_t flags,
+			       spdk_fsdev_copy_file_range_cpl_cb cb_fn, void *cb_arg);
 
 
 /**
  * I/O operation abortion completion callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwice.
  */
-typedef void (spdk_fsdev_op_abort_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+typedef void (spdk_fsdev_abort_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Abort an I/O
@@ -1652,8 +1653,8 @@ typedef void (spdk_fsdev_op_abort_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
-int spdk_fsdev_op_abort(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-			uint64_t unique_to_abort, spdk_fsdev_op_abort_cpl_cb cb_fn, void *cb_arg);
+int spdk_fsdev_abort(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg);
 
 #ifdef __cplusplus
 }
