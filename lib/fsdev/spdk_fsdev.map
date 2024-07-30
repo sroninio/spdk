@@ -57,6 +57,8 @@
 	spdk_fsdev_op_abort;
 	spdk_fsdev_op_fallocate;
 	spdk_fsdev_op_copy_file_range;
+	spdk_fsdev_op_syncfs;
+	spdk_fsdev_op_access;
 	spdk_fsdev_op_lseek;
 	spdk_fsdev_op_ioctl;
 
