@@ -575,16 +575,35 @@ lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 static int
 lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int res;
+	int fd, res;
 	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.syncfs.fobject;
-	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.syncfs.fhandle;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 
-	res = syncfs(fhandle->fd);
+	if (fobject != vfsdev->root) {
+		SPDK_ERRLOG("Syncfs expected root file object but received " FOBJECT_FMT
+			    "\n", FOBJECT_ARGS(fobject));
+		return -EINVAL;
+	}
+
+	/*
+	 * We cannot use root's fd that was open with open(O_PATH) because syncfs()
+	 * requires any defined permission and O_PATH has none.
+	 */
+	fd = open(vfsdev->root_path, O_RDONLY);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Cannot open root %s (err=%d)\n", vfsdev->root_path, res);
+		return res;
+	}
+
+	res = syncfs(fd);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("Cannot syncfs for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
+		close(fd);
 		return res;
 	}
+	close(fd);
 
 	SPDK_DEBUGLOG(fsdev_aio, "SYNCFS succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 

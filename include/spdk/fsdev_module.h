@@ -434,7 +434,6 @@ struct spdk_fsdev_io {
 		} copy_file_range;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
-			struct spdk_fsdev_file_handle *fhandle;
 		} syncfs;
 		struct {
 			struct spdk_fsdev_file_object *fobject;

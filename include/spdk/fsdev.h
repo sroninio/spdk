@@ -406,7 +406,6 @@ typedef void (spdk_fsdev_op_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * \param ch I/O channel.
  * \param unique Unique I/O id.
  * \param fobject File object to identify the fs.
- * \param fhandle File hsndle to the opened file.
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -416,7 +415,6 @@ typedef void (spdk_fsdev_op_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  */
 int spdk_fsdev_op_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			 struct spdk_fsdev_file_handle *fhandle,
 			 spdk_fsdev_op_syncfs_cpl_cb cb_fn, void *cb_arg);
 
 /**

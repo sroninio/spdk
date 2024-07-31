@@ -552,7 +552,6 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_OP_SYNCFS:
 		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fobject);
-		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fhandle);
 		break;
 	case SPDK_FSDEV_OP_ACCESS:
 		ut_call_record_param_ptr(fsdev_io->u_in.access.fobject);
@@ -2178,7 +2177,7 @@ static int
 ut_fsdev_op_syncfs_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 				  struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
-	return spdk_fsdev_op_syncfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+	return spdk_fsdev_op_syncfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
 				    ut_fsdev_op_syncfs_cpl_cb, status);
 }
 
@@ -2186,13 +2185,12 @@ static void
 ut_fsdev_op_syncfs_check_op_clb(void)
 {
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
-	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 }
 
 static void
 ut_fsdev_test_op_syncfs(void)
 {
-	ut_fsdev_test_op(SPDK_FSDEV_OP_SYNCFS, 0, 2, ut_fsdev_op_syncfs_execute_op_clb,
+	ut_fsdev_test_op(SPDK_FSDEV_OP_SYNCFS, 0, 1, ut_fsdev_op_syncfs_execute_op_clb,
 			 ut_fsdev_op_syncfs_check_op_clb);
 }
 

@@ -2741,10 +2741,32 @@ do_removemapping(struct fuse_io *fuse_io)
 }
 
 static void
+do_syncfs_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	fuse_dispatcher_io_complete_err(fuse_io, status);
+}
+
+static void
 do_syncfs(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("SYNCFS is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_syncfs_in *arg;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_syncfs_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	err = spdk_fsdev_op_syncfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				   file_object(fuse_io), do_syncfs_cpl_clb, fuse_io);
+
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static const struct {
