@@ -2374,10 +2374,38 @@ do_setlkw(struct fuse_io *fuse_io)
 }
 
 static void
+do_access_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
+		  int status, uint32_t mask, uid_t uid, uid_t gid)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	fuse_dispatcher_io_complete_err(fuse_io, status);
+}
+
+static void
 do_access(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("ACCESS is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_access_in *arg;
+	uint32_t mask;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_access_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	mask = fsdev_io_h2d_u32(fuse_io, arg->mask);
+
+	/* Using effective uid and gid. Without setuid they have uid of the process. */
+	err = spdk_fsdev_op_access(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				   file_object(fuse_io), mask, geteuid(), getegid(),
+				   do_access_cpl_clb, fuse_io);
+
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void

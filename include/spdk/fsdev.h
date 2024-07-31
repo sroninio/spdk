@@ -471,7 +471,6 @@ typedef void (spdk_fsdev_op_access_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  * \param ch I/O channel.
  * \param unique Unique I/O id.
  * \param fobject File object for checking.
- * \param fhandle File handle.
  * \param mask Access mask to check.
  * \param uid Uid to be used for checking access.
  * \param gid Gid to be used for checking access.
@@ -485,8 +484,7 @@ typedef void (spdk_fsdev_op_access_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  */
 int spdk_fsdev_op_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			 uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			 struct spdk_fsdev_file_handle *fhandle, uint32_t mask,
-			 uid_t uid, uid_t gid, spdk_fsdev_op_access_cpl_cb cb_fn,
+			 uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_op_access_cpl_cb cb_fn,
 			 void *cb_arg);
 
 /**
