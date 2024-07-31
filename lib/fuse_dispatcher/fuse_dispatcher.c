@@ -727,6 +727,18 @@ fuse_dispatcher_io_complete_attr(struct fuse_io *fuse_io, const struct spdk_fsde
 	fuse_dispatcher_io_copy_and_complete(fuse_io, &arg, size, 0);
 }
 
+static void
+fuse_dispatcher_io_complete_lseek(struct fuse_io *fuse_io, off_t offset)
+{
+	struct fuse_lseek_out arg;
+	size_t size = sizeof(arg);
+
+	arg.offset = fsdev_io_h2d_u64(fuse_io, offset);
+
+	fuse_dispatcher_io_copy_and_complete(fuse_io, &arg, size, 0);
+}
+
+
 /* `buf` is allowed to be empty so that the proper size may be
    allocated by the caller */
 static size_t
@@ -2718,6 +2730,68 @@ do_batch_forget(struct fuse_io *fuse_io)
 }
 
 static void
+do_lseek_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, off_t offset,
+		 enum spdk_fsdev_seek_whence whence)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	if (!status) {
+		fuse_dispatcher_io_complete_lseek(fuse_io, offset);
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+	}
+}
+
+static void
+do_lseek(struct fuse_io *fuse_io)
+{
+	int err;
+	struct fuse_lseek_in *arg;
+	uint64_t fh;
+	uint64_t offset;
+	enum spdk_fsdev_seek_whence whence;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_lseek_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	offset = fsdev_io_d2h_u64(fuse_io, arg->offset);
+
+	switch (fsdev_io_d2h_u32(fuse_io, arg->whence)) {
+	case SEEK_SET:
+		whence = SPDK_FSDEV_SEEK_SET;
+		break;
+	case SEEK_CUR:
+		whence = SPDK_FSDEV_SEEK_CUR;
+		break;
+	case SEEK_END:
+		whence = SPDK_FSDEV_SEEK_END;
+		break;
+	case SEEK_DATA:
+		whence = SPDK_FSDEV_SEEK_DATA;
+		break;
+	case SEEK_HOLE:
+		whence = SPDK_FSDEV_SEEK_HOLE;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid whence %d in fuse_lseek_in\n", fsdev_io_d2h_u32(fuse_io, arg->whence));
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	err = spdk_fsdev_lseek(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh), offset, whence,
+			       do_lseek_cpl_clb, fuse_io);
+
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
+}
+static void
 do_copy_file_range_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t data_size)
 {
 	struct fuse_io *fuse_io = cb_arg;
@@ -2848,6 +2922,7 @@ static const struct {
 	[FUSE_SETUPMAPPING]  = { do_setupmapping, "SETUPMAPPING" },
 	[FUSE_REMOVEMAPPING] = { do_removemapping, "REMOVEMAPPING" },
 	[FUSE_SYNCFS] = { do_syncfs, "SYNCFS" },
+	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
 };
 
 static int
