@@ -32,6 +32,21 @@ def fsdev_set_opts(client, fsdev_io_pool_size: int = None, fsdev_io_cache_size: 
     return client.call('fsdev_set_opts', params)
 
 
+def fsdev_get_fsdevs(client, name: str = None):
+    """Get the list of fsdevs or a specific fsdev.
+
+    Args:
+        name: name of a specific fsdev
+    """
+    params = {
+    }
+
+    if name is not None:
+        params['name'] = name
+
+    return client.call('fsdev_get_fsdevs', params)
+
+
 def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
                      enable_writeback_cache: bool = None, max_write: int = None, enable_skip_rw: bool = None):
     """Create a aio filesystem.

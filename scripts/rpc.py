@@ -3470,6 +3470,14 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-c', '--fsdev-io-cache-size', help='Size of fsdev IO objects cache per thread', type=int)
     p.set_defaults(func=fsdev_set_opts)
 
+    def fsdev_get_fsdevs(args):
+        print_dict(rpc.fsdev.fsdev_get_fsdevs(args.client, name=args.name))
+
+    p = subparsers.add_parser('fsdev_get_fsdevs',
+                              help='Display current fsdev list or required fsdev')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.set_defaults(func=fsdev_get_fsdevs)
+
     def fsdev_aio_create(args):
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,

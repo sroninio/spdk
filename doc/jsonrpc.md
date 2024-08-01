@@ -13173,6 +13173,19 @@ Example response:
 }
 ~~~
 
+### fsdev_get_fsdevs {#rpc_fsev_get_fsdevs}
+
+Get information about filesystem devices (fsdevs).
+
+#### Parameters
+
+The user may specify no parameters in order to list all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+
 ### fsdev_aio_create {#fsdev_aio_create}
 
 Create an AIO fsdev.
