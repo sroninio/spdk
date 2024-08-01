@@ -3424,13 +3424,6 @@ accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5
 	if (task->base.cached_lkey) {
 		*task->base.cached_lkey = 0;
 	}
-	/* Clear the mkey cache when the decrypt task is merged into check CRC. */
-	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
-		next_task = TAILQ_NEXT(&task->base, seq_link);
-		if (next_task->cached_lkey) {
-			*next_task->cached_lkey = 0;
-		}
-	}
 }
 
 static void accel_mlx5_recover_qp(struct accel_mlx5_qp *qp);
