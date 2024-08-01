@@ -2407,6 +2407,21 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_object_end(w);
 }
 
+static int
+fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
+{
+	struct aio_fsdev *vfsdev = ctx;
+
+	spdk_json_write_named_string(w, "root_path", vfsdev->root_path);
+	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->xattr_enabled);
+	spdk_json_write_named_bool(w, "enable_writeback_cache",
+				   !!vfsdev->fsdev.opts.writeback_cache_enabled);
+	spdk_json_write_named_uint32(w, "max_write", vfsdev->fsdev.opts.max_write);
+	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->skip_rw_enabled);
+
+	return 0;
+}
+
 struct fsdev_aio_reset_ctx {
 	struct aio_fsdev *vfsdev;
 	spdk_fsdev_reset_done_cb cb;
@@ -2571,6 +2586,7 @@ static const struct spdk_fsdev_fn_table aio_fn_table = {
 	.negotiate_opts		= fsdev_aio_negotiate_opts,
 	.write_config_json	= fsdev_aio_write_config_json,
 	.reset			= fsdev_aio_reset,
+	.dump_info_json		= fsdev_aio_dump_info_json,
 };
 
 static int
