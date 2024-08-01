@@ -768,6 +768,17 @@ spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_domai
 	return 0;
 }
 
+
+int
+spdk_fsdev_dump_info_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx *w)
+{
+	if (fsdev->fn_table->dump_info_json) {
+		return fsdev->fn_table->dump_info_json(fsdev->ctxt, w);
+	}
+
+	return 0;
+}
+
 void
 spdk_fsdev_for_each_channel_continue(struct spdk_fsdev_channel_iter *iter, int status)
 {

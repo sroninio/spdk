@@ -284,6 +284,19 @@ int spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_d
 				  int array_size);
 
 /**
+ * Output driver-specific information to a JSON stream.
+ *
+ * The JSON write context will be initialized with an open object, so the fsdev
+ * driver should write a name (based on the driver name) followed by a JSON value
+ * (most likely another nested object).
+ *
+ * \param fsdev Filesystem to query.
+ * \param w JSON write context. It will store the driver-specific configuration context.
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_fsdev_dump_info_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx *w);
+
+/**
  * \brief SPDK fsdev channel iterator.
  *
  * This is a virtual representation of a fsdev channel iterator.

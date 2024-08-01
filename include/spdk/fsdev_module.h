@@ -129,6 +129,15 @@ struct spdk_fsdev_fn_table {
 	 * Moreover, the module must guarantee to complete all pending IOs, and not depend on existence of remote services which may be down.
 	 */
 	int (*reset)(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg);
+
+	/**
+	 * Output driver-specific information to a JSON stream. Optional - may be NULL.
+	 *
+	 * The JSON write context will be initialized with an open object, so the fsdev
+	 * driver should write a name (based on the driver name) followed by a JSON value
+	 * (most likely another nested object).
+	 */
+	int (*dump_info_json)(void *ctx, struct spdk_json_write_ctx *w);
 };
 
 /**
