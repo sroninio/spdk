@@ -1443,6 +1443,76 @@ spdk_fsdev_close(struct spdk_fsdev_desc *desc)
 	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 }
 
+static struct spdk_fsdev *
+spdk_fsdev_first(void)
+{
+	struct spdk_fsdev *fsdev;
+
+	fsdev = TAILQ_FIRST(&g_fsdev_mgr.fsdevs);
+	if (fsdev) {
+		SPDK_DEBUGLOG(fsdev, "Starting fsdev iteration at %s\n", fsdev->name);
+	}
+
+	return fsdev;
+}
+
+static struct spdk_fsdev *
+spdk_fsdev_next(struct spdk_fsdev *prev)
+{
+	struct spdk_fsdev *fsdev;
+
+	fsdev = TAILQ_NEXT(prev, internal.link);
+	if (fsdev) {
+		SPDK_DEBUGLOG(fsdev, "Continuing fsdev iteration at %s\n", fsdev->name);
+	}
+
+	return fsdev;
+}
+
+int
+spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn)
+{
+	struct spdk_fsdev *fsdev, *tmp;
+	struct spdk_fsdev_desc *desc;
+	int rc = 0;
+
+	assert(fn != NULL);
+
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
+	fsdev = spdk_fsdev_first();
+	while (fsdev != NULL) {
+		rc = fsdev_desc_alloc(fsdev, _tmp_fsdev_event_cb, NULL, &desc);
+		if (rc != 0) {
+			break;
+		}
+		rc = fsdev_open(fsdev, desc);
+		if (rc != 0) {
+			fsdev_desc_free(desc);
+			if (rc == -ENODEV) {
+				/* Ignore the error and move to the next fsdev. */
+				rc = 0;
+				fsdev = spdk_fsdev_next(fsdev);
+				continue;
+			}
+			break;
+		}
+		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
+
+		rc = fn(ctx, fsdev);
+
+		spdk_spin_lock(&g_fsdev_mgr.spinlock);
+		tmp = spdk_fsdev_next(fsdev);
+		fsdev_close(fsdev, desc);
+		if (rc != 0) {
+			break;
+		}
+		fsdev = tmp;
+	}
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
+
+	return rc;
+}
+
 int
 spdk_fsdev_register(struct spdk_fsdev *fsdev)
 {

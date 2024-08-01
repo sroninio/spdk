@@ -197,6 +197,29 @@ int spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
 void spdk_fsdev_close(struct spdk_fsdev_desc *desc);
 
 /**
+ * Callback function for spdk_for_each_fsdev().
+ *
+ * \param ctx Context passed to the callback.
+ * \param fsdev filesystem device the callback handles.
+ */
+typedef int (*spdk_for_each_fsdev_fn)(void *ctx, struct spdk_fsdev *fsdev);
+
+/**
+ * Call the provided callback function for every registered filesystem device.
+ * If fn returns negated errno, spdk_for_each_fsdev() terminates iteration.
+ *
+ * spdk_for_each_fsdev() opens before and closes after executing the provided
+ * callback function for each fsdev internally.
+ *
+ * \param ctx Context passed to the callback function.
+ * \param fn Callback function for each filesystem device.
+ *
+ * \return 0 if operation is successful, or suitable errno value one of the
+ * callback returned otherwise.
+ */
+int spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn);
+
+/**
  * Get filesystem device name.
  *
  * \param fsdev filesystem device to query.
