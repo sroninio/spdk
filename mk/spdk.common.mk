@@ -97,8 +97,8 @@ COMMON_CFLAGS += -Werror
 endif
 
 ifeq ($(CONFIG_LTO),y)
-COMMON_CFLAGS += -flto=auto
-LDFLAGS += -flto=auto
+COMMON_CFLAGS += -flto=jobserver
+LDFLAGS += -flto=jobserver
 else
 COMMON_CFLAGS += -fno-lto
 LDFLAGS += -fno-lto
@@ -404,11 +404,11 @@ ENV_LDFLAGS = $(if $(SPDK_NO_LINK_ENV),,$(ENV_LINKER_ARGS))
 
 # Link $(OBJS) and $(LIBS) into $@ (app)
 LINK_C=\
-	$(Q)echo "  LINK $(notdir $@)"; \
+	$(Q)+echo "  LINK $(notdir $@)"; \
 	$(CC) -o $@ $(CFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) $(ENV_LDFLAGS) $(SYS_LIBS)
 
 LINK_CXX=\
-	$(Q)echo "  LINK $(notdir $@)"; \
+	$(Q)+echo "  LINK $(notdir $@)"; \
 	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) $(ENV_LDFLAGS) $(SYS_LIBS)
 
 # Provide function to ease build of a shared lib
