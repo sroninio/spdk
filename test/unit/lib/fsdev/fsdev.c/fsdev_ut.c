@@ -32,8 +32,17 @@
 #define UT_SUBMIT_IO_NUM_COMMON_PARAMS 4
 
 /* No-op ioctl */
-#define UT_IOCTL_CMD 32
+#define UT_IOCTL_CMD 42
 #define UT_IOCTL_DATA ((void *)0xBEEFDEAF)
+
+#define UT_IOCTL_IN_IOVCNT 2
+#define UT_IOCTL_OUT_IOVCNT 4
+
+struct iovec ut_ioctl_in_iov[UT_IOCTL_IN_IOVCNT];
+struct iovec ut_ioctl_out_iov[UT_IOCTL_OUT_IOVCNT];
+
+#define UT_IOCTL_IN_IOV (&ut_ioctl_in_iov[0])
+#define UT_IOCTL_OUT_IOV (&ut_ioctl_out_iov[0])
 
 static uint64_t
 ut_hash(const void *buf, size_t size)
@@ -581,7 +590,11 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.ioctl.request);
-		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.argp);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.arg);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.in_iov);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.in_iovcnt);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.out_iov);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.out_iovcnt);
 		break;
 	case SPDK_FSDEV_IO_GETLK:
 		ut_call_record_param_ptr(fsdev_io->u_in.getlk.fobject);
@@ -2330,7 +2343,8 @@ ut_fsdev_test_poll(void)
 
 static void
 ut_fsdev_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      uint32_t request, void *argp)
+		      int32_t result, struct iovec *in_iov, uint32_t in_iovcnt,
+		      struct iovec *out_iov, uint32_t out_iovcnt)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2341,8 +2355,10 @@ ut_fsdev_ioctl_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	return spdk_fsdev_ioctl(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				UT_IOCTL_CMD, UT_IOCTL_DATA, ut_fsdev_ioctl_cpl_cb,
-				status);
+				UT_IOCTL_CMD, UT_IOCTL_DATA,
+				UT_IOCTL_IN_IOV, UT_IOCTL_IN_IOVCNT,
+				UT_IOCTL_OUT_IOV, UT_IOCTL_OUT_IOVCNT,
+				ut_fsdev_ioctl_cpl_cb, status);
 }
 
 static void
@@ -2352,12 +2368,18 @@ ut_fsdev_ioctl_check_clb(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == UT_IOCTL_CMD);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == UT_IOCTL_DATA);
+
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == UT_IOCTL_IN_IOV);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == UT_IOCTL_IN_IOVCNT);
+
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 6) == UT_IOCTL_OUT_IOV);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 7) == UT_IOCTL_OUT_IOVCNT);
 }
 
 static void
 ut_fsdev_test_ioctl(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_IOCTL, 0, 4, ut_fsdev_ioctl_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_IOCTL, 0, 8, ut_fsdev_ioctl_execute_clb,
 			 ut_fsdev_ioctl_check_clb);
 }
 

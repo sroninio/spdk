@@ -203,6 +203,33 @@ struct fuse_io {
 			/* Input owner for setlkw operation. */
 			uint64_t owner;
 		} setlkw;
+		struct {
+			/*
+			 * The flags in the ioctl() request. Used in completion
+			 * to populate the out that is done differenly for the
+			 * "unrestricted".
+			 */
+			uint32_t flags;
+
+			/*
+			 * Saved input out_size and used in compeltion cb
+			 * for restricted ioctl().
+			 */
+			uint32_t out_size;
+
+			/*
+			 * Input in and out iovs and counts. These are passed down
+			 * to the FSDEV and have to stay alive until the fuse_io
+			 * completion.
+			 *
+			 * Alloctaed in do_ioctl() and freed in the ioctl completion.
+			 * when the data is sent back to the kernel.
+			 */
+			struct iovec *in_iov;
+			struct iovec *out_iov;
+			uint32_t in_iovcnt;
+			uint32_t out_iovcnt;
+		} ioctl;
 	} u;
 };
 
@@ -2752,11 +2779,327 @@ do_bmap(struct fuse_io *fuse_io)
 	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
 }
 
+static struct fuse_ioctl_iovec *
+fsdev_ioctl_iovec_to_fuse_copy(struct fuse_io *fuse_io, const struct iovec *iov, size_t count)
+{
+	struct fuse_ioctl_iovec *fiov;
+	size_t i;
+
+	fiov = calloc(1, sizeof(struct fuse_ioctl_iovec) * count);
+	if (!fiov) {
+		return NULL;
+	}
+
+	for (i = 0; i < count; i++) {
+		fiov[i].base = fsdev_io_h2d_u64(fuse_io, (uint64_t)(uintptr_t)iov[i].iov_base);
+		fiov[i].len = fsdev_io_h2d_u64(fuse_io, (uint64_t)(uintptr_t)iov[i].iov_len);
+	}
+
+	return fiov;
+}
+
+static struct iovec *
+fuse_ioctl_iovec_copy(const struct iovec *iov, size_t count)
+{
+	size_t size = sizeof(*iov) * count;
+	struct iovec *result;
+
+	assert(iov && count);
+
+	result = calloc(1, size);
+	if (!result) {
+		return NULL;
+	}
+	memcpy(result, iov, size);
+	return result;
+}
+
+typedef void (*fuse_dispatcher_ioctl_cpl_cb)(struct fuse_io *fuse_io, size_t size,
+		int32_t out_flags, int32_t result,
+		struct iovec *in_iov, uint32_t in_iovcnt,
+		struct iovec *out_iov, uint32_t out_iovcnt);
+/**
+ * Unrestricted version of ioctl() completion callback.
+ *
+ * It returns ioctl() result in a set of fuse_ioctl_iovec and though it is
+ * primarily used for FUSE_IOCTL_RETRY case it seems nothing stops it from being
+ * used for a traditional ioctl() that gets/sets internal data tha size of which
+ * is known and FUSE_IOCTL_RETRY is not required.
+ */
+static void
+fuse_dispatcher_io_complete_unrestricted_ioctl(struct fuse_io *fuse_io, size_t size,
+		int32_t out_flags, int32_t result,
+		struct iovec *in_iov, uint32_t in_iovcnt,
+		struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	struct fuse_ioctl_iovec *fiov = NULL;
+	struct fuse_ioctl_iovec *in_fiov = NULL;
+	struct fuse_ioctl_iovec *out_fiov = NULL;
+
+	if (in_iovcnt) {
+		size_t in_size = sizeof(*fiov) * in_iovcnt;
+
+		fiov = _fsdev_io_out_arg_get_buf(fuse_io, in_size);
+		if (!fiov) {
+			SPDK_ERRLOG("Cannot get ioctl iovec out buffer\n");
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
+		}
+
+		/* Converting to struct fuse_ioctl_iovec with uint64_t fields. */
+		in_fiov = fsdev_ioctl_iovec_to_fuse_copy(fuse_io, in_iov, in_iovcnt);
+		if (!in_fiov) {
+			fuse_dispatcher_io_complete_err(fuse_io, -ENOMEM);
+			return;
+		}
+		memcpy(fiov, in_fiov, in_size);
+		size += in_size;
+		free(in_fiov);
+	}
+	if (out_iovcnt) {
+		size_t out_size = sizeof(*fiov) * out_iovcnt;
+
+		fiov = _fsdev_io_out_arg_get_buf(fuse_io, out_size);
+		if (!fiov) {
+			if (in_fiov) {
+				free(in_fiov);
+			}
+			SPDK_ERRLOG("Cannot get ioctl iovec out buffer\n");
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
+		}
+
+		/* Converting to struct fuse_ioctl_iovec with uint64_t fields. */
+		out_fiov = fsdev_ioctl_iovec_to_fuse_copy(fuse_io, out_iov, out_iovcnt);
+		if (!out_fiov) {
+			fuse_dispatcher_io_complete_err(fuse_io, -ENOMEM);
+			return;
+		}
+		memcpy(fiov, out_fiov, out_size);
+		size += out_size;
+		free(out_fiov);
+	}
+
+	fuse_dispatcher_io_complete_ok(fuse_io, size);
+}
+
+static void
+fuse_dispatcher_io_complete_restricted_ioctl(struct fuse_io *fuse_io, size_t size,
+		int32_t out_flags, int32_t result,
+		struct iovec *in_iov, uint32_t in_iovcnt,
+		struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	if (in_iovcnt) {
+		SPDK_ERRLOG("Got unexpected for restricted ioctl() input "
+			    "buffer to be returned to the FUSE - ignoring.\n");
+	}
+	if (out_iovcnt) {
+		SPDK_ERRLOG("Got unexpected for restricted ioctl() output "
+			    "buffer to be returned to the FUSE - ignoring.\n");
+	}
+
+	/*
+	 * The out buffer has already been populated (if any). Make sure to have
+	 * correct size in the header.
+	 */
+	size += fuse_io->u.ioctl.out_size;
+
+	fuse_dispatcher_io_complete_ok(fuse_io, size);
+}
+
+static void
+fuse_dispatcher_io_complete_ioctl(struct fuse_io *fuse_io,
+				  bool retry, int32_t result,
+				  struct iovec *in_iov, uint32_t in_iovcnt,
+				  struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	struct fuse_ioctl_out *arg;
+	fuse_dispatcher_ioctl_cpl_cb ioctl_cpl_cb;
+	uint32_t in_flags = fuse_io->u.ioctl.flags;
+	uint32_t out_flags = retry ? FUSE_IOCTL_RETRY : 0;
+
+	arg = _fsdev_io_out_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_ioctl_out\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	arg->result = fsdev_io_h2d_u32(fuse_io, (uint32_t)result);
+	arg->flags = fsdev_io_h2d_u32(fuse_io, out_flags);
+	arg->in_iovs = fsdev_io_h2d_u32(fuse_io, in_iovcnt);
+	arg->out_iovs = fsdev_io_h2d_u32(fuse_io, out_iovcnt);
+
+	if (in_flags & FUSE_IOCTL_UNRESTRICTED) {
+		ioctl_cpl_cb = fuse_dispatcher_io_complete_unrestricted_ioctl;
+	} else {
+		ioctl_cpl_cb = fuse_dispatcher_io_complete_restricted_ioctl;
+	}
+
+	ioctl_cpl_cb(fuse_io, sizeof(*arg), out_flags, result, in_iov, in_iovcnt,
+		     out_iov, out_iovcnt);
+}
+
+static void
+do_ioctl_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
+		 int status, int32_t result,
+		 struct iovec *in_iov, uint32_t in_iovcnt,
+		 struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	struct fuse_io *fuse_io = cb_arg;
+	bool retry = (status == -EAGAIN);
+	uint32_t in_flags = fuse_io->u.ioctl.flags;
+
+	/*
+	 * We get -EAGAIN on retry requested by the fsdev, this is not an error.
+	 */
+	if (retry) {
+		/*
+		 * Retry without FUSE_IOCTL_UNRESTRICTED is not allowed.
+		 */
+		status = (in_flags & FUSE_IOCTL_UNRESTRICTED) ? 0 : -EIO;
+	}
+
+	if (!status) {
+		fuse_dispatcher_io_complete_ioctl(fuse_io, retry, result,
+						  in_iov, in_iovcnt,
+						  out_iov, out_iovcnt);
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+	}
+
+	/* Allocated in do_ioctl(). */
+	free(fuse_io->u.ioctl.in_iov);
+	free(fuse_io->u.ioctl.out_iov);
+}
+
 static void
 do_ioctl(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("IOCTL is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_ioctl_in *in;
+	uint64_t fh;
+	uint32_t flags;
+	uint32_t request;
+	void *arg;
+	uint32_t in_size;
+	uint32_t out_size;
+	struct iovec in_iov[1];
+	struct iovec out_iov[1];
+
+	in = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*in));
+	if (!in) {
+		SPDK_ERRLOG("Cannot get fuse_ioctl_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	flags = fsdev_io_d2h_u32(fuse_io, in->flags);
+
+	/*
+	 * FUSE_IOCTL_COMPAT is used when 32-bit user space app calls ioctl()
+	 * on a 64-bit kernel.
+	 */
+	if (flags & (FUSE_IOCTL_COMPAT | FUSE_IOCTL_32BIT)) {
+		SPDK_ERRLOG("Compat ioctl is not supported.\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -ENOTSUP);
+		return;
+	}
+
+	/*
+	 * Another compat flag. Not supported.
+	 */
+	if (flags & FUSE_IOCTL_COMPAT_X32) {
+		SPDK_ERRLOG("Compat x32 ioctl is not supported.\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -ENOTSUP);
+		return;
+	}
+
+	fh = fsdev_io_d2h_u64(fuse_io, in->fh);
+	request = fsdev_io_d2h_u32(fuse_io, in->cmd);
+	in_size = fsdev_io_d2h_u32(fuse_io, in->in_size);
+	out_size = fsdev_io_d2h_u32(fuse_io, in->out_size);
+	arg = (void *)(uintptr_t)fsdev_io_d2h_u64(fuse_io, in->arg);
+
+	if (in_size) {
+		in_iov[0].iov_base = _fsdev_io_in_arg_get_buf(fuse_io, in_size);
+		if (!in_iov[0].iov_base) {
+			SPDK_ERRLOG("Failed to get input buf of size=%u\n", in_size);
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
+		}
+		in_iov[0].iov_len = in_size;
+
+		fuse_io->u.ioctl.in_iov = fuse_ioctl_iovec_copy(in_iov, 1);
+		if (!fuse_io->u.ioctl.in_iov) {
+			SPDK_ERRLOG("Cannot alloc ioctl iovecs.\n");
+			fuse_dispatcher_io_complete_err(fuse_io, -ENOMEM);
+			return;
+		}
+		fuse_io->u.ioctl.in_iovcnt = 1;
+	} else {
+		fuse_io->u.ioctl.in_iov = NULL;
+		fuse_io->u.ioctl.in_iovcnt = 0;
+	}
+
+	/*
+	 * Getting out buffer to avoid copying allow the fsdev to use it directly
+	 * for any returned data.
+	 */
+	if (out_size) {
+		char *buff;
+
+		/* Preserve the out offset. */
+		struct iov_offs out_offs_bu = fuse_io->out_offs;
+
+		/* Skip the fuse_ioctl_out. */
+		_fsdev_io_out_arg_get_buf(fuse_io, sizeof(struct fuse_ioctl_out));
+
+		/* Get the buffer for the out iovec. */
+		buff = _fsdev_io_out_arg_get_buf(fuse_io, out_size);
+		if (!buff) {
+			SPDK_INFOLOG(fuse_dispatcher, "Got NULL ioctl out buffer.\n");
+			err = -EINVAL;
+			goto out_err;
+		}
+
+		/*
+		 * Restore the out offset so it works on populating the output in
+		 * comeption cb.
+		 */
+		fuse_io->out_offs = out_offs_bu;
+
+		out_iov[0].iov_base = buff;
+		out_iov[0].iov_len = out_size;
+
+		fuse_io->u.ioctl.out_iov = fuse_ioctl_iovec_copy(out_iov, 1);
+		if (!fuse_io->u.ioctl.out_iov) {
+			SPDK_ERRLOG("Cannot alloc ioctl iovecs.\n");
+			err = -ENOMEM;
+			goto out_err;
+		}
+		fuse_io->u.ioctl.out_iovcnt = 1;
+	} else {
+		fuse_io->u.ioctl.out_iov = NULL;
+		fuse_io->u.ioctl.out_iovcnt = 0;
+	}
+
+	/* Used in the completion cb for checking UNRESTRICTED & RETRY flags. */
+	fuse_io->u.ioctl.flags = flags;
+	fuse_io->u.ioctl.out_size = out_size;
+
+	err = spdk_fsdev_ioctl(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh), request, arg,
+			       fuse_io->u.ioctl.in_iov, fuse_io->u.ioctl.in_iovcnt,
+			       fuse_io->u.ioctl.out_iov, fuse_io->u.ioctl.out_iovcnt,
+			       do_ioctl_cpl_clb, fuse_io);
+
+out_err:
+	if (err) {
+		free(fuse_io->u.ioctl.in_iov);
+		free(fuse_io->u.ioctl.out_iov);
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,

@@ -838,12 +838,21 @@ typedef void (spdk_fsdev_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param request A device-dependent request cmd.
- * \param argp Command arguments.
+ * \param status Operation status:
+ * - 0 on success
+ * - -EAGAIN on retry request when ioctl misses some buffers to set/get the
+ * data (see how the FUSE_IOCTL_RETRY is used).
+ * - error code otherwise.
+ * \param result Exact result code returned from ioctl implementation.
+ * \param in_iov Array of iovec describing the data to bring in the next retry.
+ * \param in_iovcnt Size of in_iov array.
+ * \param out_iov Array of iovec describing the output data to send in the next retry.
+ * \param out_iovcnt Size of out_iov array.
  */
 typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				       int status, uint32_t request, void *argp);
+				       int status, int32_t result,
+				       struct iovec *in_iov, uint32_t in_iovcnt,
+				       struct iovec *out_iov, uint32_t out_iovcnt);
 
 /**
  * Ioctl operation.
@@ -854,7 +863,11 @@ typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param fobject File object.
  * \param fhandle File handle.
  * \param request A device-dependent request cmd.
- * \param argp Command arguments. The pointer must be valid until the cb_fn arrives.
+ * \param arg Operation argument.
+ * \param in_iov Array of iovec with input data.
+ * \param in_iovcnt Size of in_iov array.
+ * \param out_iov Array of iovec for output data.
+ * \param out_iovcnt Size of out_iov array.
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -865,7 +878,9 @@ typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 int spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle, uint32_t request,
-		     void *argp, spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
+		     void *arg, struct iovec *in_iov, uint32_t in_iovcnt,
+		     struct iovec *out_iov, uint32_t out_iovcnt,
+		     spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Getlk operation completion callback.

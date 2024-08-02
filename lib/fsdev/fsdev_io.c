@@ -287,9 +287,13 @@ _spdk_fsdev_ioctl_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
 
-	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_ioctl_cpl_cb,
-		     fsdev_io->u_out.ioctl.request, fsdev_io->u_out.ioctl.argp);
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_ioctl_cpl_cb, fsdev_io->u_out.ioctl.result,
+		     fsdev_io->u_out.ioctl.in_iov, fsdev_io->u_out.ioctl.in_iovcnt,
+		     fsdev_io->u_out.ioctl.out_iov, fsdev_io->u_out.ioctl.out_iovcnt);
 
+	/* Can be allocated in the module implementation. */
+	free(fsdev_io->u_out.ioctl.in_iov);
+	free(fsdev_io->u_out.ioctl.out_iov);
 	fsdev_io_free(fsdev_io);
 }
 
@@ -297,17 +301,34 @@ int
 spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		 struct spdk_fsdev_file_handle *fhandle, uint32_t request,
-		 void *argp, spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg)
+		 void *arg, struct iovec *in_iov, uint32_t in_iovcnt,
+		 struct iovec *out_iov, uint32_t out_iovcnt,
+		 spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
 	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_ioctl_cb, ch,
 					 SPDK_FSDEV_IO_IOCTL);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
 
 	fsdev_io->u_in.ioctl.fobject = fobject;
 	fsdev_io->u_in.ioctl.fhandle = fhandle;
 	fsdev_io->u_in.ioctl.request = request;
-	fsdev_io->u_in.ioctl.argp = argp;
+	fsdev_io->u_in.ioctl.arg = arg;
+
+	fsdev_io->u_in.ioctl.in_iov = in_iov;
+	fsdev_io->u_in.ioctl.in_iovcnt = in_iovcnt;
+
+	fsdev_io->u_in.ioctl.out_iov = out_iov;
+	fsdev_io->u_in.ioctl.out_iovcnt = out_iovcnt;
+
+	/* Zero out the out values so we know what to free in _spdk_fsdev_ioctl_cb() */
+	fsdev_io->u_out.ioctl.in_iov = NULL;
+	fsdev_io->u_out.ioctl.in_iovcnt = 0;
+	fsdev_io->u_out.ioctl.out_iov = NULL;
+	fsdev_io->u_out.ioctl.out_iovcnt = 0;
 
 	fsdev_io_submit(fsdev_io);
 	return 0;

@@ -461,7 +461,11 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint32_t request;
-			void *argp;
+			void *arg;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
 		} ioctl;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -561,8 +565,11 @@ struct spdk_fsdev_io {
 			uint32_t revents;
 		} poll;
 		struct {
-			uint32_t request;
-			void *argp;
+			int32_t result;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
 		} ioctl;
 		struct {
 			struct spdk_fsdev_file_lock lock;

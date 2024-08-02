@@ -59,6 +59,78 @@
 #define ST_MTIM_NSEC_SET(stbuf, val) do { } while (0)
 #endif
 
+/*
+ * Example of "unrestricted" variant of the data that can be get or
+ * set by AIO ioctl() implementation.
+ *
+ * The "buf" and "size" should be handled in a special way with using
+ * SPDK_FSDEVB_IOCTL_RETRY protocol.
+ */
+struct aio_ioctl_unrest {
+	char *buf;
+	uint32_t size;
+};
+
+/*
+ * Example of restricted (traditional) variant of the data that can be
+ * get or set by AIO ioctl() implementation, when the structure size
+ * is well known in advance.
+ */
+struct aio_ioctl_rest {
+	uint32_t width;
+	uint32_t height;
+};
+
+/*
+ * Reading data, output buffer must be poulated by internal module data.
+ * The input is zero. This command may request RETRY.
+ *
+ * The meaning of values:
+ * - 'E' - means example.
+ * - 42  - cmd number.
+ * - data type for the output data (root structure).
+ */
+#define AIO_IOCTL_GET_UNREST_DATA_CMD _IOR('E', 42, struct aio_ioctl_unrest)
+
+/*
+ * Setting data, input buffer must be used for poulating internal module data.
+ * The output is zero. This command may request RETRY.
+ *
+ * The meaning of values:
+ * - 'E' - means example.
+ * - 43  - cmd number.
+ * - data type for the output data (root structure).
+ */
+#define AIO_IOCTL_SET_UNREST_DATA_CMD _IOW('E', 43, struct aio_ioctl_unrest)
+
+/*
+ * Same as AIO_IOCTL_GET_UNREST_DATA_CMD for restricted ioctl() variant.
+ * No RETRY is allowed.
+ */
+#define AIO_IOCTL_GET_REST_DATA_CMD _IOR('E', 44, struct aio_ioctl_rest)
+
+/*
+ * Same as AIO_IOCTL_SET_UNREST_DATA_CMD for restricted ioctl() variant.
+ * No RETRY is allowed.
+ */
+#define AIO_IOCTL_SET_REST_DATA_CMD _IOW('E', 45, struct aio_ioctl_rest)
+
+/*
+ * Setting and getting data in one blow. The input buffer must be used for poulating
+ * internal module data. The output - for returning the old value (before changing).
+ *
+ * The meaning of values:
+ * - 'E' - means example.
+ * - 46  - cmd number.
+ * - size of the output data (root structure) is sizeof(struct aio_ioctl_unrest)
+ */
+#define AIO_IOCTL_REST_DATA_CMD _IOWR('E', 46, struct aio_ioctl_rest)
+
+/*
+ * No data exchange (action) command. Input and output buffers are zero.
+ */
+#define AIO_IOCTL_ACT_CMD _IO('E', 47)
+
 struct lo_cred {
 	uid_t euid;
 	gid_t egid;
@@ -986,6 +1058,216 @@ lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return res;
 }
 
+static struct aio_ioctl_unrest aio_unrest;
+static struct aio_ioctl_rest aio_rest;
+
+static struct iovec *
+ioctl_iovec_copy(const struct iovec *iov, uint32_t iovcnt)
+{
+	size_t size = sizeof(*iov) * iovcnt;
+	struct iovec *result;
+
+	assert(iov && iovcnt);
+
+	result = calloc(1, size);
+	if (!result) {
+		return NULL;
+	}
+	memcpy(result, iov, size);
+	return result;
+}
+
+static int
+lo_ioctl_retry(struct spdk_fsdev_io *fsdev_io,
+	       const struct iovec *in_iov, uint32_t in_iovcnt,
+	       const struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	if (in_iovcnt && in_iov) {
+		fsdev_io->u_out.ioctl.in_iov = ioctl_iovec_copy(in_iov, in_iovcnt);
+		if (!fsdev_io->u_out.ioctl.in_iov) {
+			return -ENOMEM;
+		}
+	}
+	fsdev_io->u_out.ioctl.in_iovcnt = in_iovcnt;
+
+	if (out_iovcnt && out_iov) {
+		fsdev_io->u_out.ioctl.out_iov = ioctl_iovec_copy(out_iov, out_iovcnt);
+		if (!fsdev_io->u_out.ioctl.out_iov) {
+			free(fsdev_io->u_out.ioctl.in_iov);
+			return -ENOMEM;
+		}
+	}
+	fsdev_io->u_out.ioctl.out_iovcnt = out_iovcnt;
+
+	return -EAGAIN;
+}
+
+/**
+ * Example implemenatation of ioctl with SPDK_FSDEV_IOCTL_RETRY protocol
+ * support.
+ *
+ * It handles unrestricted and the "traditional" ioctl cmds that we created
+ * to show how to do that properly.
+ * - AIO_IOCTL_GET_UNREST_DATA_CMD - unrestricted GET of the local data with
+ *   embedded buffer pointer,
+ * - AIO_IOCTL_SET_UNREST_DATA_CMD - same as the previous but for setting the
+ *   local data.
+ * - AIO_IOCTL_GET_REST_DATA_CMD - traditional get for some internal struct
+ *   which size is known.
+ * - AIO_IOCTL_SET_REST_DATA_CMD - same as the previous for setting the local
+ *   data.
+ * - AIO_IOCTL_REST_DATA_CMD - getting and setting data in same cmd.
+ * - AIO_IOCTL_ACT_CMD - no data, just a command.
+ */
+static int
+lo_do_ioctl(struct spdk_fsdev_io *fsdev_io)
+{
+	uint32_t request = fsdev_io->u_in.ioctl.request;
+	struct iovec *in_iovec = fsdev_io->u_in.ioctl.in_iov;
+	struct iovec *out_iovec = fsdev_io->u_in.ioctl.out_iov;
+	uint32_t in_iovcnt = fsdev_io->u_in.ioctl.in_iovcnt;
+	uint32_t out_iovcnt = fsdev_io->u_in.ioctl.out_iovcnt;
+	void *arg = fsdev_io->u_in.ioctl.arg;
+	struct iovec in_iov[2], out_iov[1];
+	struct aio_ioctl_unrest *ur_data;
+	struct aio_ioctl_rest *rt_data;
+	struct aio_ioctl_rest saved;
+	uint32_t in_bufsz, out_bufsz;
+	void *in_buf, *out_buf;
+
+	bool unrestricted = (request == AIO_IOCTL_GET_UNREST_DATA_CMD ||
+			     request == AIO_IOCTL_SET_UNREST_DATA_CMD);
+
+	in_iov[0].iov_base = arg;
+	in_iov[0].iov_len = unrestricted ? sizeof(*ur_data) : sizeof(*rt_data);
+
+	in_buf = in_iovcnt && in_iovec ? in_iovec[0].iov_base : NULL;
+	in_bufsz = in_iovcnt && in_iovec ? in_iovec[0].iov_len : 0;
+
+	out_buf = out_iovcnt && out_iovec ? out_iovec[0].iov_base : NULL;
+	out_bufsz = out_iovcnt && out_iovec ? out_iovec[0].iov_len : 0;
+
+	switch (request) {
+	case AIO_IOCTL_GET_UNREST_DATA_CMD:
+		/* No input data available - requesting RETRY. */
+		if (!in_bufsz) {
+			return lo_ioctl_retry(fsdev_io, in_iov, 1, NULL, 0);
+		}
+
+		ur_data = (struct aio_ioctl_unrest *)in_buf;
+
+		/*
+		 * No output info available - sending back information regarding the arg internal
+		 * buffer and requesting RETRY.
+		 */
+		if (!out_bufsz) {
+			out_iov[0].iov_base = ur_data->buf;
+			out_iov[0].iov_len = ur_data->size;
+			return lo_ioctl_retry(fsdev_io, in_iov, 1, out_iov, 1);
+		}
+
+		/* Have got all we needed - populate the data with internal structure data. */
+		memcpy(out_buf, aio_unrest.buf, spdk_min(out_bufsz, aio_unrest.size));
+		break;
+	case AIO_IOCTL_SET_UNREST_DATA_CMD:
+		/* No input data available - requesting RETRY. */
+		if (!in_bufsz) {
+			return lo_ioctl_retry(fsdev_io, in_iov, 1, NULL, 0);
+		}
+
+		ur_data = (struct aio_ioctl_unrest *)in_buf;
+
+		if (in_bufsz < sizeof(*ur_data)) {
+			SPDK_ERRLOG("Invalid input buffer size=%u\n", in_bufsz);
+			return -EINVAL;
+		}
+
+		/* Consumed the size of the root structure. */
+		in_bufsz -= sizeof(*ur_data);
+		in_buf += sizeof(*ur_data);
+
+		/*
+		 * Input iovec has only info about root structure. Sending back internal buffer info and
+		 * requesting RETRY.
+		 */
+		if (ur_data->size && !in_bufsz) {
+			in_iov[1].iov_base = ur_data->buf;
+			in_iov[1].iov_len = ur_data->size;
+			return lo_ioctl_retry(fsdev_io, in_iov, 2, NULL, 0);
+		}
+
+		/* Got all we needed. Populate the local data. No data in response. */
+		if (aio_unrest.size < in_bufsz) {
+			aio_unrest.buf = realloc(aio_unrest.buf, in_bufsz);
+			if (!aio_unrest.buf) {
+				return -ENOMEM;
+			}
+			aio_unrest.size = in_bufsz;
+		}
+		memcpy(aio_unrest.buf, in_buf, in_bufsz);
+		break;
+	case AIO_IOCTL_GET_REST_DATA_CMD:
+		/*
+		 * Invalid out size. Requesting RETRY with the correct size. For restricted variant of ioctl()
+		 * this results into -EIO, which is expected.
+		 */
+		if (out_bufsz != sizeof(*rt_data)) {
+			out_iov[0].iov_base = arg;
+			out_iov[0].iov_len = sizeof(*rt_data);
+			return lo_ioctl_retry(fsdev_io, NULL, 0, out_iov, 1);
+		}
+
+		rt_data = (struct aio_ioctl_rest *)out_buf;
+		*rt_data = aio_rest;
+		break;
+	case AIO_IOCTL_SET_REST_DATA_CMD:
+		/*
+		 * Invalid input size. Requesting RETRY with the correct size. For restricted variant of ioctl()
+		 * this results into -EIO, which is expected.
+		 */
+		if (in_bufsz != sizeof(*rt_data)) {
+			return lo_ioctl_retry(fsdev_io, in_iov, 1, NULL, 0);
+		}
+
+		rt_data = (struct aio_ioctl_rest *)in_buf;
+		aio_rest = *rt_data;
+		break;
+	case AIO_IOCTL_REST_DATA_CMD:
+		/*
+		 * Invalid input or output size. Requesting RETRY with the correct sizes. For restricted variant
+		 * of ioctl() this results into -EIO, which is expected.
+		 */
+		if (in_bufsz != sizeof(*rt_data) || out_bufsz != sizeof(*rt_data)) {
+			out_iov[0].iov_base = arg;
+			out_iov[0].iov_len = sizeof(*rt_data);
+			return lo_ioctl_retry(fsdev_io, in_iov, 1, out_iov, 0);
+		}
+
+		/*
+		 * Input and output buffers can point to the same region of memory. Saving the input.
+		 */
+		rt_data = (struct aio_ioctl_rest *)in_buf;
+		saved = *rt_data;
+
+		/*
+		 * Populating the data and sending _old_ data back (we decided we want this kind of behavior
+		 * for this particular custom ioctl cmd) like a normal get.
+		 */
+		rt_data = (struct aio_ioctl_rest *)out_buf;
+		*rt_data = aio_rest;
+		aio_rest = saved;
+		break;
+	case AIO_IOCTL_ACT_CMD:
+		SPDK_DEBUGLOG(fsdev_aio, "Zero-sized ioctl() has been successfully handled.\n");
+		break;
+	default:
+		SPDK_ERRLOG("Unknown ioctl cmd: %u\n", request);
+		return -ENOTTY;
+	}
+
+	return 0;
+}
+
 static int
 lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -996,27 +1278,26 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_handle *fhandle =
 		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.ioctl.fhandle);
 	uint32_t request = fsdev_io->u_in.ioctl.request;
-	void *argp = fsdev_io->u_in.ioctl.argp;
 
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
 	}
 
-	fsdev_io->u_out.ioctl.request = request;
-	fsdev_io->u_out.ioctl.argp = argp;
+	fsdev_io->u_out.ioctl.in_iovcnt = 0;
+	fsdev_io->u_out.ioctl.out_iovcnt = 0;
 
-	res = ioctl(fhandle->fd, request, argp);
-	if (res == -1) {
-		res = -errno;
-		SPDK_ERRLOG("Ioctl failed for " FOBJECT_FMT " request=%u (err=%d)\n",
-			    FOBJECT_ARGS(fobject), request, res);
-		return res;
-	}
+	/*
+	 * Zero for now and in case of forwarding ioctl to the local filesystem this
+	 * can hold the return code of the ioctl() function.
+	 */
+	fsdev_io->u_out.ioctl.result = 0;
 
-	SPDK_DEBUGLOG(fsdev_aio, "IOCTL succeded for " FOBJECT_FMT " request=%u\n",
-		      FOBJECT_ARGS(fobject), request);
-	return 0;
+	res = lo_do_ioctl(fsdev_io);
+
+	SPDK_DEBUGLOG(fsdev_aio, "IOCTL(%u) for " FOBJECT_FMT " handled with result=%d\n",
+		      request, FOBJECT_ARGS(fobject), res);
+	return res;
 }
 
 #if DEBUG
@@ -2912,9 +3193,9 @@ static fsdev_op_handler_func handlers[__SPDK_FSDEV_IO_LAST] = {
 	[SPDK_FSDEV_IO_SYNCFS] = lo_syncfs,
 	[SPDK_FSDEV_IO_LSEEK] = lo_lseek,
 	[SPDK_FSDEV_IO_POLL] = lo_poll,
-	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
 	[SPDK_FSDEV_IO_GETLK] = lo_getlk,
 	[SPDK_FSDEV_IO_SETLK] = lo_setlk,
+	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
 };
 
 static void
