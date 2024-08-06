@@ -143,7 +143,6 @@ code-style-job:
   extends: .do_build
   stage: build
   image: "$COV_IMAGE"
-  allow_failure: true
   script:
     - apt-get -q update
     - ./scripts/pkgdep.sh --developer-tools
