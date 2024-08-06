@@ -1251,6 +1251,16 @@ if [[ $arch == x86_64* ]] || [[ $arch == aarch64* ]]; then
 			#For gas v2.24~v2.34, sve2 instructions are not supported. To workaround it, sve2 optimization should be disabled
 			ISAL_CRYPTO_OPTS+=("--disable-sve2")
 		fi
+		# We apply ./ci/dpdk_patch.sh as it's necessary for the NVIDIA DPU
+		DPDK_GCC_CONFIG_FNAME=$(cat $rootdir/.ci/dpdk_patch.sh | tr ' ' '\n' | grep 'dpdk/.*_gcc')
+		if [ ! -f "$rootdir/$DPDK_GCC_CONFIG_FNAME" ]; then
+			echo -n "Applying Nvidia DPU specific DPDK patch..."
+			if ! $rootdir/.ci/dpdk_patch.sh; then
+				echo "Cannot apply the DPDK patch."
+				exit 1
+			fi
+			echo "done."
+		fi
 	fi
 else
 	# for PPC
