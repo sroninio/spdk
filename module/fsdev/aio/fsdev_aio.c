@@ -663,7 +663,7 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "IOCTL succeded for " FOBJECT_FMT " request=%u\n",
-			FOBJECT_ARGS(fobject), request);
+		      FOBJECT_ARGS(fobject), request);
 	return 0;
 }
 
