@@ -61,6 +61,8 @@
 	spdk_fsdev_access;
 	spdk_fsdev_lseek;
 	spdk_fsdev_poll;
+	spdk_fsdev_getlk;
+	spdk_fsdev_setlk;
 	spdk_fsdev_ioctl;
 
 	# Public functions in fsdev_module.h

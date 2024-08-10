@@ -426,6 +426,61 @@ struct spdk_fsdev_file_statfs {
 	uint32_t frsize;
 };
 
+/* Resembling file lock types. */
+enum spdk_fsdev_file_lock_type {
+	SPDK_FSDEV_RDLCK = 0,
+	SPDK_FSDEV_WRLCK = 1,
+	SPDK_FSDEV_UNLCK = 2
+};
+
+/* Resembling flock operation type */
+enum spdk_fsdev_file_lock_op {
+	/*
+	 * Place a shared lock. More than one process may hold
+	 * a shared lock for a given file at a given time.
+	 */
+	SPDK_FSDEV_LOCK_SH = 0,
+
+	/*
+	 * Place an exclusive lock.  Only one process may hold
+	 * an exclusive lock for a given file at a given time.
+	 */
+	SPDK_FSDEV_LOCK_EX = 1,
+
+	/* Remove an existing lock held by this process. */
+	SPDK_FSDEV_LOCK_UN = 2
+};
+
+/*
+ * This structure provides the info/description on/of a specific file lock
+ * and is used for delivering the lock params to and from the fsdev API and
+ * the lower layers.
+ */
+struct spdk_fsdev_file_lock {
+	/* SPDK variant of F_RDLCK. F_WRLCK, F_UNLCK */
+	enum spdk_fsdev_file_lock_type type;
+
+	/* Starting offset for lock */
+	uint64_t start;
+
+	/* End of the lock region in bytes */
+	uint64_t end;
+
+	/*
+	 * Originally PID of process blocking our lock.
+	 * In context of virtiofs this can be used for
+	 * similar task but this needs to be taken care
+	 * of specially. For now we have it here.
+	 */
+	uint32_t pid;
+};
+
+/*
+ * Used for denoting the end of the file when specifying the
+ * file lock params.
+ */
+#define SPDK_FSDEV_FILE_LOCK_END_OF_FILE LONG_MAX
+
 /**
  * Syncfs operation completion callback
  *
@@ -753,6 +808,89 @@ int spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle, uint32_t request,
 		     void *argp, spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
+
+/**
+ * Getlk operation completion callback.
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ * \param lock Conflicting lock params.
+ */
+typedef void (spdk_fsdev_getlk_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+				       int status, const struct spdk_fsdev_file_lock *lock);
+
+/**
+ * This function checks if the lock with a particular params can be placed.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object.
+ * \param fhandle File handle.
+ * \param lock_to_check The lock params to check for possible conflicting locks.
+ * \param owner Used for lock ownership checks.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ *
+ * If the lock could be placed, the function does not actually place it, but
+ * returns SPDK_FSDEV_UNLCK in the "type" field of lock and leaves the other
+ * fields of the structure unchanged.
+ *
+ * If one or more incompatible locks would prevent this lock being placed, then
+ * the function returns details about one of those locks in the "type", "start", and
+ * "end" fields of lock. If the conflicting lock is a traditional (process-associated)
+ * record lock, then the "pid" field is set to the PID of the process holding that lock.
+ * If the conflicting lock is an open file de-scription lock, then "pid" is set to -1.
+ * Note that the returned information may already be out of date by the time the caller
+ * inspects it.
+ */
+int spdk_fsdev_getlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		     struct spdk_fsdev_file_handle *fhandle,
+		     const struct spdk_fsdev_file_lock *lock_to_check,
+		     uint64_t owner, spdk_fsdev_getlk_cpl_cb cb_fn, void *cb_arg);
+
+/**
+ * Setlk operation completion callback.
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ */
+typedef void (spdk_fsdev_setlk_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+				       int status);
+
+/**
+ * Setlk operation. Acquire, modify or release a file lock.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param fobject File object.
+ * \param fhandle File handle.
+ * \param lock_to_acquire Lock params we use to acquire the lock.
+ * \param owner Used for lock ownership checks.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ *
+ * Acquire a lock (when "type" is SPDK_FSDEV_RDLCK or SPDK_FSDEV_WRLCK) or
+ * release a lock (when "type" is SPDK_FSDEV_UNLCK) on the bytes specified
+ * by the "start", and "end" fields of lock. If a conflicting lock is held
+ * by another process, this call returns -EAGAIN.
+ */
+int spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		     struct spdk_fsdev_file_handle *fhandle,
+		     const struct spdk_fsdev_file_lock *lock_to_acquire,
+		     uint64_t owner, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a symbolic link
@@ -1616,7 +1754,7 @@ typedef void (spdk_fsdev_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param unique Unique I/O id.
  * \param fobject File object..
  * \param fhandle File handle.
- * \param operation Lock operation (see man flock, LOCK_NB will always be added).
+ * \param operation Lock operation (see man flock and spdk_fsdev_file_lock_op).
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1627,7 +1765,7 @@ typedef void (spdk_fsdev_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		     int operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg);
+		     enum spdk_fsdev_file_lock_op operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Allocate requested space operation completion callback

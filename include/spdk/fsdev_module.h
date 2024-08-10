@@ -249,6 +249,8 @@ enum spdk_fsdev_io_type {
 	SPDK_FSDEV_IO_LSEEK,
 	SPDK_FSDEV_IO_POLL,
 	SPDK_FSDEV_IO_IOCTL,
+	SPDK_FSDEV_IO_GETLK,
+	SPDK_FSDEV_IO_SETLK,
 	__SPDK_FSDEV_IO_LAST
 };
 
@@ -411,7 +413,7 @@ struct spdk_fsdev_io {
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
-			int operation; /* see man flock */
+			enum spdk_fsdev_file_lock_op operation;
 		} flock;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
@@ -469,6 +471,18 @@ struct spdk_fsdev_io {
 			uint32_t request;
 			void *argp;
 		} ioctl;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+		} getlk;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+		} setlk;
 	} u_in;
 
 	union {
@@ -554,6 +568,9 @@ struct spdk_fsdev_io {
 			uint32_t request;
 			void *argp;
 		} ioctl;
+		struct {
+			struct spdk_fsdev_file_lock lock;
+		} getlk;
 	} u_out;
 
 	/**

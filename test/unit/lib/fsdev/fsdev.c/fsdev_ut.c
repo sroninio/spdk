@@ -294,6 +294,7 @@ static int ut_reset_desired_err;
 static bool ut_reset_leak_io;
 static bool ut_complete_next_request = true;
 static struct spdk_fsdev_io *ut_oustanding_io = NULL;
+static struct spdk_fsdev_file_lock ut_fsdev_lock;
 
 static void
 ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
@@ -573,6 +574,19 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.ioctl.request);
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.argp);
+		break;
+	case SPDK_FSDEV_IO_GETLK:
+		ut_call_record_param_ptr(fsdev_io->u_in.getlk.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.getlk.fhandle);
+		ut_call_record_param_hash(&fsdev_io->u_in.getlk.lock,
+					  sizeof(fsdev_io->u_in.getlk.lock));
+		fsdev_io->u_out.getlk.lock = ut_fsdev_lock;
+		ut_call_record_param_int(fsdev_io->u_in.getlk.owner);
+		break;
+	case SPDK_FSDEV_IO_SETLK:
+		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.setlk.owner);
 		break;
 	case __SPDK_FSDEV_IO_LAST:
 	default:
@@ -2496,6 +2510,69 @@ ut_fsdev_test_copy_file_range(void)
 			 ut_fsdev_copy_file_range_check_clb);
 }
 
+static void
+ut_fsdev_getlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      const struct spdk_fsdev_file_lock *lock)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_getlk_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_getlk(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				&ut_fsdev_lock, 42, ut_fsdev_getlk_cpl_cb, status);
+}
+
+static void
+ut_fsdev_getlk_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_hash(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) ==
+		  ut_hash(&ut_fsdev_lock, sizeof(ut_fsdev_lock)));
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 42);
+}
+
+static void
+ut_fsdev_test_getlk(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_GETLK, 0, 4, ut_fsdev_getlk_execute_clb,
+			 ut_fsdev_getlk_check_clb);
+}
+
+static void
+ut_fsdev_setlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_setlk_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_setlk(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				&ut_fsdev_lock, 42, ut_fsdev_setlk_cpl_cb, status);
+}
+
+static void
+ut_fsdev_setlk_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 42);
+}
+
+static void
+ut_fsdev_test_setlk(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SETLK, 0, 3, ut_fsdev_setlk_execute_clb,
+			 ut_fsdev_setlk_check_clb);
+}
+
 static int
 fsdev_ut(int argc, char **argv)
 {
@@ -2551,6 +2628,8 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_lseek);
 	CU_ADD_TEST(suite, ut_fsdev_test_poll);
 	CU_ADD_TEST(suite, ut_fsdev_test_ioctl);
+	CU_ADD_TEST(suite, ut_fsdev_test_getlk);
+	CU_ADD_TEST(suite, ut_fsdev_test_setlk);
 
 	allocate_cores(1);
 	allocate_threads(1);

@@ -192,6 +192,19 @@ struct fuse_io {
 		struct {
 			int status;
 		} fsdev_close;
+		struct {
+			/* Poller that implements setlkw "waiting". */
+			struct spdk_poller *poller;
+
+			/* Setlkw lock to be acquired. */
+			struct spdk_fsdev_file_lock lock;
+
+			/* Setlkw operation file handle. */
+			uint64_t fhandle;
+
+			/* Used for checking lock ownership by setlk/setlkw. */
+			uint64_t owner;
+		} setlkw;
 	} u;
 };
 
@@ -846,6 +859,104 @@ fuse_dispatcher_io_complete_poll(struct fuse_io *fuse_io, uint32_t revents)
 	arg->revents = fsdev_io_h2d_u32(fuse_io, fsdev_events_to_fuse(revents));
 
 	fuse_dispatcher_io_complete_ok(fuse_io, sizeof(*arg));
+}
+#if DEBUG
+static const char *
+fuse_lock_type_to_str(uint32_t fuse_lock_type)
+{
+	if (fuse_lock_type == F_RDLCK) {
+		return "F_RDLCK";
+	} else if (fuse_lock_type == F_WRLCK) {
+		return "F_WRLCK";
+	} else if (fuse_lock_type == F_UNLCK) {
+		return "F_UNLCK";
+	} else {
+		return "UNKNOWN";
+	}
+}
+#endif
+
+static int
+fuse_to_fsdev_file_lock(struct fuse_io *fuse_io, const struct fuse_file_lock *fuse_lock,
+			struct spdk_fsdev_file_lock *fsdev_lock)
+{
+	switch (fsdev_io_d2h_u32(fuse_io, fuse_lock->type)) {
+	case F_RDLCK:
+		fsdev_lock->type = SPDK_FSDEV_RDLCK;
+		break;
+	case F_WRLCK:
+		fsdev_lock->type = SPDK_FSDEV_WRLCK;
+		break;
+	case F_UNLCK:
+		fsdev_lock->type = SPDK_FSDEV_UNLCK;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid lock type %d during fuse to fsdev lock conversion.\n",
+			    fsdev_io_d2h_u32(fuse_io, fuse_lock->type));
+		return -EINVAL;
+	}
+	fsdev_lock->start = fsdev_io_d2h_u64(fuse_io, fuse_lock->start);
+	fsdev_lock->end = fsdev_io_d2h_u64(fuse_io, fuse_lock->end);
+	if (fsdev_lock->end == 0) {
+		fsdev_lock->end = SPDK_FSDEV_FILE_LOCK_END_OF_FILE;
+	}
+	fsdev_lock->pid = fsdev_io_d2h_u32(fuse_io, fuse_lock->pid);
+
+	SPDK_DEBUGLOG(fsdev_aio, "fuse -> fsdev lock type=%x, start=%lu, end=%lu, pid=%u\n",
+		      fsdev_lock->type, fsdev_lock->start, fsdev_lock->end, fsdev_lock->pid);
+	return 0;
+}
+
+static int
+fsdev_file_lock_to_fuse(struct fuse_io *fuse_io, const struct spdk_fsdev_file_lock *fsdev_lock,
+			struct fuse_file_lock *fuse_lock)
+{
+	switch (fsdev_lock->type) {
+	case SPDK_FSDEV_RDLCK:
+		fuse_lock->type = fsdev_io_h2d_u32(fuse_io, F_RDLCK);
+		break;
+	case SPDK_FSDEV_WRLCK:
+		fuse_lock->type = fsdev_io_h2d_u32(fuse_io, F_WRLCK);
+		break;
+	case SPDK_FSDEV_UNLCK:
+		fuse_lock->type = fsdev_io_h2d_u32(fuse_io, F_UNLCK);
+		break;
+	default:
+		SPDK_ERRLOG("Invalid lock type %d encountered during fsdev to fuse "
+			    "locks conversion.\n", fsdev_lock->type);
+		return -EINVAL;
+	}
+
+	fuse_lock->start = fsdev_io_h2d_u64(fuse_io, fsdev_lock->start);
+	fuse_lock->end = fsdev_io_h2d_u64(fuse_io, fsdev_lock->end);
+	fuse_lock->pid = fsdev_io_h2d_u32(fuse_io, fsdev_lock->pid);
+
+	SPDK_DEBUGLOG(fsdev_aio, "fsdev -> fuse lock type=%s, start=%lu, len=%lu, pid=%u\n",
+		      fuse_lock_type_to_str(fsdev_io_d2h_u32(fuse_io, fsdev_lock->type)),
+		      fuse_lock->start, fuse_lock->end, fuse_lock->pid);
+	return 0;
+}
+
+static void
+fuse_dispatcher_io_complete_getlk(struct fuse_io *fuse_io,
+				  const struct spdk_fsdev_file_lock *fsdev_lock)
+{
+	struct fuse_lk_out *arg;
+	int err;
+
+	arg = _fsdev_io_out_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_lk_out\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	err = fsdev_file_lock_to_fuse(fuse_io, fsdev_lock, &arg->lk);
+	if (!err) {
+		fuse_dispatcher_io_complete_ok(fuse_io, sizeof(*arg));
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 /* `buf` is allowed to be empty so that the proper size may be
@@ -1996,6 +2107,7 @@ fuse_dispatcher_open_fsdev_continue(struct fuse_io *fuse_io)
 	LL_SET_DEFAULT(true, FUSE_ASYNC_DIO);
 	LL_SET_DEFAULT(true, FUSE_ATOMIC_O_TRUNC);
 	LL_SET_DEFAULT(true, FUSE_FLOCK_LOCKS);
+	LL_SET_DEFAULT(true, FUSE_POSIX_LOCKS);
 	LL_SET_DEFAULT(true, FUSE_DO_READDIRPLUS);
 	LL_SET_DEFAULT(true, FUSE_READDIRPLUS_AUTO);
 	LL_SET_DEFAULT(true, FUSE_EXPORT_SUPPORT);
@@ -2421,10 +2533,50 @@ do_fsyncdir(struct fuse_io *fuse_io)
 }
 
 static void
+do_getlk_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
+		 int status, const struct spdk_fsdev_file_lock *fsdev_lock)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	if (!status) {
+		fuse_dispatcher_io_complete_getlk(fuse_io, fsdev_lock);
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+	}
+}
+
+static void
 do_getlk(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("GETLK is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_lk_in *arg;
+	uint64_t fh;
+	uint64_t owner;
+	struct spdk_fsdev_file_lock fsdev_lock;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_lk_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	owner = fsdev_io_d2h_u64(fuse_io, arg->owner);
+
+	err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_lock);
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+		return;
+	}
+
+	err = spdk_fsdev_getlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner,
+			       do_getlk_cpl_clb, fuse_io);
+
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void
@@ -2435,13 +2587,72 @@ do_setlk_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 	fuse_dispatcher_io_complete_err(fuse_io, status);
 }
 
+static void do_setlkw_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status);
+
+static int
+do_setlkw_poller_cb(void *arg)
+{
+	int err;
+	struct fuse_io *fuse_io = (struct fuse_io *)arg;
+	struct spdk_fsdev_file_lock *fsdev_lock = &fuse_io->u.setlkw.lock;
+	uint64_t fh = fuse_io->u.setlkw.fhandle;
+
+	/*
+	 * Stopping setlkw poller, the new one will start in the operation cb if
+	 * the lock is still not acquired.
+	 */
+	SPDK_DEBUGLOG(fuse_dispatcher, "Stopped setlkw poller.\n");
+	spdk_poller_unregister(&fuse_io->u.setlkw.poller);
+
+	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fh), fsdev_lock,
+			       fuse_io->u.setlkw.owner, do_setlkw_cpl_clb, fuse_io);
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
+	return SPDK_POLLER_BUSY;
+}
+
 static void
-do_setlk_common(struct fuse_io *fuse_io)
+do_setlkw_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	struct fuse_io *fuse_io = (struct fuse_io *)cb_arg;
+
+	/*
+	 * Here -EAGAIN is signaled for conflicting lock - continue and start the new
+	 * poller.
+	 *
+	 * The poller does not have a timeout and works as long as needed to acquire
+	 * the lock and as long as the file stays open in the lower layer implementation.
+	 * When the file gets closed then this callback will get -EINTR and the operation
+	 * will complete with fuse_dispatcher_io_complete_err(-EINTR).
+	 */
+	if (status == -EAGAIN) {
+		SPDK_DEBUGLOG(fuse_dispatcher, "Conflicting lock encountered. "
+			      "Starting setlkw poller.\n");
+		fuse_io->u.setlkw.poller = SPDK_POLLER_REGISTER(do_setlkw_poller_cb, fuse_io, 0);
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+	}
+}
+
+static void
+do_flock_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	fuse_dispatcher_io_complete_err(fuse_io, status);
+}
+
+static void
+do_setlk(struct fuse_io *fuse_io)
 {
 	int err;
 	struct fuse_lk_in *arg;
 	uint64_t fh;
+	struct spdk_fsdev_file_lock fsdev_lock;
 	uint32_t lk_flags;
+	uint64_t owner;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
@@ -2450,48 +2661,84 @@ do_setlk_common(struct fuse_io *fuse_io)
 		return;
 	}
 
-	lk_flags = fsdev_io_d2h_u64(fuse_io, arg->lk_flags);
+	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	owner = fsdev_io_d2h_u64(fuse_io, arg->owner);
+	lk_flags = fsdev_io_d2h_u32(fuse_io, arg->lk_flags);
 
+	/* Handling flock style of the lock. */
 	if (lk_flags & FUSE_LK_FLOCK) {
-		int op = 0;
+		enum spdk_fsdev_file_lock_op op;
 
-		switch (arg->lk.type) {
+		switch (fsdev_io_d2h_u32(fuse_io, arg->lk.type)) {
 		case F_RDLCK:
-			op = LOCK_SH;
+			op = SPDK_FSDEV_LOCK_SH;
 			break;
 		case F_WRLCK:
-			op = LOCK_EX;
+			op = SPDK_FSDEV_LOCK_EX;
 			break;
 		case F_UNLCK:
-			op = LOCK_UN;
+			op = SPDK_FSDEV_LOCK_UN;
 			break;
+		default:
+			SPDK_ERRLOG("Invalid lock type %d in fuse_lk_in\n",
+				    fsdev_io_d2h_u32(fuse_io, arg->lk.type));
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
 		}
-
-		fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 
 		err = spdk_fsdev_flock(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 				       file_object(fuse_io), file_handle(fh), op,
-				       do_setlk_cpl_clb, fuse_io);
+				       do_flock_cpl_clb, fuse_io);
+	} else {
+		err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_lock);
 		if (err) {
 			fuse_dispatcher_io_complete_err(fuse_io, err);
+			return;
 		}
-	} else {
-		SPDK_ERRLOG("SETLK: with no FUSE_LK_FLOCK is not supported\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+		err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner,
+				       do_setlk_cpl_clb, fuse_io);
 	}
-}
 
-static void
-do_setlk(struct fuse_io *fuse_io)
-{
-	do_setlk_common(fuse_io);
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void
 do_setlkw(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("SETLKW is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_lk_in *arg;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_lk_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	fuse_io->u.setlkw.fhandle = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	fuse_io->u.setlkw.owner = fsdev_io_d2h_u64(fuse_io, arg->owner);
+
+	err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fuse_io->u.setlkw.lock);
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+		return;
+	}
+
+	/*
+	 * Giving it a try to take the lock immediately. If fails then the
+	 * setlkw poller starts in do_setlkw_cpl_clb() and tries again and
+	 * so on until the lock is acquired and file stays open.
+	 */
+	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
+			       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner,
+			       do_setlkw_cpl_clb, fuse_io);
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void

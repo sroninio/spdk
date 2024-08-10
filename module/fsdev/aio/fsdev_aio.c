@@ -800,6 +800,224 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+#if DEBUG
+static const char *
+posix_lock_type_to_str(uint32_t posix_lock_type)
+{
+	if (posix_lock_type == F_RDLCK) {
+		return "F_RDLCK";
+	} else if (posix_lock_type == F_WRLCK) {
+		return "F_WRLCK";
+	} else if (posix_lock_type == F_UNLCK) {
+		return "F_UNLCK";
+	} else {
+		return "UNKNOWN";
+	}
+}
+#endif
+
+static int
+fsdev_file_lock_to_flock(struct spdk_fsdev_file_handle *fhandle,
+			 struct spdk_fsdev_file_lock *fsdev_lock,
+			 struct flock *posix_lock)
+{
+	switch (fsdev_lock->type) {
+	case SPDK_FSDEV_RDLCK:
+		posix_lock->l_type = F_RDLCK;
+		break;
+	case SPDK_FSDEV_WRLCK:
+		posix_lock->l_type = F_WRLCK;
+		break;
+	case SPDK_FSDEV_UNLCK:
+		posix_lock->l_type = F_UNLCK;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid lock type %d encountered during fsdev to flock conversion.\n",
+			    fsdev_lock->type);
+		return -EINVAL;
+	}
+
+	posix_lock->l_whence = SEEK_SET;
+
+	posix_lock->l_start = fsdev_lock->start;
+	if (fsdev_lock->end == SPDK_FSDEV_FILE_LOCK_END_OF_FILE) {
+		/* 0 means lock to the end of the file in POSIX */
+		posix_lock->l_len = 0;
+	} else {
+		posix_lock->l_len = fsdev_lock->end - fsdev_lock->start + 1;
+	}
+
+	posix_lock->l_pid = fsdev_lock->pid;
+
+	SPDK_DEBUGLOG(fsdev_aio, "fsdev -> flock type=%s, start=%lu, len=%lu, pid=%u\n",
+		      posix_lock_type_to_str(posix_lock->l_type), posix_lock->l_start,
+		      posix_lock->l_len, posix_lock->l_pid);
+
+	return 0;
+}
+
+static int
+flock_to_fsdev_file_lock(struct spdk_fsdev_file_handle *fhandle,
+			 struct flock *posix_lock,
+			 struct spdk_fsdev_file_lock *fsdev_lock)
+{
+	off_t current_pos;
+
+	switch (posix_lock->l_type) {
+	case F_RDLCK:
+		fsdev_lock->type = SPDK_FSDEV_RDLCK;
+		break;
+	case F_WRLCK:
+		fsdev_lock->type = SPDK_FSDEV_WRLCK;
+		break;
+	case F_UNLCK:
+		fsdev_lock->type = SPDK_FSDEV_UNLCK;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid lock type %d encountered during flock to fsdev conversion.\n",
+			    posix_lock->l_type);
+		return -EINVAL;
+	}
+
+	switch (posix_lock->l_whence) {
+	case SEEK_SET:
+		fsdev_lock->start = posix_lock->l_start;
+		break;
+	case SEEK_CUR:
+		current_pos = lseek(fhandle->fd, 0, SEEK_CUR);
+		if (current_pos == (off_t) -1) {
+			SPDK_ERRLOG("Failed to get current file pos for fh=%p during "
+				    "posix lock conversion with whence=%d!\n", fhandle,
+				    posix_lock->l_whence);
+			return -EINVAL;
+		}
+		fsdev_lock->start = current_pos + posix_lock->l_start;
+		break;
+	case SEEK_END:
+		current_pos = lseek(fhandle->fd, 0, SEEK_END);
+		if (current_pos == (off_t) -1) {
+			SPDK_ERRLOG("Failed to get current file pos for fh=%p during "
+				    "posix lock conversion with whence=%d!\n", fhandle,
+				    posix_lock->l_whence);
+			return -EINVAL;
+		}
+		fsdev_lock->start = current_pos + posix_lock->l_start;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid whence=%d for fh=%p during "
+			    "posix lock conversion!\n", posix_lock->l_whence, fhandle);
+		return -EINVAL;
+	}
+	if (posix_lock->l_len == 0) {
+		/* Lock to the end of the file. */
+		fsdev_lock->end = LONG_MAX;
+	} else {
+		fsdev_lock->end = posix_lock->l_start + posix_lock->l_len - 1;
+	}
+
+	fsdev_lock->pid = posix_lock->l_pid;
+
+	SPDK_DEBUGLOG(fsdev_aio, "flock -> fsdev lock type=%x, start=%lu, end=%lu, pid=%u\n",
+		      fsdev_lock->type, fsdev_lock->start, fsdev_lock->end, fsdev_lock->pid);
+	return 0;
+}
+
+/*
+ * This function is not fully functional implementation of getlk() operation.
+ * In the enviroment where virtiofs is used the lock pid is usually wrong or 0
+ * which needs to be specially handled. Thimnk of it as of an example or
+ * tutorial of how it can be implemented.
+ */
+static int
+lo_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct flock posix_lock;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.getlk.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.getlk.fobject;
+	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.getlk.lock;
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	/*
+	 * We're using the input lock and passing it to fcntl(F_GETLK).
+	 * This technique is used for checking if a lock of particular
+	 * type and the file region can be obtained.
+	 */
+	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
+	if (res) {
+		return res;
+	}
+
+	res = fcntl(fhandle->fd, F_GETLK, &posix_lock);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Getlk failed for " FOBJECT_FMT " (err=%d)\n",
+			    FOBJECT_ARGS(fobject), res);
+		return res;
+	}
+	res = flock_to_fsdev_file_lock(fhandle, &posix_lock, &fsdev_io->u_out.getlk.lock);
+	if (res) {
+		return res;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "GETLK succeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
+		      FOBJECT_ARGS(fobject), posix_lock.l_type, posix_lock.l_start, posix_lock.l_len);
+	return 0;
+}
+
+/*
+ * This function is not fully functional implementation of setlk() operation.
+ * In the enviroment where virtiofs is used the lock pid is usually wrong or 0
+ * which needs to be specially handled. Think of it as of an example or
+ * tutorial of how it can be implemented.
+ */
+static int
+lo_setlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct flock posix_lock;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.setlk.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.setlk.fobject;
+	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.setlk.lock;
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
+	if (res) {
+		return res;
+	}
+
+	res = fcntl(fhandle->fd, F_SETLK, &posix_lock);
+	if (res == -1) {
+		res = -errno;
+
+		/*
+		 * Some implementations return -EACCES for conflicting locks. We show
+		 * error for the other error codes.
+		 */
+		if (res != -EACCES && res != -EAGAIN) {
+			SPDK_ERRLOG("Fcntl failed for " FOBJECT_FMT " (err=%d)\n",
+				    FOBJECT_ARGS(fobject), res);
+		} else if (res == -EACCES) {
+			return -EAGAIN;
+		}
+		return res;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "SETLK succeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
+		      FOBJECT_ARGS(fobject), posix_lock.l_type, posix_lock.l_start, posix_lock.l_len);
+	return 0;
+}
+
 /*
  * Change to uid/gid of caller so that file is created with ownership of caller.
  */
@@ -2089,7 +2307,23 @@ lo_flock(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int saverr = 0;
 	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.flock.fobject;
 	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.flock.fhandle;
-	int operation = fsdev_io->u_in.flock.operation;
+	int operation;
+
+	switch (fsdev_io->u_in.flock.operation) {
+	case SPDK_FSDEV_LOCK_SH:
+		operation = LOCK_SH;
+		break;
+	case SPDK_FSDEV_LOCK_EX:
+		operation = LOCK_EX;
+		break;
+	case SPDK_FSDEV_LOCK_UN:
+		operation = LOCK_UN;
+		break;
+	default:
+		SPDK_ERRLOG("Invalid flock operation type %d\n",
+			    fsdev_io->u_in.flock.operation);
+		return -EINVAL;
+	}
 
 	if (!fsdev_aio_is_valid_fobject(vfsdev, fobject)) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
@@ -2415,6 +2649,8 @@ static fsdev_op_handler_func handlers[__SPDK_FSDEV_IO_LAST] = {
 	[SPDK_FSDEV_IO_LSEEK] = lo_lseek,
 	[SPDK_FSDEV_IO_POLL] = lo_poll,
 	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
+	[SPDK_FSDEV_IO_GETLK] = lo_getlk,
+	[SPDK_FSDEV_IO_SETLK] = lo_setlk,
 };
 
 static void
