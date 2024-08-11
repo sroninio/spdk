@@ -904,7 +904,7 @@ fsdev_reset_purge_channel_msg_cb(struct spdk_io_channel_iter *i)
 		/* Force the remained outstanding IOs */
 		while (!TAILQ_EMPTY(&ch->io_submitted)) {
 			struct spdk_fsdev_io *fsdev_io = TAILQ_FIRST(&ch->io_submitted);
-			spdk_fsdev_io_complete(fsdev_io, ECANCELED);
+			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
 		}
 	}
 
