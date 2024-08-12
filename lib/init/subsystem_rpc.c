@@ -34,6 +34,7 @@ rpc_framework_get_subsystems(struct spdk_jsonrpc_request *request,
 		spdk_json_write_object_begin(w);
 
 		spdk_json_write_named_string(w, "subsystem", subsystem->name);
+		spdk_json_write_named_bool(w, "enabled", subsystem->enabled);
 		spdk_json_write_named_array_begin(w, "depends_on");
 		deps = subsystem_get_first_depend();
 		while (deps != NULL) {
@@ -59,6 +60,118 @@ struct rpc_framework_get_config_ctx {
 static const struct spdk_json_object_decoder rpc_framework_get_config_ctx[] = {
 	{"name", offsetof(struct rpc_framework_get_config_ctx, name), spdk_json_decode_string},
 };
+
+static void
+rpc_framework_disable_subsystem(struct spdk_jsonrpc_request *request,
+				const struct spdk_json_val *params)
+{
+	struct rpc_framework_get_config_ctx req = {};
+	struct spdk_subsystem *subsystem, *sub_dep;
+	struct spdk_subsystem_depend *deps;
+
+	if (spdk_json_decode_object(params, rpc_framework_get_config_ctx,
+				    SPDK_COUNTOF(rpc_framework_get_config_ctx), &req)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid arguments");
+		return;
+	}
+
+	subsystem = subsystem_find(req.name);
+	if (!subsystem) {
+		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						     "Subsystem '%s' not found", req.name);
+		free(req.name);
+		return;
+	}
+
+	free(req.name);
+
+	if (!subsystem->enabled) {
+		spdk_jsonrpc_send_bool_response(request, true);
+		return;
+	}
+
+	deps = subsystem_get_first_depend();
+	while (deps != NULL) {
+		/* No enabled subsystems may depend on this subsystem */
+		if (strcmp(subsystem->name, deps->depends_on) == 0) {
+			sub_dep = subsystem_find(deps->name);
+			if (!sub_dep) {
+				spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+								     "Subsystem Parent '%s' not found", deps->name);
+				return;
+			}
+
+			if (sub_dep->enabled) {
+				spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+								     "Subsystem Parent '%s' is enabled", deps->name);
+				return;
+			}
+		}
+		deps = subsystem_get_next_depend(deps);
+	}
+
+	subsystem->enabled = false;
+
+	spdk_jsonrpc_send_bool_response(request, true);
+}
+
+SPDK_RPC_REGISTER("framework_disable_subsystem", rpc_framework_disable_subsystem, SPDK_RPC_STARTUP)
+
+static void
+rpc_framework_enable_subsystem(struct spdk_jsonrpc_request *request,
+			       const struct spdk_json_val *params)
+{
+	struct rpc_framework_get_config_ctx req = {};
+	struct spdk_subsystem *subsystem, *sub_dep;
+	struct spdk_subsystem_depend *deps;
+
+	if (spdk_json_decode_object(params, rpc_framework_get_config_ctx,
+				    SPDK_COUNTOF(rpc_framework_get_config_ctx), &req)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid arguments");
+		return;
+	}
+
+	subsystem = subsystem_find(req.name);
+	if (!subsystem) {
+		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						     "Subsystem '%s' not found", req.name);
+		free(req.name);
+		return;
+	}
+
+	free(req.name);
+
+	if (subsystem->enabled) {
+		spdk_jsonrpc_send_bool_response(request, true);
+		return;
+	}
+
+	deps = subsystem_get_first_depend();
+	while (deps != NULL) {
+		/* This subsystem may not depend on any disabled subsystems */
+		if (strcmp(subsystem->name, deps->name) == 0) {
+			sub_dep = subsystem_find(deps->depends_on);
+			if (!sub_dep) {
+				spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+								     "Subsystem Dependency '%s' not found", sub_dep->name);
+				return;
+			}
+
+			if (!sub_dep->enabled) {
+				spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+								     "Subsystem Dependency '%s' is not enabled", sub_dep->name);
+				return;
+			}
+		}
+		deps = subsystem_get_next_depend(deps);
+	}
+
+	subsystem->enabled = true;
+
+	spdk_jsonrpc_send_bool_response(request, true);
+}
+
+SPDK_RPC_REGISTER("framework_enable_subsystem", rpc_framework_enable_subsystem, SPDK_RPC_STARTUP)
 
 static void
 rpc_framework_get_config(struct spdk_jsonrpc_request *request,

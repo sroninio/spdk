@@ -2792,6 +2792,20 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     entry contain (unsorted) array of subsystems it depends on.""")
     p.set_defaults(func=framework_get_subsystems)
 
+    def framework_disable_subsystem(args):
+        print_dict(rpc.subsystem.framework_disable_subsystem(args.client, args.name))
+
+    p = subparsers.add_parser('framework_disable_subsystem', help="""Disable a subsystem so that it does not consume resources""")
+    p.add_argument('name', help='Name of subsystem to disable')
+    p.set_defaults(func=framework_disable_subsystem)
+
+    def framework_enable_subsystem(args):
+        print_dict(rpc.subsystem.framework_enable_subsystem(args.client, args.name))
+
+    p = subparsers.add_parser('framework_enable_subsystem', help="""Enable a subsystem that was previously disabled""")
+    p.add_argument('name', help='Name of subsystem to enable')
+    p.set_defaults(func=framework_enable_subsystem)
+
     def framework_get_config(args):
         print_dict(rpc.subsystem.framework_get_config(args.client, args.name))
 

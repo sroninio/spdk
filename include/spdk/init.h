@@ -127,6 +127,11 @@ struct spdk_subsystem {
 	void (*write_config_json)(struct spdk_json_write_ctx *w);
 
 	TAILQ_ENTRY(spdk_subsystem) tailq;
+
+	/**
+	 * Whether this subsystem is currently enabled. By default, all registered subsystems are enabled.
+	 */
+	bool enabled;
 };
 
 /**

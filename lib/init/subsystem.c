@@ -33,6 +33,7 @@ static struct spdk_thread *g_fini_thread = NULL;
 void
 spdk_add_subsystem(struct spdk_subsystem *subsystem)
 {
+	subsystem->enabled = true;
 	TAILQ_INSERT_TAIL(&g_subsystems, subsystem, tailq);
 }
 
@@ -161,7 +162,7 @@ spdk_subsystem_init_next(int rc)
 		return;
 	}
 
-	if (g_next_subsystem->init) {
+	if (g_next_subsystem->init && g_next_subsystem->enabled) {
 		g_next_subsystem->init();
 	} else {
 		spdk_subsystem_init_next(0);
@@ -219,7 +220,7 @@ subsystem_fini_next(void *arg1)
 	}
 
 	while (g_next_subsystem) {
-		if (g_next_subsystem->fini) {
+		if (g_next_subsystem->fini && g_next_subsystem->enabled) {
 			g_next_subsystem->fini();
 			return;
 		}
@@ -254,7 +255,14 @@ spdk_subsystem_fini(spdk_msg_fn cb_fn, void *cb_arg)
 void
 subsystem_config_json(struct spdk_json_write_ctx *w, struct spdk_subsystem *subsystem)
 {
-	if (subsystem && subsystem->write_config_json) {
+	if (subsystem && !subsystem->enabled) {
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string(w, "method", "framework_disable_subsystem");
+		spdk_json_write_named_object_begin(w, "params");
+		spdk_json_write_named_string(w, "name", subsystem->name);
+		spdk_json_write_object_end(w);
+		spdk_json_write_object_end(w);
+	} else if (subsystem && subsystem->write_config_json) {
 		subsystem->write_config_json(w);
 	} else {
 		spdk_json_write_null(w);

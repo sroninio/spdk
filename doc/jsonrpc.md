@@ -445,6 +445,8 @@ Example response:
     "bdev_get_iostat",
     "framework_get_config",
     "framework_get_subsystems",
+    "framework_disable_subsystem",
+    "framework_enable_subsystem",
     "framework_monitor_context_switch",
     "spdk_kill_instance",
     "accel_set_options",
@@ -594,6 +596,85 @@ Example response:
       ]
     }
   ]
+}
+~~~
+
+### framework_disable_subsystem {#rpc_framework_disable_subsystem}
+
+Disable an entire subsystem at start up time. The subsystem will not load or consume resources.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | SPDK subsystem name
+
+#### Response
+
+Completion status of the operation is returned as a boolean.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "framework_disable_subsystem",
+  "id": 1,
+  "params": {
+    "name": "iscsi"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### framework_enable_subsystem {#rpc_framework_enable_subsystem}
+
+Enable an entire subsystem at start up time. Subsystems are enabled by default, so this
+RPC is only necessary if a subsystem was previously disabled using `framework_disable_subsystem`.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | SPDK subsystem name
+
+#### Response
+
+Completion status of the operation is returned as a boolean.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "framework_enable_subsystem",
+  "id": 1,
+  "params": {
+    "name": "iscsi"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
 }
 ~~~
 
