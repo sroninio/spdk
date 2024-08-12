@@ -53,7 +53,7 @@ endif
 # ones after that.
 DPDK_FRAMEWORK=n
 
-ifeq ($(findstring y,$(CONFIG_CRYPTO_MLX5)$(CONFIG_VBDEV_COMPRESS_MLX5)),y)
+ifeq ($(findstring y,$(CONFIG_VBDEV_COMPRESS_MLX5)),y)
 DPDK_LIB_LIST += rte_common_mlx5
 # Introduced in DPDK 21.08
 ifneq (, $(wildcard $(DPDK_LIB_DIR)/librte_bus_auxiliary.*))
@@ -70,12 +70,6 @@ else
 ifneq (, $(wildcard $(DPDK_LIB_DIR)/librte_crypto_aesni_mb.*))
 # PMD name for DPDK 21.08 and earlier
 DPDK_LIB_LIST += rte_crypto_aesni_mb
-endif
-endif
-
-ifeq ($(CONFIG_CRYPTO_MLX5),y)
-ifneq (, $(wildcard $(DPDK_LIB_DIR)/librte_crypto_mlx5.*))
-DPDK_LIB_LIST += rte_crypto_mlx5
 endif
 endif
 endif
@@ -148,12 +142,6 @@ endif
 
 ifeq ($(CONFIG_HAVE_LIBARCHIVE),y)
 DPDK_PRIVATE_LINKER_ARGS += -larchive
-endif
-
-ifeq ($(CONFIG_CRYPTO),y)
-ifeq ($(CONFIG_CRYPTO_MLX5),y)
-DPDK_PRIVATE_LINKER_ARGS += -lmlx5 -libverbs
-endif
 endif
 
 ifeq ($(CONFIG_VBDEV_COMPRESS),y)
