@@ -404,7 +404,6 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
     struct READDIRPLUS3res * res = data;
     dirlistplus3 list_head = res->READDIRPLUS3res_u.resok.reply;
     entryplus3* curr_entry = list_head.entries;
-    int counter = 0;
     int rc = 0;
     while(curr_entry!=NULL){
         my_insert(vfsdev->map, generate_new_key(), &(curr_entry->name_handle.post_op_fh3_u.handle));
@@ -529,7 +528,7 @@ static fsdev_op_handler_func handlers[] = {
     [SPDK_FSDEV_OP_REMOVEXATTR] =  nimp,
     [SPDK_FSDEV_OP_FLUSH] =  nimp,
     [SPDK_FSDEV_OP_OPENDIR] =  lo_opendir,
-    [SPDK_FSDEV_OP_READDIR] =  lo_read,
+    [SPDK_FSDEV_OP_READDIR] =  lo_readdir,
     [SPDK_FSDEV_OP_RELEASEDIR] = nimp,
     [SPDK_FSDEV_OP_FSYNCDIR] = nimp,
     [SPDK_FSDEV_OP_FLOCK] = nimp,
