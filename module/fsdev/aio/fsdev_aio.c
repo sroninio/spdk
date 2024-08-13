@@ -2266,7 +2266,7 @@ fsdev_aio_destruct(void *ctx)
 
 typedef int (*fsdev_op_handler_func)(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io);
 
-static fsdev_op_handler_func handlers[] = {
+static fsdev_op_handler_func handlers[__SPDK_FSDEV_IO_LAST] = {
 	[SPDK_FSDEV_IO_LOOKUP] = lo_lookup,
 	[SPDK_FSDEV_IO_FORGET] = lo_forget,
 	[SPDK_FSDEV_IO_GETATTR] = lo_getattr,
@@ -2312,6 +2312,12 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 
 	assert(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
 
+	if (!handlers[type]) {
+		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n",
+			      (int)type);
+		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
+		return;
+	}
 	status = handlers[type](ch, fsdev_io);
 	if (status != IO_STATUS_ASYNC) {
 		spdk_fsdev_io_complete(fsdev_io, status);
