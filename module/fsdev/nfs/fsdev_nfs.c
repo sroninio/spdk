@@ -377,6 +377,89 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     return OP_STATUS_ASYNC;
 }
 
+static int 
+lo_opendir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io){
+    fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
+	return 0;
+}
+
+
+static void
+lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data){
+    struct spdk_fsdev_io *fsdev_io = private_data;
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("READDIR failed with error [%s]\n", (char*)data);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("READDIR failed \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+
+    struct READDIRPLUS3res * res = data;
+    dirlistplus3 list_head = res->READDIRPLUS3res_u.resok.reply;
+    entryplus3* curr_entry = list_head.entries;
+    int counter = 0;
+    int rc = 0;
+    while(curr_entry!=NULL){
+        my_insert(vfsdev->map, generate_new_key(), &(curr_entry->name_handle.post_op_fh3_u.handle));
+        
+        fsdev_io->u_out.readdir.name = curr_entry->name;
+        fsdev_io->u_out.readdir.offset = curr_entry->cookie;
+        rc = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+        curr_entry = curr_entry->nextentry;
+    }
+
+    spdk_fsdev_io_complete(fsdev_io, rc);
+}
+
+static int
+lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io){
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+    if(fsdev_io->u_in.readdir.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.readdir.fobject){
+        printf("Failed in readdir because fh != fobj when should be equal\n");
+        return -EINVAL;
+    }
+
+    unsigned long key = (unsigned long)fsdev_io->u_in.readdir.fobject;
+    struct nfs_fh3 *nfsfh = my_get(vfsdev->map, key);
+
+    
+    /* we are only supporting READDIRPLUS */
+    //if(fsdev_io->u_in.readdir != readdir_plus){
+    //  printf("we are only supporting readdir plus \n");
+    //  return -EINVAL;
+    //} 
+    
+    uint64_t offset = fsdev_io->u_in.readdir.offset;
+    if(offset != 0){
+        printf("Failed - big directories are not supported\n");
+        return -EINVAL;
+    }
+
+    struct READDIRPLUS3args args;
+    args.dir = *nfsfh;
+    args.cookie = offset;
+    // args.cookieverf = NULL;
+    args.dircount = 1000000;
+    args.maxcount = 1000000;
+
+    if(rpc_nfs3_readdirplus_task(nfs_get_rpc_context(vch->nfs), lo_readdir_cb, &args, fsdev_io)==NULL){
+        printf("ERROR in calling readdir\n");
+        return -EINVAL;
+    }
+
+    return OP_STATUS_ASYNC;
+}
+
+
 
 static int
 fsdev_nfs_initialize(void)
@@ -445,8 +528,8 @@ static fsdev_op_handler_func handlers[] = {
     [SPDK_FSDEV_OP_LISTXATTR] = nimp,
     [SPDK_FSDEV_OP_REMOVEXATTR] =  nimp,
     [SPDK_FSDEV_OP_FLUSH] =  nimp,
-    [SPDK_FSDEV_OP_OPENDIR] =  nimp,
-    [SPDK_FSDEV_OP_READDIR] =  nimp,
+    [SPDK_FSDEV_OP_OPENDIR] =  lo_opendir,
+    [SPDK_FSDEV_OP_READDIR] =  lo_read,
     [SPDK_FSDEV_OP_RELEASEDIR] = nimp,
     [SPDK_FSDEV_OP_FSYNCDIR] = nimp,
     [SPDK_FSDEV_OP_FLOCK] = nimp,
