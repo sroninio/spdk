@@ -22,8 +22,8 @@
 
 /* TODO: values, see https://libfuse.github.io/doxygen/structfuse__conn__info.html */
 #define DEFAULT_TIME_GRAN 1
-#define DEFAULT_MAX_BACKGROUND 1024
-#define DEFAULT_CONGESTION_THRESHOLD 1024
+#define DEFAULT_MAX_BACKGROUND 0xffff
+#define DEFAULT_CONGESTION_THRESHOLD 0xffff
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define OFFSET_MAX 0x7fffffffffffffffLL
 
