@@ -96,16 +96,6 @@ struct spdk_fsdev_fn_table {
 	struct spdk_io_channel *(*get_io_channel)(void *ctx);
 
 	/**
-	 * Negotiate fsdev device options.
-	 *
-	 * The function validates the desired options and adjust them to reflect it own capabilities.
-	 * The module can only reduce the requested cababilities.
-	 *
-	 * \return 0 on success or Fsdev specific negative error code.
-	 */
-	int (*negotiate_opts)(void *ctx, struct spdk_fsdev_open_opts *opts);
-
-	/**
 	 * Output fsdev-specific RPC configuration to a JSON stream. Optional - may be NULL.
 	 *
 	 * The JSON write context will be initialized with an open object, so the fsdev
@@ -179,9 +169,6 @@ struct spdk_fsdev {
 	/** function table for all ops */
 	const struct spdk_fsdev_fn_table *fn_table;
 
-	/** Negotiable device ops */
-	struct spdk_fsdev_open_opts opts;
-
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.
 	 */
@@ -212,6 +199,8 @@ struct spdk_fsdev {
 };
 
 enum spdk_fsdev_io_type {
+	SPDK_FSDEV_IO_MOUNT,
+	SPDK_FSDEV_IO_UMOUNT,
 	SPDK_FSDEV_IO_LOOKUP,
 	SPDK_FSDEV_IO_FORGET,
 	SPDK_FSDEV_IO_GETATTR,
@@ -265,6 +254,9 @@ struct spdk_fsdev_io {
 	struct iovec iov;
 
 	union {
+		struct {
+			struct spdk_fsdev_mount_opts opts;
+		} mount;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
 			char *name;
@@ -486,6 +478,10 @@ struct spdk_fsdev_io {
 	} u_in;
 
 	union {
+		struct {
+			struct spdk_fsdev_mount_opts opts;
+			struct spdk_fsdev_file_object *root_fobject;
+		} mount;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_attr attr;

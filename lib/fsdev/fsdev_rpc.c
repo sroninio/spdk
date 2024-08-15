@@ -170,7 +170,7 @@ rpc_fsdev_get_fsdevs(struct spdk_jsonrpc_request *request,
 		struct spdk_fsdev_desc *fsdev_desc;
 		int rc;
 
-		rc = spdk_fsdev_open(req.name, _rpc_fsdev_event_cb, NULL, NULL, &fsdev_desc);
+		rc = spdk_fsdev_open(req.name, _rpc_fsdev_event_cb, NULL, &fsdev_desc);
 		if (rc) {
 			SPDK_ERRLOG("spdk_fsdev_open failed for '%s': rc=%d\n", req.name, rc);
 			spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
