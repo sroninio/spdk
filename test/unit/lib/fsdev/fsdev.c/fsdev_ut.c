@@ -563,6 +563,11 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_int(fsdev_io->u_in.lseek.offset);
 		ut_call_record_param_int(fsdev_io->u_in.lseek.whence);
 		break;
+	case SPDK_FSDEV_IO_POLL:
+		ut_call_record_param_ptr(fsdev_io->u_in.poll.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.poll.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.poll.events);
+		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
@@ -2259,6 +2264,37 @@ ut_fsdev_test_lseek(void)
 }
 
 static void
+ut_fsdev_poll_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		     uint32_t reevents)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_poll_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_poll(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+			       SPDK_FSDEV_POLLIN, ut_fsdev_poll_cpl_cb, status);
+}
+
+static void
+ut_fsdev_poll_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == SPDK_FSDEV_POLLIN);
+}
+
+static void
+ut_fsdev_test_poll(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_POLL, 0, 3, ut_fsdev_poll_execute_op_clb,
+			 ut_fsdev_poll_check_clb);
+}
+
+static void
 ut_fsdev_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 		      uint32_t request, void *argp)
 {
@@ -2513,6 +2549,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_syncfs);
 	CU_ADD_TEST(suite, ut_fsdev_test_access);
 	CU_ADD_TEST(suite, ut_fsdev_test_lseek);
+	CU_ADD_TEST(suite, ut_fsdev_test_poll);
 	CU_ADD_TEST(suite, ut_fsdev_test_ioctl);
 
 	allocate_cores(1);

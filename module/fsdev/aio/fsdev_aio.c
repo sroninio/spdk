@@ -653,6 +653,122 @@ lo_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+static short
+fsdev_events_to_posix(uint32_t spdk_events)
+{
+	short result = 0;
+
+	if (spdk_events & SPDK_FSDEV_POLLIN) {
+		result |= POLLIN;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLOUT) {
+		result |= POLLOUT;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLPRI) {
+		result |= POLLPRI;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLERR) {
+		result |= POLLERR;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLHUP) {
+		result |= POLLHUP;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLNVAL) {
+		result |= POLLNVAL;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLRDNORM) {
+		result |= POLLRDNORM;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLRDBAND) {
+		result |= POLLRDBAND;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLWRNORM) {
+		result |= POLLWRNORM;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLWRBAND) {
+		result |= POLLWRBAND;
+	}
+
+	return result;
+}
+
+static uint32_t
+posix_events_to_fsdev(short events)
+{
+	uint32_t result = 0;
+
+	if (events & POLLIN) {
+		result |= SPDK_FSDEV_POLLIN;
+	}
+	if (events & POLLOUT) {
+		result |= SPDK_FSDEV_POLLOUT;
+	}
+	if (events & POLLPRI) {
+		result |= SPDK_FSDEV_POLLPRI;
+	}
+	if (events & POLLERR) {
+		result |= SPDK_FSDEV_POLLERR;
+	}
+	if (events & POLLHUP) {
+		result |= SPDK_FSDEV_POLLHUP;
+	}
+	if (events & POLLNVAL) {
+		result |= SPDK_FSDEV_POLLNVAL;
+	}
+	if (events & POLLRDNORM) {
+		result |= SPDK_FSDEV_POLLRDNORM;
+	}
+	if (events & POLLRDBAND) {
+		result |= SPDK_FSDEV_POLLRDBAND;
+	}
+	if (events & POLLWRNORM) {
+		result |= SPDK_FSDEV_POLLWRNORM;
+	}
+	if (events & POLLWRBAND) {
+		result |= SPDK_FSDEV_POLLWRBAND;
+	}
+
+	return result;
+}
+
+
+static int
+lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	int res;
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.lseek.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.lseek.fobject;
+	short posix_events = fsdev_events_to_posix(fsdev_io->u_in.poll.events);
+	struct pollfd fds;
+
+	fds.fd = fhandle->fd;
+	fds.events = posix_events;
+	fds.revents = 0;
+
+	/* Zero timeout - return immediatelly even if no events available. */
+	res = poll(&fds, 1, 0);
+	fsdev_io->u_out.poll.revents = posix_events_to_fsdev(fds.revents);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Failed poll for " FOBJECT_FMT " (err=%d)\n",
+			    FOBJECT_ARGS(fobject), res);
+		return res;
+	}
+
+	/*
+	 * The fsdev API expects -EAGAIN for no-events case and 0 for
+	 * the case any events available.
+	 */
+	if (res == 0) {
+		res = -EAGAIN;
+	} else if (res > 0) {
+		res = 0;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "POLL succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	return res;
+}
+
 static int
 lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2297,6 +2413,7 @@ static fsdev_op_handler_func handlers[__SPDK_FSDEV_IO_LAST] = {
 	[SPDK_FSDEV_IO_COPY_FILE_RANGE] = lo_copy_file_range,
 	[SPDK_FSDEV_IO_SYNCFS] = lo_syncfs,
 	[SPDK_FSDEV_IO_LSEEK] = lo_lseek,
+	[SPDK_FSDEV_IO_POLL] = lo_poll,
 	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
 };
 

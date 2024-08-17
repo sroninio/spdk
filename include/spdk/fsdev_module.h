@@ -247,6 +247,7 @@ enum spdk_fsdev_io_type {
 	SPDK_FSDEV_IO_SYNCFS,
 	SPDK_FSDEV_IO_ACCESS,
 	SPDK_FSDEV_IO_LSEEK,
+	SPDK_FSDEV_IO_POLL,
 	SPDK_FSDEV_IO_IOCTL,
 	__SPDK_FSDEV_IO_LAST
 };
@@ -460,6 +461,11 @@ struct spdk_fsdev_io {
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t events;
+		} poll;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
 			uint32_t request;
 			void *argp;
 		} ioctl;
@@ -541,6 +547,9 @@ struct spdk_fsdev_io {
 			off_t offset;
 			enum spdk_fsdev_seek_whence whence;
 		} lseek;
+		struct {
+			uint32_t revents;
+		} poll;
 		struct {
 			uint32_t request;
 			void *argp;

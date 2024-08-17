@@ -603,6 +603,79 @@ int spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     enum spdk_fsdev_seek_whence whence, spdk_fsdev_lseek_cpl_cb cb_fn,
 		     void *cb_arg);
 
+/* Poll operation type. */
+enum spdk_fsdev_poll_event_type {
+	/* Indicates that there is data to read (regular data). */
+	SPDK_FSDEV_POLLIN     = 0x0001,
+
+	/* Indicates that normal data (not out-of-band) can be read. */
+	SPDK_FSDEV_POLLRDNORM = 0x0040,
+
+	/* Indicates that priority data (out-of-band) can be read. */
+	SPDK_FSDEV_POLLRDBAND = 0x0080,
+
+	/* Indicates that high-priority data (such as out-of-band data) is available
+	 * to read. */
+	SPDK_FSDEV_POLLPRI    = 0x0002,
+
+	/* Indicates that writing is possible without blocking. */
+	SPDK_FSDEV_POLLOUT    = 0x0004,
+
+	/* Equivalent to SPDK_FSDEV_POLLOUT; indicates that normal data can be written. */
+	SPDK_FSDEV_POLLWRNORM = 0x0100,
+
+	/* Indicates that priority data can be written. */
+	SPDK_FSDEV_POLLWRBAND = 0x0200,
+
+	/* Indicates that an error has occurred on the file descriptor (only
+	 * returned in revents). */
+	SPDK_FSDEV_POLLERR    = 0x0008,
+
+	/* Indicates a hang-up on the file descriptor, such as a disconnected
+	 * device (only returned in revents). */
+	SPDK_FSDEV_POLLHUP    = 0x0010,
+
+	/* Indicates that the file descriptor is invalid (only returned in revents). */
+	SPDK_FSDEV_POLLNVAL   = 0x0020
+};
+
+/**
+ * The poll operation callback. Delivers mask of the event type available.
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
+ * \param ch I/O channel.
+ * \param status Operation status, 0 on success or error code otherwise.
+ * \param revents Operation types available mask. See spdk_fsdev_poll_event_type.
+ *
+ * \returns the following:
+ * -EAGAIN - no events available.
+ * 0       - requested events available.
+ * < 0     - any other errors.
+ */
+typedef void (spdk_fsdev_poll_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
+				      int status, uint32_t revents);
+
+/**
+ * Check for some event on a file.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ * \param unique Unique I/O id.
+ * \param fobject File object.
+ * \param fhandle File handle.
+ * \param events Events we are interested in. See spdk_fsdev_poll_event_type.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ */
+int spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		    uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		    struct spdk_fsdev_file_handle *fhandle, uint32_t events,
+		    spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg);
+
 /**
  * Read symbolic link operation completion callback
  *

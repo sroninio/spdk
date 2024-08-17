@@ -159,6 +159,9 @@ struct fuse_io {
 	struct fuse_in_header hdr;
 	bool in_hdr_with_data;
 
+	/* Link to the in-progress poll requets list. */
+	TAILQ_ENTRY(fuse_io) poll_link;
+
 	union {
 		struct {
 			struct spdk_thread *thread;
@@ -177,6 +180,14 @@ struct fuse_io {
 			uint32_t to_forget;
 			int status;
 		} batch_forget;
+
+		struct {
+			/* File handle of the poll event operation. */
+			uint64_t fhandle;
+
+			/* Requested event mask for poll operation. */
+			uint32_t events;
+		} poll;
 
 		struct {
 			int status;
@@ -235,6 +246,12 @@ struct spdk_fuse_dispatcher {
 
 struct spdk_fuse_dispatcher_channel {
 	struct spdk_io_channel *fsdev_io_ch;
+
+	/* Poller that implements poll operation "waiting". */
+	struct spdk_poller *poll_event_poller;
+
+	/* List of in-progress poll requets IOs. */
+	TAILQ_HEAD(, fuse_io) poll_request_list;
 };
 
 #define __disp_to_io_dev(disp)	(((char *)disp) + 1)
@@ -738,6 +755,98 @@ fuse_dispatcher_io_complete_lseek(struct fuse_io *fuse_io, off_t offset)
 	fuse_dispatcher_io_copy_and_complete(fuse_io, &arg, size, 0);
 }
 
+static uint32_t
+fsdev_events_to_fuse(uint32_t spdk_events)
+{
+	uint32_t result = 0;
+
+	if (spdk_events & SPDK_FSDEV_POLLIN) {
+		result |= POLLIN;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLOUT) {
+		result |= POLLOUT;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLPRI) {
+		result |= POLLPRI;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLERR) {
+		result |= POLLERR;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLHUP) {
+		result |= POLLHUP;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLNVAL) {
+		result |= POLLNVAL;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLRDNORM) {
+		result |= POLLRDNORM;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLRDBAND) {
+		result |= POLLRDBAND;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLWRNORM) {
+		result |= POLLWRNORM;
+	}
+	if (spdk_events & SPDK_FSDEV_POLLWRBAND) {
+		result |= POLLWRBAND;
+	}
+
+	return result;
+}
+
+static uint32_t
+fuse_events_to_fsdev(uint32_t events)
+{
+	uint32_t result = 0;
+
+	if (events & POLLIN) {
+		result |= SPDK_FSDEV_POLLIN;
+	}
+	if (events & POLLOUT) {
+		result |= SPDK_FSDEV_POLLOUT;
+	}
+	if (events & POLLPRI) {
+		result |= SPDK_FSDEV_POLLPRI;
+	}
+	if (events & POLLERR) {
+		result |= SPDK_FSDEV_POLLERR;
+	}
+	if (events & POLLHUP) {
+		result |= SPDK_FSDEV_POLLHUP;
+	}
+	if (events & POLLNVAL) {
+		result |= SPDK_FSDEV_POLLNVAL;
+	}
+	if (events & POLLRDNORM) {
+		result |= SPDK_FSDEV_POLLRDNORM;
+	}
+	if (events & POLLRDBAND) {
+		result |= SPDK_FSDEV_POLLRDBAND;
+	}
+	if (events & POLLWRNORM) {
+		result |= SPDK_FSDEV_POLLWRNORM;
+	}
+	if (events & POLLWRBAND) {
+		result |= SPDK_FSDEV_POLLWRBAND;
+	}
+
+	return result;
+}
+
+static void
+fuse_dispatcher_io_complete_poll(struct fuse_io *fuse_io, uint32_t revents)
+{
+	struct fuse_poll_out *arg = _fsdev_io_out_arg_get_buf(fuse_io, sizeof(*arg));
+
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_poll_out\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+	arg->revents = fsdev_io_h2d_u32(fuse_io, fsdev_events_to_fuse(revents));
+
+	fuse_dispatcher_io_complete_ok(fuse_io, sizeof(*arg));
+}
 
 /* `buf` is allowed to be empty so that the proper size may be
    allocated by the caller */
@@ -2524,11 +2633,86 @@ do_ioctl(struct fuse_io *fuse_io)
 	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
 }
 
+static void do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
+			    int status, uint32_t revents);
+
+static int
+fuse_poll_poller_cb(void *arg)
+{
+	int err;
+	struct spdk_fuse_dispatcher_channel *ch = arg;
+	struct fuse_io *fuse_io, *tmp_fuse_io;
+	bool was_empty = TAILQ_EMPTY(&ch->poll_request_list);
+
+	TAILQ_FOREACH_SAFE(fuse_io, &ch->poll_request_list, poll_link, tmp_fuse_io) {
+		SPDK_DEBUGLOG(fuse_dispatcher, "Removing fuse_io=%p from poller list on ch=%p and "
+			      "requesting fsdev poll.\n", fuse_io, ch);
+		TAILQ_REMOVE(&ch->poll_request_list, fuse_io, poll_link);
+
+		err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+				      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
+				      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
+		if (err) {
+			fuse_dispatcher_io_complete_err(fuse_io, err);
+		}
+	}
+
+	if (TAILQ_EMPTY(&ch->poll_request_list)) {
+		spdk_poller_pause(ch->poll_event_poller);
+	}
+
+	return was_empty ? SPDK_POLLER_IDLE : SPDK_POLLER_BUSY;
+}
+
+static void
+do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t revents)
+{
+	struct fuse_io *fuse_io = cb_arg;
+	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
+	bool was_empty = TAILQ_EMPTY(&disp_ch->poll_request_list);
+
+	if (status == 0) {
+		/* Events available, completing the operation. */
+		fuse_dispatcher_io_complete_poll(fuse_io, revents);
+	} else if (status == -EAGAIN) {
+		/*
+		 * No events available - return fuse_io into the poller
+		 * processing list.
+		 */
+		SPDK_DEBUGLOG(fuse_dispatcher, "Adding fuse_io=%p to poller list on ch=%p.\n",
+			      fuse_io, disp_ch);
+		TAILQ_INSERT_TAIL(&disp_ch->poll_request_list, fuse_io, poll_link);
+		if (was_empty) {
+			spdk_poller_resume(disp_ch->poll_event_poller);
+		}
+	} else {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+	}
+}
+
 static void
 do_poll(struct fuse_io *fuse_io)
 {
-	SPDK_ERRLOG("POLL is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	int err;
+	struct fuse_poll_in *arg;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get fuse_poll_in\n");
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	fuse_io->u.poll.fhandle = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	fuse_io->u.poll.events = fuse_events_to_fsdev(fsdev_io_d2h_u32(fuse_io, arg->events));
+
+	err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+			      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
+			      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
+
+	if (err) {
+		fuse_dispatcher_io_complete_err(fuse_io, err);
+	}
 }
 
 static void
@@ -2791,6 +2975,7 @@ do_lseek(struct fuse_io *fuse_io)
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
 }
+
 static void
 do_copy_file_range_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t data_size)
 {
@@ -3006,6 +3191,12 @@ fuse_dispatcher_channel_create(void *io_device, void *ctx_buf)
 		ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
 	}
 
+	TAILQ_INIT(&ch->poll_request_list);
+
+	SPDK_DEBUGLOG(fuse_dispatcher, "Registering poll operation poller on ch=%p.\n", ch);
+	ch->poll_event_poller = SPDK_POLLER_REGISTER(fuse_poll_poller_cb, ch, 0);
+	spdk_poller_pause(ch->poll_event_poller);
+
 	return 0;
 }
 
@@ -3016,6 +3207,9 @@ fuse_dispatcher_channel_destroy(void *io_device, void *ctx_buf)
 	struct spdk_fuse_dispatcher_channel	*ch = ctx_buf;
 
 	UNUSED(disp);
+
+	SPDK_DEBUGLOG(fuse_dispatcher, "Unregistering poll operation poller on ch=%p.\n", ch);
+	spdk_poller_unregister(&ch->poll_event_poller);
 
 	if (ch->fsdev_io_ch) {
 		assert(disp->desc);
