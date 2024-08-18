@@ -91,14 +91,12 @@ struct spdk_fsdev_file_object {
 	TAILQ_HEAD(, spdk_fsdev_file_object) leafs;
 	TAILQ_HEAD(, spdk_fsdev_file_handle) handles;
 	struct spdk_spinlock lock;
-	char name[];
 };
 
 struct aio_fsdev {
 	struct spdk_fsdev fsdev;
 	char *root_path;
 	int proc_self_fd;
-	pthread_mutex_t mutex;
 	struct spdk_fsdev_file_object *root;
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	bool xattr_enabled;
@@ -2258,8 +2256,6 @@ fsdev_aio_destruct(void *ctx)
 	fsdev_free_leafs(vfsdev->root, true);
 	vfsdev->root = NULL;
 
-	pthread_mutex_destroy(&vfsdev->mutex);
-
 	fsdev_aio_free(vfsdev);
 	return 0;
 }
@@ -2677,8 +2673,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
 	vfsdev->fsdev.module = &aio_fsdev_module;
-
-	pthread_mutex_init(&vfsdev->mutex, NULL);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
