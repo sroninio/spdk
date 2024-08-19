@@ -37,7 +37,7 @@ build-job:
     - cd ../fio-fio-3.35
     - ./configure --prefix=/usr/local
     - cd $CI_PROJECT_DIR
-    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --enable-debug
+    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --enable-debug --enable-werror
     - make -j4
     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
   artifacts:
