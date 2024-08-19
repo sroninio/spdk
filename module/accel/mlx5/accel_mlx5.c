@@ -3416,8 +3416,6 @@ accel_mlx5_execute_sequence(struct spdk_io_channel *ch, struct spdk_accel_sequen
 static inline void
 accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5_qp *qp)
 {
-	struct spdk_accel_task *next_task;
-
 	if (task->qp != qp) {
 		return;
 	}
