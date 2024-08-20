@@ -2663,12 +2663,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-	if (opts->xattr_enabled) {
-		SPDK_ERRLOG("Extended attributes can only be enabled in Linux\n");
-		fsdev_aio_free(vfsdev);
-		return rc;
-	}
-
 	vfsdev->xattr_enabled = opts->xattr_enabled;
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
