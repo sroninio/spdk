@@ -10,6 +10,13 @@
 #include "spdk/thread.h"
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
+#include "lut.h"
+
+#define FILE_PTR_LUT_INIT_SIZE 1000
+#define FILE_PTR_LUT_BITS 63
+#define FILE_PTR_LUT_BASE (((uint64_t)1) << FILE_PTR_LUT_BITS)
+#define FILE_PTR_LUT_MAX_SIZE (UINT64_MAX - FILE_PTR_LUT_BASE)
+#define FILE_PTR_LUT_GROWTH_STEP 1000
 
 #define IO_STATUS_ASYNC INT_MIN
 
@@ -65,7 +72,18 @@ struct lo_key {
 	dev_t dev;
 };
 
+struct aio_fsdev_fhdr {
+	uint64_t is_fobject : 1;
+	uint64_t lut_key : 63;
+};
+
+/* Unfortunately, uint64_t lut_key : SPDK_LUT_MAX_KEY_BITS keeps being re-formatted by astyle */
+SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
+/* The sizeof(struct aio_fsdev_fhdr) exactly one uint64_t */
+SPDK_STATIC_ASSERT(sizeof(struct aio_fsdev_fhdr) == 8, "Incorrect size");
+
 struct aio_fsdev_file_handle {
+	struct aio_fsdev_fhdr hdr;
 	int fd;
 	struct {
 		DIR *dp;
@@ -76,9 +94,12 @@ struct aio_fsdev_file_handle {
 	TAILQ_ENTRY(aio_fsdev_file_handle) link;
 };
 
+struct aio_fsdev;
+
 #define FOBJECT_FMT "ino=%" PRIu64 " dev=%" PRIu64
 #define FOBJECT_ARGS(fo) ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
 struct aio_fsdev_file_object {
+	struct aio_fsdev_fhdr hdr;
 	uint32_t is_symlink : 1;
 	uint32_t is_dir : 1;
 	uint32_t reserved : 30;
@@ -91,6 +112,7 @@ struct aio_fsdev_file_object {
 	TAILQ_HEAD(, aio_fsdev_file_object) leafs;
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
 	struct spdk_spinlock lock;
+	struct aio_fsdev *vfsdev;
 };
 
 struct aio_fsdev {
@@ -99,6 +121,7 @@ struct aio_fsdev {
 	int proc_self_fd;
 	struct aio_fsdev_file_object *root;
 	TAILQ_ENTRY(aio_fsdev) tailq;
+	struct spdk_lut *lut;
 	bool xattr_enabled;
 	bool skip_rw_enabled;
 };
@@ -137,27 +160,71 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 }
 
 static inline struct aio_fsdev_file_object *
-fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *fobject)
+fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_fobject)
 {
-	return (struct aio_fsdev_file_object *)fobject;
+	uint64_t n = (uint64_t)(uintptr_t)_fobject;
+	struct aio_fsdev_file_object *fobject;
+
+	if (n < FILE_PTR_LUT_BASE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject (< 0x%" PRIx64 ")\n", n, FILE_PTR_LUT_BASE);
+		return NULL;
+	}
+
+	fobject = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
+	if (fobject == SPDK_LUT_INVALID_VALUE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject\n", n);
+		return NULL;
+	}
+
+	assert(fobject); /* There shouldn't be NULL fobject in the LUT */
+
+	if (!fobject->hdr.is_fobject) {
+		/* Error: the key rather belongs to a fhandle */
+		SPDK_WARNLOG("0x%" PRIx64 " is not a fobject\n", n);
+		return NULL;
+	}
+
+	return fobject;
 }
 
 static inline struct spdk_fsdev_file_object *
 fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
-	return (struct spdk_fsdev_file_object *)fobject;
+	return (struct spdk_fsdev_file_object *)(uintptr_t)(fobject->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
 
 static inline struct aio_fsdev_file_handle *
-fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *fhandle)
+fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_fhandle)
 {
-	return (struct aio_fsdev_file_handle *)fhandle;
+	uint64_t n = (uint64_t)(uintptr_t)_fhandle;
+	struct aio_fsdev_file_handle *fhandle;
+
+	if (n < FILE_PTR_LUT_BASE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle (< 0x%" PRIx64 ")\n", n, FILE_PTR_LUT_BASE);
+		return NULL;
+	}
+
+	fhandle = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
+	if (fhandle == SPDK_LUT_INVALID_VALUE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle\n", n);
+		return NULL;
+	}
+
+	assert(fhandle); /* There shouldn't be NULL fhandle in the LUT */
+
+	if (fhandle->hdr.is_fobject) {
+		/* Error: the key rather belongs to a fobject */
+		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
+		return NULL;
+	}
+
+	return fhandle;
 }
 
 static inline struct spdk_fsdev_file_handle *
 fsdev_aio_get_spdk_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
 {
-	return (struct spdk_fsdev_file_handle *)fhandle;
+	return (struct spdk_fsdev_file_handle *)(uintptr_t)(fhandle->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
 
 static inline bool
@@ -226,6 +293,7 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 		spdk_spin_destroy(&fobject->lock);
 		close(fobject->fd);
 		free(fobject->fd_str);
+		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
 		free(fobject);
 	}
 
@@ -241,10 +309,11 @@ file_object_ref(struct aio_fsdev_file_object *fobject)
 }
 
 static struct aio_fsdev_file_object *
-file_object_create_unsafe(struct aio_fsdev_file_object *parent_fobject, int fd, ino_t ino,
-			  dev_t dev, mode_t mode)
+file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobject,
+			  int fd, ino_t ino, dev_t dev, mode_t mode)
 {
 	struct aio_fsdev_file_object *fobject;
+	uint64_t lut_key;
 
 	fobject = calloc(1, sizeof(*fobject));
 	if (!fobject) {
@@ -259,12 +328,24 @@ file_object_create_unsafe(struct aio_fsdev_file_object *parent_fobject, int fd, 
 		return NULL;
 	}
 
+	lut_key = spdk_lut_insert(vfsdev->lut, fobject);
+	if (lut_key == SPDK_LUT_INVALID_KEY) {
+		SPDK_ERRLOG("Cannot insert fobject into lookup table\n");
+		free(fobject->fd_str);
+		free(fobject);
+		return NULL;
+	}
+
+	fobject->hdr.is_fobject = true;
+	fobject->hdr.lut_key = lut_key;
+
 	fobject->fd = fd;
 	fobject->key.ino = ino;
 	fobject->key.dev = dev;
 	fobject->refcount = 1;
 	fobject->is_symlink = S_ISLNK(mode) ? 1 : 0;
 	fobject->is_dir = S_ISDIR(mode) ? 1 : 0;
+	fobject->vfsdev = vfsdev;
 
 	TAILQ_INIT(&fobject->handles);
 	TAILQ_INIT(&fobject->leafs);
@@ -283,6 +364,8 @@ static struct aio_fsdev_file_handle *
 file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 {
 	struct aio_fsdev_file_handle *fhandle;
+	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	uint64_t lut_key;
 
 	fhandle = calloc(1, sizeof(*fhandle));
 	if (!fhandle) {
@@ -290,6 +373,14 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 		return NULL;
 	}
 
+	lut_key = spdk_lut_insert(vfsdev->lut, fhandle);
+	if (lut_key == SPDK_LUT_INVALID_KEY) {
+		SPDK_ERRLOG("Cannot insert fhandle into lookup table\n");
+		free(fhandle);
+		return NULL;
+	}
+
+	fhandle->hdr.lut_key = lut_key;
 	fhandle->fobject = fobject;
 	fhandle->fd = fd;
 
@@ -305,6 +396,7 @@ static void
 file_handle_delete(struct aio_fsdev_file_handle *fhandle)
 {
 	struct aio_fsdev_file_object *fobject = fhandle->fobject;
+	struct aio_fsdev *vfsdev = fobject->vfsdev;
 
 	spdk_spin_lock(&fobject->lock);
 	fobject->refcount--;
@@ -315,6 +407,7 @@ file_handle_delete(struct aio_fsdev_file_handle *fhandle)
 		closedir(fhandle->dir.dp);
 	}
 
+	spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
 	close(fhandle->fd);
 	free(fhandle);
 }
@@ -526,7 +619,8 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 		close(newfd);
 		file_object_ref(fobject); /* reference by a lo_do_lookup caller */
 	} else {
-		fobject = file_object_create_unsafe(parent_fobject, newfd, stat.st_ino, stat.st_dev, stat.st_mode);
+		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd, stat.st_ino, stat.st_dev,
+						    stat.st_mode);
 	}
 	spdk_spin_unlock(&parent_fobject->lock);
 
@@ -2660,6 +2754,10 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 
 	}
 
+	if (vfsdev->lut) {
+		spdk_lut_free(vfsdev->lut);
+	}
+
 	free(vfsdev->fsdev.name);
 	free(vfsdev->root_path);
 
@@ -3040,7 +3138,7 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
-	vfsdev->root = file_object_create_unsafe(NULL, fd, stat.st_ino, stat.st_dev, stat.st_mode);
+	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_ino, stat.st_dev, stat.st_mode);
 	if (!vfsdev->root) {
 		SPDK_ERRLOG("Cannot alloc root\n");
 		close(fd);
@@ -3103,6 +3201,14 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->root_path = strdup(root_path);
 	if (!vfsdev->root_path) {
 		SPDK_ERRLOG("Could not strdup root path: %s\n", root_path);
+		fsdev_aio_free(vfsdev);
+		return -ENOMEM;
+	}
+
+	vfsdev->lut = spdk_lut_create(FILE_PTR_LUT_INIT_SIZE, FILE_PTR_LUT_GROWTH_STEP,
+				      FILE_PTR_LUT_MAX_SIZE);
+	if (!vfsdev->lut) {
+		SPDK_ERRLOG("Could not create lookup table\n");
 		fsdev_aio_free(vfsdev);
 		return -ENOMEM;
 	}
