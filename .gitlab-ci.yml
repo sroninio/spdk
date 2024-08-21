@@ -37,7 +37,7 @@ build-job:
     - cd ../fio-fio-3.35
     - ./configure --prefix=/usr/local
     - cd $CI_PROJECT_DIR
-    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --enable-debug --enable-werror
+    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --enable-debug --enable-werror
     - make -j4
     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
   artifacts:
@@ -49,6 +49,24 @@ build-job:
       - ./mk/config.mk
       - ./mk/cc.mk
       - ./include/spdk/config.h
+
+build-shared-debug-job:
+  extends: .do_build
+  stage: build
+  image: "$FEDORA_IMAGE"
+  script:
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-debug --enable-werror
+    - make -j4
+
+build-shared-release-job:
+  extends: .do_build
+  stage: build
+  image: "$FEDORA_IMAGE"
+  script:
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-werror
+    - make -j4
 
 .test-job-vm-template:
   stage: test
