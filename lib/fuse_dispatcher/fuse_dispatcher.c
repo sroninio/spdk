@@ -902,7 +902,7 @@ fuse_to_fsdev_file_lock(struct fuse_io *fuse_io, const struct fuse_file_lock *fu
 	}
 	fsdev_lock->pid = fsdev_io_d2h_u32(fuse_io, fuse_lock->pid);
 
-	SPDK_DEBUGLOG(fsdev_aio, "fuse -> fsdev lock type=%x, start=%lu, end=%lu, pid=%u\n",
+	SPDK_DEBUGLOG(fuse_dispatcher, "fuse -> fsdev lock type=%x, start=%lu, end=%lu, pid=%u\n",
 		      fsdev_lock->type, fsdev_lock->start, fsdev_lock->end, fsdev_lock->pid);
 	return 0;
 }
@@ -931,7 +931,7 @@ fsdev_file_lock_to_fuse(struct fuse_io *fuse_io, const struct spdk_fsdev_file_lo
 	fuse_lock->end = fsdev_io_h2d_u64(fuse_io, fsdev_lock->end);
 	fuse_lock->pid = fsdev_io_h2d_u32(fuse_io, fsdev_lock->pid);
 
-	SPDK_DEBUGLOG(fsdev_aio, "fsdev -> fuse lock type=%s, start=%lu, len=%lu, pid=%u\n",
+	SPDK_DEBUGLOG(fuse_dispatcher, "fsdev -> fuse lock type=%s, start=%lu, len=%lu, pid=%u\n",
 		      fuse_lock_type_to_str(fsdev_io_d2h_u32(fuse_io, fsdev_lock->type)),
 		      fuse_lock->start, fuse_lock->end, fuse_lock->pid);
 	return 0;
