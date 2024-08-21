@@ -736,8 +736,8 @@ static int
 lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
-	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.lseek.fhandle;
-	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.lseek.fobject;
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.poll.fhandle;
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.poll.fobject;
 	short posix_events = fsdev_events_to_posix(fsdev_io->u_in.poll.events);
 	struct pollfd fds;
 
