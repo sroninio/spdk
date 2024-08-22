@@ -159,8 +159,8 @@ struct fuse_io {
 	struct fuse_in_header hdr;
 	bool in_hdr_with_data;
 
-	/* Link to the in-progress poll requets list. */
-	TAILQ_ENTRY(fuse_io) poll_link;
+	/* Link to the in-progress requests list for poll and setlkw. */
+	TAILQ_ENTRY(fuse_io) wait_link;
 
 	union {
 		struct {
@@ -193,16 +193,13 @@ struct fuse_io {
 			int status;
 		} fsdev_close;
 		struct {
-			/* Poller that implements setlkw "waiting". */
-			struct spdk_poller *poller;
-
-			/* Setlkw lock to be acquired. */
+			/* Input lock for setlkw operation. */
 			struct spdk_fsdev_file_lock lock;
 
-			/* Setlkw operation file handle. */
+			/* Input file handle for setlkw operation. */
 			uint64_t fhandle;
 
-			/* Used for checking lock ownership by setlk/setlkw. */
+			/* Input owner for setlkw operation. */
 			uint64_t owner;
 		} setlkw;
 	} u;
@@ -260,11 +257,11 @@ struct spdk_fuse_dispatcher {
 struct spdk_fuse_dispatcher_channel {
 	struct spdk_io_channel *fsdev_io_ch;
 
-	/* Poller that implements poll operation "waiting". */
-	struct spdk_poller *poll_event_poller;
+	/* The poller that implements "waiting" for setlkw and poll operations. */
+	struct spdk_poller *wait_poller;
 
-	/* List of in-progress poll requets IOs. */
-	TAILQ_HEAD(, fuse_io) poll_request_list;
+	/* List of in-progress "waiting" fuse_io. */
+	TAILQ_HEAD(, fuse_io) wait_list;
 };
 
 #define __disp_to_io_dev(disp)	(((char *)disp) + 1)
@@ -2587,50 +2584,24 @@ do_setlk_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 	fuse_dispatcher_io_complete_err(fuse_io, status);
 }
 
-static void do_setlkw_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status);
-
-static int
-do_setlkw_poller_cb(void *arg)
-{
-	int err;
-	struct fuse_io *fuse_io = (struct fuse_io *)arg;
-	struct spdk_fsdev_file_lock *fsdev_lock = &fuse_io->u.setlkw.lock;
-	uint64_t fh = fuse_io->u.setlkw.fhandle;
-
-	/*
-	 * Stopping setlkw poller, the new one will start in the operation cb if
-	 * the lock is still not acquired.
-	 */
-	SPDK_DEBUGLOG(fuse_dispatcher, "Stopped setlkw poller.\n");
-	spdk_poller_unregister(&fuse_io->u.setlkw.poller);
-
-	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh), fsdev_lock,
-			       fuse_io->u.setlkw.owner, do_setlkw_cpl_clb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
-	return SPDK_POLLER_BUSY;
-}
-
 static void
 do_setlkw_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *)cb_arg;
+	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
+	bool was_empty = TAILQ_EMPTY(&disp_ch->wait_list);
 
 	/*
-	 * Here -EAGAIN is signaled for conflicting lock - continue and start the new
-	 * poller.
-	 *
-	 * The poller does not have a timeout and works as long as needed to acquire
-	 * the lock and as long as the file stays open in the lower layer implementation.
-	 * When the file gets closed then this callback will get -EINTR and the operation
-	 * will complete with fuse_dispatcher_io_complete_err(-EINTR).
+	 * Here -EAGAIN is signaled for conflicting lock - continue and add the request
+	 * to the wait list.
 	 */
 	if (status == -EAGAIN) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "Conflicting lock encountered. "
-			      "Starting setlkw poller.\n");
-		fuse_io->u.setlkw.poller = SPDK_POLLER_REGISTER(do_setlkw_poller_cb, fuse_io, 0);
+		SPDK_DEBUGLOG(fuse_dispatcher, "Conflicting lock encountered. Adding setlkw "
+			      "fuse_io=%p to wait list on ch=%p.\n", fuse_io, disp_ch);
+		TAILQ_INSERT_TAIL(&disp_ch->wait_list, fuse_io, wait_link);
+		if (was_empty) {
+			spdk_poller_resume(disp_ch->wait_poller);
+		}
 	} else {
 		fuse_dispatcher_io_complete_err(fuse_io, status);
 	}
@@ -2728,9 +2699,9 @@ do_setlkw(struct fuse_io *fuse_io)
 	}
 
 	/*
-	 * Giving it a try to take the lock immediately. If fails then the
-	 * setlkw poller starts in do_setlkw_cpl_clb() and tries again and
-	 * so on until the lock is acquired and file stays open.
+	 * Giving it a try to take the lock immediately. If it fails then the
+	 * setlkw request is added to the wait list in do_setlkw_cpl_clb() and
+	 * tries again and so on until the lock is acquired and file stays open.
 	 */
 	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 			       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
@@ -2884,28 +2855,41 @@ static void do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
 			    int status, uint32_t revents);
 
 static int
-fuse_poll_poller_cb(void *arg)
+fuse_wait_poller_cb(void *arg)
 {
 	int err;
 	struct spdk_fuse_dispatcher_channel *ch = arg;
 	struct fuse_io *fuse_io, *tmp_fuse_io;
-	bool was_empty = TAILQ_EMPTY(&ch->poll_request_list);
+	bool was_empty = TAILQ_EMPTY(&ch->wait_list);
 
-	TAILQ_FOREACH_SAFE(fuse_io, &ch->poll_request_list, poll_link, tmp_fuse_io) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "Removing fuse_io=%p from poller list on ch=%p and "
-			      "requesting fsdev poll.\n", fuse_io, ch);
-		TAILQ_REMOVE(&ch->poll_request_list, fuse_io, poll_link);
+	TAILQ_FOREACH_SAFE(fuse_io, &ch->wait_list, wait_link, tmp_fuse_io) {
+		SPDK_DEBUGLOG(fuse_dispatcher, "Removing fuse_io=(%p/%d) from wait list on ch=%p and "
+			      "requesting fsdev op.\n", fuse_io, fuse_io->hdr.opcode, ch);
+		TAILQ_REMOVE(&ch->wait_list, fuse_io, wait_link);
 
-		err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
-				      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
-		if (err) {
-			fuse_dispatcher_io_complete_err(fuse_io, err);
+		if (fuse_io->hdr.opcode == FUSE_POLL) {
+			err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+					      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
+					      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
+			if (err) {
+				fuse_dispatcher_io_complete_err(fuse_io, err);
+			}
+		} else if (fuse_io->hdr.opcode == FUSE_SETLKW) {
+			err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
+					       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
+					       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner,
+					       do_setlkw_cpl_clb, fuse_io);
+			if (err) {
+				fuse_dispatcher_io_complete_err(fuse_io, err);
+			}
+		} else {
+			SPDK_ERRLOG("Unexpected fuse_io=(%p/%d) in wait poller.\n", fuse_io, fuse_io->hdr.opcode);
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
 		}
 	}
 
-	if (TAILQ_EMPTY(&ch->poll_request_list)) {
-		spdk_poller_pause(ch->poll_event_poller);
+	if (TAILQ_EMPTY(&ch->wait_list)) {
+		spdk_poller_pause(ch->wait_poller);
 	}
 
 	return was_empty ? SPDK_POLLER_IDLE : SPDK_POLLER_BUSY;
@@ -2916,7 +2900,7 @@ do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t r
 {
 	struct fuse_io *fuse_io = cb_arg;
 	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
-	bool was_empty = TAILQ_EMPTY(&disp_ch->poll_request_list);
+	bool was_empty = TAILQ_EMPTY(&disp_ch->wait_list);
 
 	if (status == 0) {
 		/* Events available, completing the operation. */
@@ -2926,11 +2910,11 @@ do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t r
 		 * No events available - return fuse_io into the poller
 		 * processing list.
 		 */
-		SPDK_DEBUGLOG(fuse_dispatcher, "Adding fuse_io=%p to poller list on ch=%p.\n",
-			      fuse_io, disp_ch);
-		TAILQ_INSERT_TAIL(&disp_ch->poll_request_list, fuse_io, poll_link);
+		SPDK_DEBUGLOG(fuse_dispatcher, "No poll events available. Adding poll "
+			      "fuse_io=%p to wait list on ch=%p.\n", fuse_io, disp_ch);
+		TAILQ_INSERT_TAIL(&disp_ch->wait_list, fuse_io, wait_link);
 		if (was_empty) {
-			spdk_poller_resume(disp_ch->poll_event_poller);
+			spdk_poller_resume(disp_ch->wait_poller);
 		}
 	} else {
 		fuse_dispatcher_io_complete_err(fuse_io, status);
@@ -3438,11 +3422,11 @@ fuse_dispatcher_channel_create(void *io_device, void *ctx_buf)
 		ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
 	}
 
-	TAILQ_INIT(&ch->poll_request_list);
+	TAILQ_INIT(&ch->wait_list);
 
-	SPDK_DEBUGLOG(fuse_dispatcher, "Registering poll operation poller on ch=%p.\n", ch);
-	ch->poll_event_poller = SPDK_POLLER_REGISTER(fuse_poll_poller_cb, ch, 0);
-	spdk_poller_pause(ch->poll_event_poller);
+	SPDK_DEBUGLOG(fuse_dispatcher, "Registering wait poller on ch=%p.\n", ch);
+	ch->wait_poller = SPDK_POLLER_REGISTER(fuse_wait_poller_cb, ch, 0);
+	spdk_poller_pause(ch->wait_poller);
 
 	return 0;
 }
@@ -3455,8 +3439,8 @@ fuse_dispatcher_channel_destroy(void *io_device, void *ctx_buf)
 
 	UNUSED(disp);
 
-	SPDK_DEBUGLOG(fuse_dispatcher, "Unregistering poll operation poller on ch=%p.\n", ch);
-	spdk_poller_unregister(&ch->poll_event_poller);
+	SPDK_DEBUGLOG(fuse_dispatcher, "Unregistering wait poller on ch=%p.\n", ch);
+	spdk_poller_unregister(&ch->wait_poller);
 
 	if (ch->fsdev_io_ch) {
 		assert(disp->desc);
