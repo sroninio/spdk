@@ -2018,7 +2018,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
 			      &fobject, &fsdev_io->u_out.mknod.attr);
-	if (rc) {
+	if (!rc) {
 		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
 	return rc;
@@ -2039,7 +2039,7 @@ lo_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, S_IFDIR | mode, 0, NULL, euid, egid,
 			      &fobject, &fsdev_io->u_out.mkdir.attr);
-	if (rc) {
+	if (!rc) {
 		fsdev_io->u_out.mkdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
 	return rc;
@@ -2060,7 +2060,7 @@ lo_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, target, S_IFLNK, 0, linkpath, euid, egid,
 			      &fobject, &fsdev_io->u_out.symlink.attr);
-	if (rc) {
+	if (!rc) {
 		fsdev_io->u_out.symlink.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
 	return rc;
