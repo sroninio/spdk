@@ -157,7 +157,7 @@ void *
 spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 {
 	struct spdk_lut_node *node;
-	void *value = NULL;
+	void *value = SPDK_LUT_INVALID_VALUE;
 
 	spdk_spin_lock(&lut->lock);
 	if (key < lut->num_nodes) {
