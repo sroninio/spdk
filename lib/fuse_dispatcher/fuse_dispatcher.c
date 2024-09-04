@@ -3605,10 +3605,6 @@ fuse_dispatcher_reset_completed(struct spdk_fsdev_desc *desc, bool success, void
 			      fuse_dispatcher_reset_get_channel,
 			      ctx,
 			      fuse_dispatcher_reset_get_channel_done);
-
-
-	ctx->cb(disp, success, ctx->cb_arg);
-	free(ctx);
 }
 
 int
