@@ -170,8 +170,8 @@ struct aio_fsdev_file_handle {
 
 struct aio_fsdev;
 
-#define FOBJECT_FMT "ino=%" PRIu64 " dev=%" PRIu64
-#define FOBJECT_ARGS(fo) ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
+#define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 " ino=%" PRIu64 " dev=%" PRIu64 ")"
+#define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
 struct aio_fsdev_file_object {
 	struct aio_fsdev_fhdr hdr;
 	uint32_t is_symlink : 1;
@@ -368,6 +368,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 			file_object_destroy(fobject);
 		}
 
+		SPDK_DEBUGLOG(fsdev_aio, "root urefed (%p cnt=%" PRIu32 " refcnt=%" PRIu64 ")\n",
+			      fobject, count, refcount);
 		return refcount;
 	}
 
@@ -378,6 +380,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	refcount = __atomic_sub_fetch(&fobject->refcount, count, __ATOMIC_RELAXED);
 	if (refcount) {
 		spdk_spin_unlock(&parent_fobject->lock);
+		SPDK_DEBUGLOG(fsdev_aio, "%p urefed (cnt=%" PRIu32 " refcnt=%" PRIu64 ")\n",
+			      fobject, count, refcount);
 		return refcount;
 	}
 
@@ -386,7 +390,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
 	spdk_spin_unlock(&parent_fobject->lock);
 
-	SPDK_DEBUGLOG(fsdev_aio, "fobject removed %p\n", fobject);
+	SPDK_DEBUGLOG(fsdev_aio, "%p finally urefed (cnt=%" PRIu32 ")\n",
+		      fobject, count);
 
 	file_object_destroy(fobject);
 
@@ -1710,8 +1715,9 @@ skip_entry:
 		fhandle->dir.offset = nextoff;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 ")\n",
-		      FOBJECT_ARGS(fobject), fhandle, offset);
+	SPDK_DEBUGLOG(fsdev_aio,
+		      "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
+		      FOBJECT_ARGS(fobject), fhandle, offset, fsdev_io->u_out.readdir.offset);
 	return 0;
 }
 
@@ -1729,6 +1735,8 @@ lo_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	file_object_unref(fobject, nlookup);
+	SPDK_DEBUGLOG(fsdev_aio, "FORGET succeeded for " FOBJECT_FMT "nlookup=%" PRIu64 "\n",
+		      FOBJECT_ARGS(fobject), nlookup);
 
 	return 0;
 }
@@ -2334,8 +2342,8 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 		return res;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "lo_mknod_symlink(" FOBJECT_FMT "/%s -> " FOBJECT_FMT "\n",
-		      FOBJECT_ARGS(parent_fobject), name, FOBJECT_ARGS(*pfobject));
+	SPDK_DEBUGLOG(fsdev_aio, "lo_mknod_symlink(%s " FOBJECT_FMT ") -> " FOBJECT_FMT ")\n",
+		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(*pfobject));
 
 	return 0;
 }
