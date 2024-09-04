@@ -1232,17 +1232,18 @@ spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 }
 
 static int
-_spdk_fsdev_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+_spdk_fsdev_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget)
 {
 	spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn = fsdev_io->u_in.readdir.usr_entry_cb_fn;
 	struct spdk_io_channel *ch = cb_arg;
 
 	return usr_entry_cb_fn(fsdev_io->internal.usr_cb_arg, ch, fsdev_io->u_out.readdir.name,
-			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr, fsdev_io->u_out.readdir.offset);
+			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr,
+			       fsdev_io->u_out.readdir.offset, forget);
 }
 
 static void
-_spdk_fsdev_readdir_emum_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+_spdk_fsdev_readdir_enum_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
 
@@ -1259,7 +1260,7 @@ spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	struct spdk_fsdev_io *fsdev_io;
 
 	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cpl_cb_fn, cb_arg,
-					 _spdk_fsdev_readdir_emum_clb, ch, SPDK_FSDEV_IO_READDIR);
+					 _spdk_fsdev_readdir_enum_clb, ch, SPDK_FSDEV_IO_READDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}

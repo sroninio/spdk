@@ -510,11 +510,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.readdir.usr_entry_cb_fn);
 
 		do {
+			bool forget = false;
 			fsdev_io->u_out.readdir.fobject = UT_FOBJECT + i;
 			fsdev_io->u_out.readdir.attr = ut_fsdev_attr;
 			fsdev_io->u_out.readdir.name = UT_FNAME;
 			fsdev_io->u_out.readdir.offset = ut_readdir_offset + i;
-			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
 			i++;
 		} while (!res);
 
@@ -2112,12 +2113,14 @@ ut_fsdev_test_opendir(void)
 static int
 ut_fsdev_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
 			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			  off_t offset)
+			  off_t offset, bool *forget)
 {
 	CU_ASSERT(!strcmp(name, UT_FNAME));
 	CU_ASSERT(fobject == UT_FOBJECT + ut_readdir_num_entry_cb_calls);
 	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
 	CU_ASSERT(offset == (off_t)(ut_readdir_offset + ut_readdir_num_entry_cb_calls));
+	CU_ASSERT(forget != NULL);
+	CU_ASSERT(*forget == false);
 
 	ut_readdir_num_entry_cb_calls++;
 	return (ut_readdir_num_entry_cb_calls == ut_readdir_num_entries) ? -1 : 0;

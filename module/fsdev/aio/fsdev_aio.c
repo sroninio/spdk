@@ -1792,6 +1792,7 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	while (1) {
 		off_t nextoff;
 		const char *name;
+		bool forget = false;
 
 		if (!fhandle->dir.entry) {
 			errno = 0;
@@ -1837,11 +1838,11 @@ skip_lookup:
 		fsdev_io->u_out.readdir.name = name;
 		fsdev_io->u_out.readdir.offset = nextoff;
 
-		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
+		if ((forget || res) && entry_fobject) {
+			file_object_unref(entry_fobject, 1);
+		}
 		if (res) {
-			if (entry_fobject) {
-				file_object_unref(entry_fobject, 1);
-			}
 			break;
 		}
 

@@ -2483,7 +2483,8 @@ do_opendir(struct fuse_io *fuse_io)
 
 static int
 do_readdir_entry_clb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
-		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr, off_t offset)
+		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+		     off_t offset, bool *forget)
 {
 	struct fuse_io *fuse_io = cb_arg;
 	size_t bytes_remained = fuse_io->u.readdir.size - fuse_io->u.readdir.bytes_written;
@@ -2501,6 +2502,8 @@ do_readdir_entry_clb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
 
 	fuse_io->u.readdir.writep += direntry_bytes;
 	fuse_io->u.readdir.bytes_written += direntry_bytes;
+
+	*forget = fuse_io->u.readdir.plus ? false : true;
 
 	return 0;
 }

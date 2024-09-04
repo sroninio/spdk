@@ -1752,12 +1752,17 @@ int spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
  * \param fobject File object. NULL for "." and "..".
  * \param attr File attributes.
  * \param offset Offset of the next entry
+ * \param forget Whether to forget the \p fobject. Default: false
+ *
+ * NOTE: the \p spdk_fsdev_readdir effectively executes lookup and the \p fobject remains
+ *       referenced unless this callback sets the \p forget to true. Otherwise, it's up to
+ *       the user to call \p spdk_fsdev_forget when the \p fobject is no longer needed.
  *
  * \return 0 to continue the enumeration, an error code otherwice.
  */
 typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
 		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-		off_t offset);
+		off_t offset, bool *forget);
 
 /**
  * Read directory operation completion callback

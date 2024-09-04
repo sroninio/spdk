@@ -390,7 +390,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint64_t offset;
-			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg);
+			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget);
 			spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn;
 		} readdir;
 		struct {
