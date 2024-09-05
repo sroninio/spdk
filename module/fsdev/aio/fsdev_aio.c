@@ -1742,10 +1742,8 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.read.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	size_t size = fsdev_io->u_in.read.size;
 	uint64_t offs = fsdev_io->u_in.read.offs;
 	uint32_t flags = fsdev_io->u_in.read.flags;
@@ -1754,16 +1752,6 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.read.opts || !fsdev_io->u_in.read.opts->memory_domain);
-
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
-	}
 
 	UNUSED(flags);
 
@@ -1781,6 +1769,19 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		fsdev_io->u_out.read.data_size = bytes_read;
 
 		return 0;
+	}
+
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.read.fobject);
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		return -EINVAL;
+	}
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, lo_read_cb, fsdev_io, fhandle->fd, offs, size, outvec,
@@ -1814,10 +1815,8 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	size_t size = fsdev_io->u_in.write.size;
 	uint64_t offs = fsdev_io->u_in.write.offs;
 	uint32_t flags = fsdev_io->u_in.write.flags;
@@ -1826,16 +1825,6 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.write.opts || !fsdev_io->u_in.write.opts->memory_domain);
-
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
-	}
 
 	UNUSED(flags);
 
@@ -1854,6 +1843,19 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		fsdev_io->u_out.write.data_size = bytes_written;
 
 		return 0;
+	}
+
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		return -EINVAL;
+	}
+
+	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, lo_write_cb, fsdev_io,
