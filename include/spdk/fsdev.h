@@ -1229,6 +1229,18 @@ typedef void (spdk_fsdev_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
 int spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *fobject, spdk_fsdev_statfs_cpl_cb cb_fn, void *cb_arg);
 
+/*
+ * Flags used in setxattr operation.
+ *
+ * SPDK_FSDEV_XATTR_CREATE - Perform a pure create, which fails if the named attribute exists already.
+ * SPDK_FSDEV_XATTR_REPLACE - Perform a pure replace operation, which fails if the named attribute
+ * does not already exist.
+ * SPDK_FSDEV_SETXATTR_ACL_KILL_SGID - Clear SGID when system.posix_acl_access is set.
+ */
+#define SPDK_FSDEV_XATTR_CREATE (1 << 0)
+#define SPDK_FSDEV_XATTR_REPLACE (1 << 1)
+#define SPDK_FSDEV_SETXATTR_ACL_KILL_SGID (1 << 2)
+
 /**
  * Set an extended attribute operation completion callback
  *
@@ -1248,7 +1260,7 @@ typedef void (spdk_fsdev_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  * \param name Name of an extended attribute.
  * \param value Buffer that contains value of an extended attribute.
  * \param size Size of an extended attribute.
- * \param flags Operation flags.
+ * \param flags Operation flags (see SPDK_FSDEV_XATTR_CREATE and SPDK_FSDEV_XATTR_REPLACE, etc).
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1260,7 +1272,7 @@ typedef void (spdk_fsdev_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  */
 int spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, const char *value,
-			size_t size, uint32_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg);
+			size_t size, uint64_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg);
 /**
  * Get an extended attribute operation completion callback
  *

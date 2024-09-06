@@ -275,6 +275,11 @@ struct spdk_fuse_dispatcher {
 	void *event_ctx;
 
 	/**
+	 * Negotiated mount flags.
+	 */
+	uint32_t mount_flags;
+
+	/**
 	 * Name of the underlying fsdev
 	 *
 	 * NOTE: must be last
@@ -1773,6 +1778,47 @@ do_fsync(struct fuse_io *fuse_io)
 	}
 }
 
+#define XATTR_FLAGS_MAP \
+	XATTR_FLAG(XATTR_CREATE) \
+	XATTR_FLAG(XATTR_REPLACE)
+
+static uint64_t
+fuse_xattr_flags_to_fsdev(uint32_t flags)
+{
+	uint64_t result = 0;
+
+#define XATTR_FLAG(name) \
+	if (flags & name) {                  \
+		result |= SPDK_FSDEV_##name; \
+	}
+
+	XATTR_FLAGS_MAP;
+
+#undef XATTR_FLAG
+
+	return result;
+}
+
+#define XATTR_EXT_FLAGS_MAP \
+	XATTR_EXT_FLAG(SETXATTR_ACL_KILL_SGID)
+
+static uint64_t
+fuse_xattr_ext_flags_to_fsdev(uint32_t flags)
+{
+	uint64_t result = 0;
+
+#define XATTR_EXT_FLAG(name) \
+	if (flags & FUSE_##name) {           \
+		result |= SPDK_FSDEV_##name; \
+	}
+
+	XATTR_EXT_FLAGS_MAP;
+
+#undef XATTR_EXT_FLAG
+
+	return result;
+}
+
 static void
 do_setxattr_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
@@ -1785,12 +1831,16 @@ static void
 do_setxattr(struct fuse_io *fuse_io)
 {
 	int err;
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	bool xattr_ext = !!(disp->mount_flags & FUSE_SETXATTR_EXT);
 	struct fuse_setxattr_in *arg;
 	const char *name;
 	const char *value;
 	uint32_t size;
+	uint64_t flags;
 
-	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	size = xattr_ext ? sizeof(*arg) : FUSE_COMPAT_SETXATTR_IN_SIZE;
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, size);
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_setxattr_in\n");
 		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
@@ -1812,8 +1862,13 @@ do_setxattr(struct fuse_io *fuse_io)
 		return;
 	}
 
+	flags = fuse_xattr_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io, arg->flags));
+	if (xattr_ext) {
+		flags |= fuse_xattr_ext_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io, arg->setxattr_flags));
+	}
+
 	err = spdk_fsdev_setxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, value, size, fsdev_io_d2h_u32(fuse_io, arg->flags),
+				  file_object(fuse_io), name, value, size, flags,
 				  do_setxattr_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -1838,7 +1893,7 @@ do_getxattr(struct fuse_io *fuse_io)
 	int err;
 	struct fuse_getxattr_in *arg;
 	const char *name;
-	char *buff;
+	char *buff = NULL;
 	uint32_t size;
 	struct iov_offs out_offs_bu;
 
@@ -1864,23 +1919,37 @@ do_getxattr(struct fuse_io *fuse_io)
 
 	size = fsdev_io_d2h_u32(fuse_io, arg->size);
 
-	/* NOTE: we want to avoid an additionl allocation and copy and put the xattr directly to the buffer provided in out_iov.
-	 * In order to do so we have to preserve the out_offs, advance it to get the buffer pointer and then restore to allow
-	 * the fuse_dispatcher_io_complete_xattr() to fill the fuse_getxattr_out which precedes this buffer.
-	 */
-	out_offs_bu = fuse_io->out_offs; /* Preserve the out offset */
+	/* Zero size means requesting size of the xattr value. No need to go further. */
+	if (size > 0) {
+		/*
+		 * NOTE: we want to avoid an additionl allocation and copy and put the xattr
+		 * directly to the buffer provided in out_iov. In order to do so we have to
+		 * preserve the out_offs, advance it to get the buffer pointer and then restore
+		 * to allow the fuse_dispatcher_io_complete_xattr() to fill the fuse_getxattr_out
+		 * which precedes this buffer.
+		 */
+		out_offs_bu = fuse_io->out_offs; /* Preserve the out offset */
 
-	/* Skip the fuse_getxattr_out */
-	_fsdev_io_out_arg_get_buf(fuse_io, sizeof(struct fuse_getxattr_out));
-	size -= sizeof(struct fuse_getxattr_out);
+		/* Skip the fuse_getxattr_out */
+		_fsdev_io_out_arg_get_buf(fuse_io, sizeof(struct fuse_getxattr_out));
+		if (size < sizeof(struct fuse_getxattr_out)) {
+			SPDK_ERRLOG("Invalid size=%u smaller than the size of fuse_getxattr_out=%lu "
+				    "in getxattr request.\n", size, sizeof(struct fuse_getxattr_out));
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
+		}
+		size -= sizeof(struct fuse_getxattr_out);
 
-	buff = _fsdev_io_out_arg_get_buf(fuse_io, size); /* Get the buffer for the xattr */
-	if (!buff) {
-		SPDK_INFOLOG(fuse_dispatcher, "NULL buffer, probably asking for the size\n");
-		size = 0;
+		buff = _fsdev_io_out_arg_get_buf(fuse_io, size); /* Get the buffer for the xattr */
+		if (!buff) {
+			/*
+			 * Should not happen at this point but let's ignore it. Null buff and zere
+			 * size are valid inputs for spdk_fsdev_getxattr().
+			 */
+			size = 0;
+		}
+		fuse_io->out_offs = out_offs_bu; /* Restore the out offset */
 	}
-
-	fuse_io->out_offs = out_offs_bu; /* Restore the out offset */
 
 	err = spdk_fsdev_getxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 				  file_object(fuse_io), name, buff, size,
@@ -2131,7 +2200,12 @@ do_mount_prepare_completion(struct fuse_io *fuse_io)
 	LL_SET_DEFAULT(true, FUSE_DO_READDIRPLUS);
 	LL_SET_DEFAULT(true, FUSE_READDIRPLUS_AUTO);
 	LL_SET_DEFAULT(true, FUSE_EXPORT_SUPPORT);
+	LL_SET_DEFAULT(true, FUSE_POSIX_ACL);
+	LL_SET_DEFAULT(true, FUSE_SETXATTR_EXT);
 	LL_SET_DEFAULT(fuse_io->u.init.opts.writeback_cache_enabled, FUSE_WRITEBACK_CACHE);
+
+	/* Saved to later use. */
+	disp->mount_flags = outarg.flags;
 
 	outarg.flags = fsdev_io_h2d_u32(fuse_io, outarg.flags);
 	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io, max_readahead);

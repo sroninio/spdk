@@ -2603,6 +2603,27 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return 0;
 }
 
+#define XATTR_FLAGS_MAP \
+	XATTR_FLAG(XATTR_CREATE) \
+	XATTR_FLAG(XATTR_REPLACE)
+
+static uint32_t
+fsdev_xattr_flags_to_posix(uint64_t flags)
+{
+	uint32_t result = 0;
+
+#define XATTR_FLAG(name) \
+	if (flags & SPDK_FSDEV_##name) { \
+		result |= name;          \
+	}
+
+	XATTR_FLAGS_MAP;
+
+#undef XATTR_FLAG
+
+	return result;
+}
+
 static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2615,7 +2636,8 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	char *name = fsdev_io->u_in.setxattr.name;
 	char *value = fsdev_io->u_in.setxattr.value;
 	uint32_t size = fsdev_io->u_in.setxattr.size;
-	uint32_t flags = fsdev_io->u_in.setxattr.flags;
+	uint64_t flags = fsdev_io->u_in.setxattr.flags;
+	static const char *acl_access_name = "system.posix_acl_access";
 
 	if (!vfsdev->xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
@@ -2633,27 +2655,48 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EPERM;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
+		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
 		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
 		return saverr;
 	}
 
-	ret = fsetxattr(fd, name, value, size, flags);
-	saverr = -errno;
-	close(fd);
+	ret = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
 	if (ret == -1) {
+		saverr = -errno;
 		if (saverr == -ENOTSUP) {
-			SPDK_INFOLOG(fsdev_aio, "flistxattr: extended attributes are not supported or disabled\n");
+			SPDK_INFOLOG(fsdev_aio, "fsetxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("flistxattr failed with errno=%d\n", saverr);
+			SPDK_ERRLOG("fsetxattr failed with errno=%d\n", saverr);
 		}
+		close(fd);
 		return saverr;
 	}
 
+	/* Clear SGID when system.posix_acl_access is set. */
+	if (!!(flags && SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
+		struct spdk_fsdev_file_attr st;
+
+		saverr = file_object_fill_attr(fobject, &st);
+		if (saverr) {
+			SPDK_ERRLOG("Failed to get file attrs for cleaning SGID on behalf of changed "
+				    "\"%s\" with error=%d - ignoring.\n", acl_access_name, saverr);
+		} else {
+			mode_t new_mode = st.mode & ~S_ISGID;
+			ret = fchmod(fd, new_mode);
+			if (ret == -1) {
+				saverr = -errno;
+				SPDK_ERRLOG("Failed to clean SGID on behalf of changed "
+					    "\"%s\" with errno=%d - ignoring.\n", acl_access_name, saverr);
+			}
+		}
+	}
+	close(fd);
+
 	SPDK_DEBUGLOG(fsdev_aio,
-		      "SETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s size=%" PRIu32 "flags=0x%x" PRIx32 "\n",
+		      "SETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s size=%" PRIu32 " flags=0x%lx" PRIx64 "\n",
 		      FOBJECT_ARGS(fobject), name, value, size, flags);
 
 	return 0;
@@ -2688,7 +2731,8 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EPERM;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
+		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
 		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
@@ -2746,7 +2790,8 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EPERM;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
+		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
 		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
@@ -2801,7 +2846,8 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EPERM;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
+		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
 		saverr = -errno;
 		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);

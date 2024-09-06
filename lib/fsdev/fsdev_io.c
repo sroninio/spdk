@@ -1031,7 +1031,7 @@ _spdk_fsdev_setxattr_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		    struct spdk_fsdev_file_object *fobject, const char *name, const char *value, size_t size,
-		    uint32_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg)
+		    uint64_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 

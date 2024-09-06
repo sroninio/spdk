@@ -361,7 +361,7 @@ struct spdk_fsdev_io {
 			char *name;
 			char *value;
 			size_t size;
-			uint32_t flags;
+			uint64_t flags;
 		} setxattr;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
