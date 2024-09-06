@@ -615,7 +615,7 @@ fuse_dispatcher_io_copy_and_complete(struct fuse_io *fuse_io, const void *out, u
 			memcpy(buf, out, out_len);
 		} else {
 			SPDK_ERRLOG("Completion failed: cannot get buf to copy %" PRIu32 " bytes\n", out_len);
-			error = EINVAL;
+			error = -EINVAL;
 			out_len = 0;
 		}
 	}
@@ -1078,7 +1078,7 @@ do_forget(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_forget_in\n");
-		fuse_dispatcher_io_complete_none(fuse_io, EINVAL); /* FUSE_FORGET requires no response */
+		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL); /* FUSE_FORGET requires no response */
 		return;
 	}
 
