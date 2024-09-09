@@ -753,6 +753,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 {
 	int newfd;
 	int res;
+	bool is_new;
 	struct stat stat;
 	struct aio_fsdev_file_object *fobject;
 
@@ -779,8 +780,8 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 
 	spdk_spin_lock(&parent_fobject->lock);
 	fobject = lo_find_leaf_unsafe(parent_fobject, stat.st_ino, stat.st_dev);
+	is_new = (fobject == NULL);
 	if (fobject) {
-		close(newfd);
 		file_object_ref(fobject); /* reference by a lo_do_lookup caller */
 	} else {
 		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd, stat.st_ino, stat.st_dev,
@@ -788,10 +789,14 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 	}
 	spdk_spin_unlock(&parent_fobject->lock);
 
+	/* Just in case close() can block, let's keep it out of spinlock. */
 	if (!fobject) {
 		SPDK_ERRLOG("Cannot create file object\n");
 		close(newfd);
 		return -ENOMEM;
+	}
+	if (!is_new) {
+		close(newfd);
 	}
 
 	if (attr) {
@@ -799,7 +804,6 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 		if (res) {
 			SPDK_ERRLOG("fill_attr(%s) failed with %d\n", name, res);
 			file_object_unref(fobject, 1);
-			close(newfd);
 			return res;
 		}
 	}
