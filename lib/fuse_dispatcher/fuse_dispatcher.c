@@ -2861,9 +2861,6 @@ fuse_dispatcher_io_complete_unrestricted_ioctl(struct fuse_io *fuse_io, size_t s
 
 		fiov = _fsdev_io_out_arg_get_buf(fuse_io, out_size);
 		if (!fiov) {
-			if (in_fiov) {
-				free(in_fiov);
-			}
 			SPDK_ERRLOG("Cannot get ioctl iovec out buffer\n");
 			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
 			return;
