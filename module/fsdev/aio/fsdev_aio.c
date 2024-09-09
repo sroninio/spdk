@@ -623,7 +623,7 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	fhandle = file_handle_create(fobject, fd);
-	if (fd == -1) {
+	if (fhandle == NULL) {
 		error = -ENOMEM;
 		SPDK_ERRLOG("file_handle_create failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject),
 			    error);
