@@ -27,6 +27,10 @@
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define OFFSET_MAX 0x7fffffffffffffffLL
 
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096
+#endif
+
 /*
  * NOTE: It appeared that the open flags have different values on the different HW architechtures.
  *
@@ -2132,6 +2136,50 @@ fuse_dispatcher_fsdev_remove_put_channel_done(struct spdk_io_channel_iter *i, in
 	disp->event_cb(SPDK_FUSE_DISP_EVENT_FSDEV_REMOVE, disp, disp->event_ctx);
 }
 
+#define FUSE_DOT_PATH_LOOKUP FUSE_EXPORT_SUPPORT
+
+#define MNT_FLAGS_MAP \
+	MNT_FLAG(DOT_PATH_LOOKUP)      \
+	MNT_FLAG(AUTO_INVAL_DATA)      \
+	MNT_FLAG(EXPLICIT_INVAL_DATA)  \
+	MNT_FLAG(WRITEBACK_CACHE)      \
+	MNT_FLAG(POSIX_ACL)
+
+static uint32_t
+fuse_mount_flags_to_fsdev(uint32_t flags)
+{
+	uint64_t result = 0;
+
+
+#define MNT_FLAG(name) \
+	if (flags & FUSE_##name) {                 \
+		result |= SPDK_FSDEV_MOUNT_##name; \
+	}
+
+	MNT_FLAGS_MAP;
+
+#undef MNT_FLAG
+
+	return result;
+}
+
+static uint32_t
+fsdev_mount_flags_to_fuse(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define MNT_FLAG(name) \
+	if (flags & SPDK_FSDEV_MOUNT_##name) { \
+		result |= FUSE_##name;   \
+	}
+
+	MNT_FLAGS_MAP;
+
+#undef MNT_FLAG
+
+	return result;
+}
+
 static void
 fuse_dispatcher_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev,
 			       void *event_ctx)
@@ -2155,14 +2203,24 @@ fuse_dispatcher_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsde
 	}
 }
 
+#define SET_MOUNT_FLAG(cond, stage, flag) \
+	if ((cond) && (requested_flags & (FUSE_##flag))) { \
+		stage |= (FUSE_##flag);			   \
+	}
+
+/* Maximal number of pages for unlimited max_xfer_size. Using FUSE page limit value. */
+#define SPDK_FSDEV_PAGE_LIMIT 256
+
 static int
-do_mount_prepare_completion(struct fuse_io *fuse_io)
+do_mount_prepare_completion(struct fuse_io *fuse_io,
+			    const struct spdk_fsdev_mount_opts *negotiated_opts)
 {
+	uint32_t requested_flags = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->flags);
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct fuse_init_out outarg;
 	size_t outargsize = sizeof(outarg);
-	uint32_t max_readahead = DEFAULT_MAX_READAHEAD;
-	uint32_t flags = 0;
+	uint32_t supported = 0;
+	uint32_t max_xfer_size;
 	void *out_buf;
 
 	assert(disp->desc);
@@ -2177,39 +2235,60 @@ do_mount_prepare_completion(struct fuse_io *fuse_io)
 		outargsize = FUSE_COMPAT_22_INIT_OUT_SIZE;
 	}
 
-	if (!fuse_io->u.init.legacy_in) {
-		max_readahead = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->max_readahead);
-		flags = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->flags);
+	/* Always supported if requested by the FUSE. */
+	SET_MOUNT_FLAG(true, supported, ASYNC_READ);
+	SET_MOUNT_FLAG(true, supported, ATOMIC_O_TRUNC);
+	SET_MOUNT_FLAG(true, supported, BIG_WRITES);
+	SET_MOUNT_FLAG(true, supported, DONT_MASK);
+	SET_MOUNT_FLAG(true, supported, DO_READDIRPLUS);
+	SET_MOUNT_FLAG(true, supported, READDIRPLUS_AUTO);
+	SET_MOUNT_FLAG(true, supported, ASYNC_DIO);
+	SET_MOUNT_FLAG(true, supported, NO_OPEN_SUPPORT);
+	SET_MOUNT_FLAG(true, supported, PARALLEL_DIROPS);
+	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV);
+	SET_MOUNT_FLAG(true, supported, CACHE_SYMLINKS);
+	SET_MOUNT_FLAG(true, supported, NO_OPENDIR_SUPPORT);
+	SET_MOUNT_FLAG(true, supported, SUBMOUNTS);
+	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV_V2);
+	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
 
-		SPDK_INFOLOG(fuse_dispatcher, "max_readahead: %" PRIu32 " flags=0x%" PRIx32 "\n",
-			     max_readahead, flags);
+	SET_MOUNT_FLAG(true, supported, POSIX_LOCKS);
+	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
+	SET_MOUNT_FLAG(true, supported, FLOCK_LOCKS);
+	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
+
+	/* Sending back the fsdev negotiated mount opts. */
+	supported |= fsdev_mount_flags_to_fuse(negotiated_opts->flags);
+	outarg.flags = fsdev_io_h2d_u32(fuse_io, supported);
+	disp->mount_flags = supported;
+
+	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io, negotiated_opts->max_readahead);
+
+	max_xfer_size = negotiated_opts->max_xfer_size;
+
+	if (max_xfer_size == 0) {
+		/*
+		 * The number of pages used by FUSE (and controlled when parsing max_pages) is
+		 * limited to 256 pags. Let's use this value for unlimited case.
+		 */
+		max_xfer_size = SPDK_FSDEV_PAGE_LIMIT * PAGE_SIZE;
+		SPDK_WARNLOG("FSDEV reported max_xfer_size = 0 (unlimited). Setting max_xfer_size = %u.\n",
+			     max_xfer_size);
 	}
 
-	/* Always enable big writes, this is superseded by the max_write option */
-	outarg.flags = FUSE_BIG_WRITES;
+	/*
+	 * If max_xfer_size returned from the fsdev is <= 4k and we send max_write of
+	 * this value to the FUSE it will set its own default = 4k as for today.
+	 */
+	outarg.max_write = fsdev_io_h2d_u32(fuse_io, max_xfer_size);
 
-#define LL_SET_DEFAULT(cond, cap) \
-	if ((cond) && flags & (cap)) \
-		outarg.flags |= (cap)
-	LL_SET_DEFAULT(true, FUSE_ASYNC_READ);
-	LL_SET_DEFAULT(true, FUSE_AUTO_INVAL_DATA);
-	LL_SET_DEFAULT(true, FUSE_ASYNC_DIO);
-	LL_SET_DEFAULT(true, FUSE_ATOMIC_O_TRUNC);
-	LL_SET_DEFAULT(true, FUSE_FLOCK_LOCKS);
-	LL_SET_DEFAULT(true, FUSE_POSIX_LOCKS);
-	LL_SET_DEFAULT(true, FUSE_DO_READDIRPLUS);
-	LL_SET_DEFAULT(true, FUSE_READDIRPLUS_AUTO);
-	LL_SET_DEFAULT(true, FUSE_EXPORT_SUPPORT);
-	LL_SET_DEFAULT(true, FUSE_POSIX_ACL);
-	LL_SET_DEFAULT(true, FUSE_SETXATTR_EXT);
-	LL_SET_DEFAULT(fuse_io->u.init.opts.writeback_cache_enabled, FUSE_WRITEBACK_CACHE);
+	/*
+	 * Sending max_pages == 0 to the FUSE will result into setting it to default
+	 * value == 1.
+	 */
+	outarg.max_pages = max_xfer_size / PAGE_SIZE;
+	outarg.max_pages = fsdev_io_h2d_u32(fuse_io, outarg.max_pages);
 
-	/* Saved to later use. */
-	disp->mount_flags = outarg.flags;
-
-	outarg.flags = fsdev_io_h2d_u32(fuse_io, outarg.flags);
-	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io, max_readahead);
-	outarg.max_write = fsdev_io_h2d_u32(fuse_io, fuse_io->u.init.opts.max_write);
 	if (fsdev_io_proto_minor(fuse_io) >= 13) {
 		outarg.max_background = fsdev_io_h2d_u16(fuse_io, DEFAULT_MAX_BACKGROUND);
 		outarg.congestion_threshold = fsdev_io_h2d_u16(fuse_io, DEFAULT_CONGESTION_THRESHOLD);
@@ -2221,11 +2300,14 @@ do_mount_prepare_completion(struct fuse_io *fuse_io)
 
 	SPDK_INFOLOG(fuse_dispatcher, "INIT: %" PRIu32 ".%" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io, outarg.major), fsdev_io_d2h_u32(fuse_io, outarg.minor));
-	SPDK_INFOLOG(fuse_dispatcher, "flags: 0x%08" PRIx32 "\n", fsdev_io_d2h_u32(fuse_io, outarg.flags));
+	SPDK_INFOLOG(fuse_dispatcher, "mount_flags: 0x%08" PRIx32 "\n",
+		     fsdev_io_h2d_u32(fuse_io, fsdev_mount_flags_to_fuse(supported)));
 	SPDK_INFOLOG(fuse_dispatcher, "max_readahead: %" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io, outarg.max_readahead));
 	SPDK_INFOLOG(fuse_dispatcher, "max_write: %" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io, outarg.max_write));
+	SPDK_INFOLOG(fuse_dispatcher, "max_pages: %" PRIu32 "\n",
+		     fsdev_io_d2h_u32(fuse_io, outarg.max_pages));
 	SPDK_INFOLOG(fuse_dispatcher, "max_background: %" PRIu16 "\n",
 		     fsdev_io_d2h_u16(fuse_io, outarg.max_background));
 	SPDK_INFOLOG(fuse_dispatcher, "congestion_threshold: %" PRIu16 "\n",
@@ -2261,7 +2343,7 @@ do_mount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "%s: spdk_fsdev_mount succeeded\n", fuse_dispatcher_name(disp));
 	disp->root_fobject = root_fobject;
-	rc = do_mount_prepare_completion(fuse_io);
+	rc = do_mount_prepare_completion(fuse_io, opts);
 	if (rc) {
 		SPDK_ERRLOG("%s: mount completion preparation failed with %d\n", fuse_dispatcher_name(disp), rc);
 		fuse_io->u.init.error = rc;
@@ -2278,6 +2360,8 @@ do_init(struct fuse_io *fuse_io)
 {
 	size_t compat_size = offsetof(struct fuse_init_in, max_readahead);
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	uint32_t max_readahead = DEFAULT_MAX_READAHEAD;
+	uint32_t requested_flags = 0;
 	uint32_t flags = 0;
 	int rc;
 
@@ -2332,15 +2416,25 @@ do_init(struct fuse_io *fuse_io)
 	}
 
 	if (!fuse_io->u.init.legacy_in) {
-		flags = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->flags);
-
-		SPDK_INFOLOG(fuse_dispatcher, "flags=0x%" PRIx32 "\n", flags);
+		requested_flags = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->flags);
+		max_readahead = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->max_readahead);
+		SPDK_INFOLOG(fuse_dispatcher, "requested: flags=0x%" PRIx32 " max_readahead=%" PRIu32 "\n",
+			     requested_flags, max_readahead);
 	}
+
+	/* Negotiate the following options if requested by the FUSE. */
+	SET_MOUNT_FLAG(true, flags, DOT_PATH_LOOKUP);
+	SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
+	SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
+	SET_MOUNT_FLAG(true, flags, WRITEBACK_CACHE);
+	SET_MOUNT_FLAG(true, flags, POSIX_ACL);
 
 	memset(&fuse_io->u.init.opts, 0, sizeof(fuse_io->u.init.opts));
 	fuse_io->u.init.opts.opts_size = sizeof(fuse_io->u.init.opts);
-	fuse_io->u.init.opts.max_write = 0;
-	fuse_io->u.init.opts.writeback_cache_enabled = flags & FUSE_WRITEBACK_CACHE ? true : false;
+
+	/* Passing for negotiation only few flags. The rest are always supported. */
+	fuse_io->u.init.opts.flags = fuse_mount_flags_to_fsdev(flags);
+	fuse_io->u.init.opts.max_readahead = max_readahead;
 	fuse_io->u.init.thread = spdk_get_thread();
 
 	rc = spdk_fsdev_mount(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
@@ -2350,6 +2444,8 @@ do_init(struct fuse_io *fuse_io)
 		fuse_dispatcher_io_complete_err(fuse_io, rc);
 	}
 }
+
+#undef SET_MOUNT_FLAG
 
 static void
 do_opendir_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,

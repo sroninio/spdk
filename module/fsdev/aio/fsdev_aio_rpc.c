@@ -27,7 +27,8 @@ static const struct spdk_json_object_decoder rpc_aio_create_decoders[] = {
 	{"root_path", offsetof(struct rpc_aio_create, root_path), spdk_json_decode_string},
 	{"enable_xattr", offsetof(struct rpc_aio_create, opts.xattr_enabled), spdk_json_decode_bool, true},
 	{"enable_writeback_cache", offsetof(struct rpc_aio_create, opts.writeback_cache_enabled), spdk_json_decode_bool, true},
-	{"max_write", offsetof(struct rpc_aio_create, opts.max_write), spdk_json_decode_uint32, true},
+	{"max_xfer_size", offsetof(struct rpc_aio_create, opts.max_xfer_size), spdk_json_decode_uint32, true},
+	{"max_readahead", offsetof(struct rpc_aio_create, opts.max_readahead), spdk_json_decode_uint32, true},
 	{"enable_skip_rw", offsetof(struct rpc_aio_create, opts.skip_rw_enabled), spdk_json_decode_bool, true},
 };
 

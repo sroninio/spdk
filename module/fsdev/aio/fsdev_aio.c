@@ -29,7 +29,8 @@
 #define TIME_GRAN (1)
 #define MAX_AIOS 256
 #define DEFAULT_WRITEBACK_CACHE true
-#define DEFAULT_MAX_WRITE 0x00020000
+#define DEFAULT_MAX_XFER_SIZE 0x00020000
+#define DEFAULT_MAX_READAHEAD 0x00020000
 #define DEFAULT_XATTR_ENABLED false
 #define DEFAULT_SKIP_RW false
 #define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
@@ -190,13 +191,12 @@ struct aio_fsdev_file_object {
 struct aio_fsdev {
 	struct spdk_fsdev fsdev;
 	struct spdk_fsdev_mount_opts mount_opts;
+	struct spdk_fsdev_aio_opts opts;
 	char *root_path;
 	int proc_self_fd;
 	struct aio_fsdev_file_object *root;
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
-	bool xattr_enabled;
-	bool skip_rw_enabled;
 };
 
 struct aio_fsdev_io {
@@ -693,30 +693,55 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 static int
 lo_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts *opts)
 {
+	bool writeback_cache_enabled = !!(opts->flags & SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+	uint64_t flags = 0;
+
 	assert(opts != NULL);
 	assert(opts->opts_size != 0);
 
 	UNUSED(vfsdev);
 
-	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, max_write)) {
+	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, max_xfer_size)) {
 		/* Set the value the aio fsdev was created with */
-		opts->max_write = vfsdev->mount_opts.max_write;
+		opts->max_xfer_size = vfsdev->mount_opts.max_xfer_size;
 	}
 
-	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, writeback_cache_enabled)) {
-		if (vfsdev->mount_opts.writeback_cache_enabled) {
-			/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
-			vfsdev->mount_opts.writeback_cache_enabled = opts->writeback_cache_enabled;
-		} else {
-			/* The writeback_cache_enabled was disabled upon creation => we reflect it in the opts */
-			opts->writeback_cache_enabled = false;
-		}
+	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, max_readahead)) {
+		/* Set the value the aio fsdev was created with */
+		opts->max_readahead = vfsdev->mount_opts.max_readahead;
 	}
+
+	if (vfsdev->opts.writeback_cache_enabled) {
+		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
+		vfsdev->opts.writeback_cache_enabled = writeback_cache_enabled;
+	} else {
+		/* The writeback_cache_enabled was disabled upon creation => we reflect it in the opts */
+		writeback_cache_enabled = false;
+	}
+
+#define AIO_SET_MOUNT_FLAG(cond, store, flag) \
+	if ((cond) && (opts->flags & (SPDK_FSDEV_MOUNT_##flag))) { \
+		store |= (SPDK_FSDEV_MOUNT_##flag);                \
+	}
+
+	AIO_SET_MOUNT_FLAG(true, flags, DOT_PATH_LOOKUP);
+	AIO_SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
+	AIO_SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
+	AIO_SET_MOUNT_FLAG(true, flags, POSIX_ACL);
+
+	/* Based on the setting above. */
+	AIO_SET_MOUNT_FLAG(writeback_cache_enabled, flags, WRITEBACK_CACHE);
+
+	/* Updating negotiated flags. */
+	opts->flags = vfsdev->mount_opts.flags = flags;
+
+#undef AIO_SET_MOUNT_FLAG
 
 	/* The AIO doesn't apply any additional restrictions, so we just accept the requested opts */
 	SPDK_DEBUGLOG(fsdev_aio,
-		      "aio filesystem %s: opts updated: max_write=%" PRIu32 ", writeback_cache=%" PRIu8 "\n",
-		      vfsdev->fsdev.name, vfsdev->mount_opts.max_write, vfsdev->mount_opts.writeback_cache_enabled);
+		      "aio filesystem %s: opts updated: max_xfer_size=%" PRIu32 ", max_readahead=%" PRIu32
+		      ", writeback_cache=%" PRIu8 ", mount_flags=%" PRIu64 "\n", vfsdev->fsdev.name,
+		      opts->max_xfer_size, opts->max_readahead, writeback_cache_enabled, flags);
 
 	return 0;
 }
@@ -1689,7 +1714,7 @@ update_open_flags(struct aio_fsdev *vfsdev, uint32_t flags)
 	 * With writeback cache, kernel may send read requests even
 	 * when userspace opened write-only
 	 */
-	if (vfsdev->mount_opts.writeback_cache_enabled && (flags & O_ACCMODE) == O_WRONLY) {
+	if (vfsdev->opts.writeback_cache_enabled && (flags & O_ACCMODE) == O_WRONLY) {
 		flags &= ~O_ACCMODE;
 		flags |= O_RDWR;
 	}
@@ -1702,7 +1727,7 @@ update_open_flags(struct aio_fsdev *vfsdev, uint32_t flags)
 	 * we just accept that. A more rigorous filesystem may want
 	 * to return an error here
 	 */
-	if (vfsdev->mount_opts.writeback_cache_enabled && (flags & O_APPEND)) {
+	if (vfsdev->opts.writeback_cache_enabled && (flags & O_APPEND)) {
 		flags &= ~O_APPEND;
 	}
 
@@ -2045,7 +2070,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	if (vfsdev->skip_rw_enabled) {
+	if (vfsdev->opts.skip_rw_enabled) {
 		ssize_t bytes_read = 0;
 		for (int i = 0; i < (int)outcnt; i++, outvec++) {
 			bytes_read += outvec->iov_len;
@@ -2118,7 +2143,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	if (vfsdev->skip_rw_enabled) {
+	if (vfsdev->opts.skip_rw_enabled) {
 		ssize_t bytes_written = 0;
 
 		for (int i = 0; i < (int)incnt; i++, invec++) {
@@ -2639,7 +2664,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	uint64_t flags = fsdev_io->u_in.setxattr.flags;
 	static const char *acl_access_name = "system.posix_acl_access";
 
-	if (!vfsdev->xattr_enabled) {
+	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
@@ -2715,7 +2740,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	void *buffer = fsdev_io->u_in.getxattr.buffer;
 	size_t size = fsdev_io->u_in.getxattr.size;
 
-	if (!vfsdev->xattr_enabled) {
+	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
@@ -2774,7 +2799,7 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	char *buffer = fsdev_io->u_in.listxattr.buffer;
 	size_t size = fsdev_io->u_in.listxattr.size;
 
-	if (!vfsdev->xattr_enabled) {
+	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
@@ -2830,7 +2855,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 						fsdev_io->u_in.removexattr.fobject);
 	char *name = fsdev_io->u_in.removexattr.name;
 
-	if (!vfsdev->xattr_enabled) {
+	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
@@ -3285,11 +3310,13 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_string(w, "name", spdk_fsdev_get_name(&vfsdev->fsdev));
 	spdk_json_write_named_string(w, "root_path", vfsdev->root_path);
-	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->xattr_enabled);
+	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->opts.xattr_enabled);
 	spdk_json_write_named_bool(w, "enable_writeback_cache",
-				   !!vfsdev->mount_opts.writeback_cache_enabled);
-	spdk_json_write_named_uint32(w, "max_write", vfsdev->mount_opts.max_write);
-	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->skip_rw_enabled);
+				   vfsdev->opts.writeback_cache_enabled);
+	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
+	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
+
+	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->opts.skip_rw_enabled);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -3300,11 +3327,12 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 	struct aio_fsdev *vfsdev = ctx;
 
 	spdk_json_write_named_string(w, "root_path", vfsdev->root_path);
-	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->xattr_enabled);
+	spdk_json_write_named_bool(w, "enable_xattr", vfsdev->opts.xattr_enabled);
 	spdk_json_write_named_bool(w, "enable_writeback_cache",
-				   !!vfsdev->mount_opts.writeback_cache_enabled);
-	spdk_json_write_named_uint32(w, "max_write", vfsdev->mount_opts.max_write);
-	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->skip_rw_enabled);
+				   vfsdev->opts.writeback_cache_enabled);
+	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
+	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
+	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->opts.skip_rw_enabled);
 
 	return 0;
 }
@@ -3530,7 +3558,8 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 
 	opts->xattr_enabled = DEFAULT_XATTR_ENABLED;
 	opts->writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
-	opts->max_write = DEFAULT_MAX_WRITE;
+	opts->max_xfer_size = DEFAULT_MAX_XFER_SIZE;
+	opts->max_readahead = DEFAULT_MAX_READAHEAD;
 	opts->skip_rw_enabled = DEFAULT_SKIP_RW;
 }
 
@@ -3585,7 +3614,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-	vfsdev->xattr_enabled = opts->xattr_enabled;
+	vfsdev->opts = *opts;
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
 	vfsdev->fsdev.module = &aio_fsdev_module;
@@ -3596,17 +3625,15 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return rc;
 	}
 
-	vfsdev->mount_opts.writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
-	vfsdev->mount_opts.max_write = DEFAULT_MAX_WRITE;
-
-	vfsdev->skip_rw_enabled = opts->skip_rw_enabled;
+	vfsdev->mount_opts.max_xfer_size = opts->max_xfer_size;
+	vfsdev->mount_opts.max_readahead = opts->max_readahead;
 
 	*fsdev = &(vfsdev->fsdev);
 	TAILQ_INSERT_TAIL(&g_aio_fsdev_head, vfsdev, tailq);
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio filesystem %s (xattr_enabled=%" PRIu8 " writeback_cache=%"
-		      PRIu8 " max_write=%" PRIu32 " skip_rw=%" PRIu8 ")\n",
-		      vfsdev->fsdev.name, vfsdev->xattr_enabled, vfsdev->mount_opts.writeback_cache_enabled,
-		      vfsdev->mount_opts.max_write, vfsdev->skip_rw_enabled);
+		      PRIu8 " max_xfer_size=%" PRIu32 " max_readahead=%" PRIu32 " skip_rw=%" PRIu8 ")\n",
+		      vfsdev->fsdev.name, vfsdev->opts.xattr_enabled, vfsdev->opts.writeback_cache_enabled,
+		      vfsdev->opts.max_xfer_size, vfsdev->opts.max_readahead, vfsdev->opts.skip_rw_enabled);
 	return rc;
 }
 void

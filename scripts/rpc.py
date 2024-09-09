@@ -3495,7 +3495,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def fsdev_aio_create(args):
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
-                                         max_write=args.max_write, enable_skip_rw=args.enable_skip_rw))
+                                         max_xfer_size=args.max_xfer_size, enable_skip_rw=args.enable_skip_rw))
 
     p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
     p.add_argument('name', help='Filesystem name. Example: aio0.')
@@ -3510,7 +3510,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     group.add_argument('--disable-writeback-cache', help='Disable writeback cache', dest='enable_writeback_cache', action='store_false',
                        default=None)
 
-    p.add_argument('-w', '--max-write', help='Max write size in bytes', type=int)
+    p.add_argument('-w', '--max-xfer-size', help='Max data transfer size in bytes', type=int)
 
     group = p.add_mutually_exclusive_group()
     group.add_argument('--enable-skip-rw', help='Enabled skiping on read/write IOs', action='store_true', default=None)

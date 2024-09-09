@@ -83,23 +83,49 @@ struct spdk_fsdev_mount_opts {
 	uint32_t opts_size;
 
 	/**
-	 * OUT Maximum size of the write buffer
+	 * OUT The maximum size allowed for data transfers, in bytes. 0 value means unlimited.
 	 */
-	uint32_t max_write;
+	uint32_t max_xfer_size;
 
 	/**
-	 * IN/OUT Indicates whether the writeback caching should be enabled.
-	 *
-	 * See FUSE I/O ([1]) doc for more info.
-	 *
-	 * [1] https://www.kernel.org/doc/Documentation/filesystems/fuse-io.txt
-	 *
-	 * This feature is disabled by default.
+	 * OUT Max readahead size.
 	 */
-	uint8_t writeback_cache_enabled;
+	uint32_t max_readahead;
 
+	/**
+	 * IN/OUT Contains requested and negotiated fsdev mount flags.
+	 */
+	uint32_t flags;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 9, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size");
+
+/**
+ * IN/OUT Mount flags. These control user behavior with regard to the fsdev API.
+ * The user provides the set of flags they'd like set and the fsdev can modify them.
+ *
+ * SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP: "." and ".." are valid paths for a lookup operation.
+ *
+ * SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA: The user will invalidate any cached data pages for
+ * objects if fsdev reports a modified 'mtime'. Additionally, the user will check
+ * for attribute changes (e.g. size) prior to issuing a read, rather than assuming
+ * their latest cached attributes are valid.
+ *
+ * SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA:: The user will receive cache invalidation requests
+ * when necessary. This ensures that data cached by user is correctly invalidated
+ * and updated.
+ *
+ * SPDK_FSDEV_MOUNT_WRITEBACK_CACHE: The user will maintain their own cache of write data,
+ * without immediately forwarding writes to the fsdev. The user will assume their
+ * cached versions of the file attributes are newer than the ones reported by fsdev.
+ *
+ * SPDK_FSDEV_MOUNT_POSIX_ACL: The user will assume that the fsdev is performing ACL checks
+ * on setxattr_flags.
+ */
+#define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
+#define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
+#define SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA  (1 << 2)
+#define SPDK_FSDEV_MOUNT_WRITEBACK_CACHE      (1 << 3)
+#define SPDK_FSDEV_MOUNT_POSIX_ACL            (1 << 4)
 
 /**
  * Structure with optional fsdev IO parameters

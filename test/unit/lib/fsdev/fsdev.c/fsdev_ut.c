@@ -332,9 +332,9 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_hash(&fsdev_io->u_in.mount.opts, sizeof(fsdev_io->u_in.mount.opts));
 		fsdev_io->u_out.mount.root_fobject = UT_FOBJECT;
 		fsdev_io->u_out.mount.opts.opts_size = fsdev_io->u_in.mount.opts.opts_size;
-		fsdev_io->u_out.mount.opts.max_write = fsdev_io->u_in.mount.opts.max_write / 2;
-		fsdev_io->u_out.mount.opts.writeback_cache_enabled =
-			!fsdev_io->u_in.mount.opts.writeback_cache_enabled;
+		fsdev_io->u_out.mount.opts.max_xfer_size = fsdev_io->u_in.mount.opts.max_xfer_size / 2;
+		fsdev_io->u_out.mount.opts.flags = fsdev_io->u_in.mount.opts.flags;
+		fsdev_io->u_out.mount.opts.flags &= ~SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
 		break;
 	case SPDK_FSDEV_IO_LOOKUP:
 		ut_call_record_param_str(fsdev_io->u_in.lookup.name);
@@ -1205,13 +1205,17 @@ ut_fsdev_mount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 
 {
 	int *clb_status = cb_arg;
+	bool has_writeback_cache;
+	bool ut_writeback_cache;
 	*clb_status = status;
 	if (!status) {
 		CU_ASSERT(root_fobject == UT_FOBJECT);
 		CU_ASSERT(opts != NULL);
 		CU_ASSERT(opts->opts_size == ut_mount_opts.opts_size);
-		CU_ASSERT(opts->max_write == ut_mount_opts.max_write / 2);
-		CU_ASSERT(opts->writeback_cache_enabled == !ut_mount_opts.writeback_cache_enabled);
+		CU_ASSERT(opts->max_xfer_size == ut_mount_opts.max_xfer_size / 2);
+		has_writeback_cache = !!(opts->flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+		ut_writeback_cache = !!(ut_mount_opts.flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+		CU_ASSERT(has_writeback_cache == !ut_writeback_cache);
 	}
 }
 
@@ -1221,8 +1225,8 @@ ut_fsdev_mount_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 {
 	memset(&ut_mount_opts, 0, sizeof(ut_mount_opts));
 	ut_mount_opts.opts_size = sizeof(ut_mount_opts);
-	ut_mount_opts.max_write = UINT32_MAX;
-	ut_mount_opts.writeback_cache_enabled = true;
+	ut_mount_opts.max_xfer_size = UINT32_MAX;
+	ut_mount_opts.flags = SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
 
 	return spdk_fsdev_mount(fsdev_desc, ch, UT_UNIQUE, &ut_mount_opts, ut_fsdev_mount_cpl_cb, status);
 }
