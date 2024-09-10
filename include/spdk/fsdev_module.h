@@ -461,7 +461,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint32_t request;
-			void *arg;
+			uint64_t arg;
 			struct iovec *in_iov;
 			uint32_t in_iovcnt;
 			struct iovec *out_iov;

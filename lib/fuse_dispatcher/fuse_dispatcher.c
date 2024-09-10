@@ -2981,7 +2981,7 @@ do_ioctl(struct fuse_io *fuse_io)
 	uint64_t fh;
 	uint32_t flags;
 	uint32_t request;
-	void *arg;
+	uint64_t arg;
 	uint32_t in_size;
 	uint32_t out_size;
 	struct iovec in_iov[1];
@@ -3019,7 +3019,7 @@ do_ioctl(struct fuse_io *fuse_io)
 	request = fsdev_io_d2h_u32(fuse_io, in->cmd);
 	in_size = fsdev_io_d2h_u32(fuse_io, in->in_size);
 	out_size = fsdev_io_d2h_u32(fuse_io, in->out_size);
-	arg = (void *)(uintptr_t)fsdev_io_d2h_u64(fuse_io, in->arg);
+	arg = fsdev_io_d2h_u64(fuse_io, in->arg);
 
 	if (in_size) {
 		in_iov[0].iov_base = _fsdev_io_in_arg_get_buf(fuse_io, in_size);

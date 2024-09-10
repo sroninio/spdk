@@ -1131,7 +1131,7 @@ lo_do_ioctl(struct spdk_fsdev_io *fsdev_io)
 	struct iovec *out_iovec = fsdev_io->u_in.ioctl.out_iov;
 	uint32_t in_iovcnt = fsdev_io->u_in.ioctl.in_iovcnt;
 	uint32_t out_iovcnt = fsdev_io->u_in.ioctl.out_iovcnt;
-	void *arg = fsdev_io->u_in.ioctl.arg;
+	void *arg = (void *)(uintptr_t)fsdev_io->u_in.ioctl.arg;
 	struct iovec in_iov[2], out_iov[1];
 	struct aio_ioctl_unrest *ur_data;
 	struct aio_ioctl_rest *rt_data;

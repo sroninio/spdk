@@ -878,7 +878,7 @@ typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 int spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle, uint32_t request,
-		     void *arg, struct iovec *in_iov, uint32_t in_iovcnt,
+		     uint64_t arg, struct iovec *in_iov, uint32_t in_iovcnt,
 		     struct iovec *out_iov, uint32_t out_iovcnt,
 		     spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
 
