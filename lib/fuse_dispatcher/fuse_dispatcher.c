@@ -2958,6 +2958,16 @@ do_ioctl_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
 		 * Retry without FUSE_IOCTL_UNRESTRICTED is not allowed.
 		 */
 		status = (in_flags & FUSE_IOCTL_UNRESTRICTED) ? 0 : -EIO;
+	} else if (!status && (in_iovcnt || out_iovcnt)) {
+		/*
+		 * The final stage (no retry case) should populate the data into
+		 * the buffers. Retruning iovecs is not allowed and will corrupt
+		 * the data.
+		 */
+		SPDK_ERRLOG("The FSDEV module populated some iovecs with in_iovcnt=%u "
+			    "and out_iovcnt=%u for non-retry case, when it was supposed "
+			    "to populate the data buffers only.\n", in_iovcnt, out_iovcnt);
+		status = -EIO;
 	}
 
 	if (!status) {

@@ -839,9 +839,13 @@ typedef void (spdk_fsdev_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status Operation status:
- * - 0 on success
+ * - 0 on success. In unrestricted ioctl() case (see fuse_ioctl() in the Linux kernel)
+ *   the final stage of the retry protocol when 0 is returned in status must only
+ *   populate the final data buffers. The in_iovcnt and out_iovcnt must be zero and
+ *   no iocvecs must be populated. This sanity check is enforced on the higher levels
+ *   and will result into -EIO error if violated.
  * - -EAGAIN on retry request when ioctl misses some buffers to set/get the
- * data (see how the FUSE_IOCTL_RETRY is used).
+ *   data (see how the FUSE_IOCTL_RETRY is used).
  * - error code otherwise.
  * \param result Exact result code returned from ioctl implementation.
  * \param in_iov Array of iovec describing the data to bring in the next retry.
