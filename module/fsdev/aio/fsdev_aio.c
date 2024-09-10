@@ -185,7 +185,6 @@ struct aio_fsdev_file_object {
 	TAILQ_ENTRY(aio_fsdev_file_object) link;
 	TAILQ_HEAD(, aio_fsdev_file_object) leafs;
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
-	struct spdk_spinlock lock;
 	struct aio_fsdev *vfsdev;
 };
 
@@ -349,7 +348,6 @@ file_object_destroy(struct aio_fsdev_file_object *fobject)
 {
 	assert(!fobject->hdr.refcount);
 
-	spdk_spin_destroy(&fobject->lock);
 	close(fobject->fd);
 	free(fobject->fd_str);
 	free(fobject);
@@ -400,7 +398,6 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	}
 
 	spdk_spin_lock(&vfsdev->lock);
-	spdk_spin_lock(&parent_fobject->lock);
 
 	refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
@@ -408,7 +405,6 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 		TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
 	}
 
-	spdk_spin_unlock(&parent_fobject->lock);
 	spdk_spin_unlock(&vfsdev->lock);
 
 	if (refcount) {
@@ -473,7 +469,6 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 
 	TAILQ_INIT(&fobject->handles);
 	TAILQ_INIT(&fobject->leafs);
-	spdk_spin_init(&fobject->lock);
 
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
@@ -509,9 +504,7 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 	if (lut_key != SPDK_LUT_INVALID_KEY) {
 		fhandle->hdr.lut_key = lut_key;
 		__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by fhandle */
-		spdk_spin_lock(&fobject->lock);
 		TAILQ_INSERT_TAIL(&fobject->handles, fhandle, link);
-		spdk_spin_unlock(&fobject->lock);
 	} else {
 		SPDK_ERRLOG("Cannot insert fhandle into lookup table\n");
 		free(fhandle);
@@ -543,9 +536,7 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 	refcount = force_removal ? 0 : __atomic_load_n(&fhandle->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
 		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
-		spdk_spin_lock(&fobject->lock);
 		TAILQ_REMOVE(&fobject->handles, fhandle, link);
-		spdk_spin_unlock(&fobject->lock);
 	}
 	spdk_spin_unlock(&vfsdev->lock);
 
@@ -908,7 +899,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 		return res;
 	}
 
-	spdk_spin_lock(&parent_fobject->lock);
+	spdk_spin_lock(&vfsdev->lock);
 	fobject = lo_find_leaf_unsafe(parent_fobject, stat.st_ino, stat.st_dev);
 	is_new = (fobject == NULL);
 	if (fobject) {
@@ -917,7 +908,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd, stat.st_ino, stat.st_dev,
 						    stat.st_mode);
 	}
-	spdk_spin_unlock(&parent_fobject->lock);
+	spdk_spin_unlock(&vfsdev->lock);
 
 	/* Just in case close() can block, let's keep it out of spinlock. */
 	if (!fobject) {
