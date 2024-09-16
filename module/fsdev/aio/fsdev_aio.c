@@ -149,12 +149,13 @@ struct lo_key {
 struct aio_fsdev_fhdr {
 	uint64_t is_fobject : 1;
 	uint64_t lut_key : 63;
+	uint64_t refcount;
 };
 
 /* Unfortunately, uint64_t lut_key : SPDK_LUT_MAX_KEY_BITS keeps being re-formatted by astyle */
 SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
-/* The sizeof(struct aio_fsdev_fhdr) exactly one uint64_t */
-SPDK_STATIC_ASSERT(sizeof(struct aio_fsdev_fhdr) == 8, "Incorrect size");
+/* The sizeof(struct aio_fsdev_fhdr) a multiple of sizeof(uint64_t) */
+SPDK_STATIC_ASSERT(sizeof(struct aio_fsdev_fhdr) == 16, "Incorrect size");
 
 struct aio_fsdev_file_handle {
 	struct aio_fsdev_fhdr hdr;
@@ -180,7 +181,6 @@ struct aio_fsdev_file_object {
 	int fd;
 	char *fd_str;
 	struct lo_key key;
-	uint64_t refcount;
 	struct aio_fsdev_file_object *parent_fobject;
 	TAILQ_ENTRY(aio_fsdev_file_object) link;
 	TAILQ_HEAD(, aio_fsdev_file_object) leafs;
@@ -198,6 +198,7 @@ struct aio_fsdev {
 	struct aio_fsdev_file_object *root;
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
+	struct spdk_spinlock lock;
 };
 
 struct aio_fsdev_io {
@@ -244,19 +245,24 @@ fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_
 		return NULL;
 	}
 
+	spdk_spin_lock(&vfsdev->lock);
 	fobject = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
 	if (fobject == SPDK_LUT_INVALID_VALUE) {
+		spdk_spin_unlock(&vfsdev->lock);
 		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject\n", n);
 		return NULL;
 	}
 
 	assert(fobject); /* There shouldn't be NULL fobject in the LUT */
 
-	if (!fobject->hdr.is_fobject) {
+	if (spdk_likely(fobject->hdr.is_fobject)) {
+		__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by caller */
+	} else {
 		/* Error: the key rather belongs to a fhandle */
 		SPDK_WARNLOG("0x%" PRIx64 " is not a fobject\n", n);
-		return NULL;
+		fobject = NULL;
 	}
+	spdk_spin_unlock(&vfsdev->lock);
 
 	return fobject;
 }
@@ -278,19 +284,24 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 		return NULL;
 	}
 
+	spdk_spin_lock(&vfsdev->lock);
 	fhandle = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
 	if (fhandle == SPDK_LUT_INVALID_VALUE) {
+		spdk_spin_unlock(&vfsdev->lock);
 		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle\n", n);
 		return NULL;
 	}
 
 	assert(fhandle); /* There shouldn't be NULL fhandle in the LUT */
 
-	if (fhandle->hdr.is_fobject) {
+	if (!fhandle->hdr.is_fobject) {
+		__atomic_add_fetch(&fhandle->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by caller */
+	} else {
 		/* Error: the key rather belongs to a fobject */
 		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
-		return NULL;
+		fhandle = NULL;
 	}
+	spdk_spin_unlock(&vfsdev->lock);
 
 	return fhandle;
 }
@@ -299,12 +310,6 @@ static inline struct spdk_fsdev_file_handle *
 fsdev_aio_get_spdk_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
 {
 	return (struct spdk_fsdev_file_handle *)(uintptr_t)(fhandle->hdr.lut_key + FILE_PTR_LUT_BASE);
-}
-
-static inline bool
-fsdev_aio_is_valid_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
-{
-	return fhandle != NULL;
 }
 
 static int
@@ -342,7 +347,7 @@ lo_find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 static void
 file_object_destroy(struct aio_fsdev_file_object *fobject)
 {
-	assert(!fobject->refcount);
+	assert(!fobject->hdr.refcount);
 
 	spdk_spin_destroy(&fobject->lock);
 	close(fobject->fd);
@@ -354,41 +359,61 @@ file_object_destroy(struct aio_fsdev_file_object *fobject)
 static uint64_t
 file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 {
+	struct aio_fsdev *vfsdev = fobject->vfsdev;
 	struct aio_fsdev_file_object *parent_fobject = fobject->parent_fobject;
 	uint64_t refcount;
 
-	if (spdk_unlikely(!parent_fobject)) {
-		assert(fobject == fobject->vfsdev->root);
-		assert(fobject->refcount >= count);
+	assert(fobject->hdr.refcount >= count);
 
-		refcount = __atomic_sub_fetch(&fobject->refcount, count, __ATOMIC_RELAXED);
-		if (!refcount) {
-			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
-			spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
-			file_object_destroy(fobject);
-		}
-
-		SPDK_DEBUGLOG(fsdev_aio, "root urefed (%p cnt=%" PRIu32 " refcnt=%" PRIu64 ")\n",
-			      fobject, count, refcount);
-		return refcount;
-	}
-
-	assert(fobject->refcount >= count);
-
-	spdk_spin_lock(&parent_fobject->lock);
-
-	refcount = __atomic_sub_fetch(&fobject->refcount, count, __ATOMIC_RELAXED);
+	/* IMPORTANT NOTE:
+	 * We want keep this function as lightweight and lockless as possible, so we decrease the reference counter
+	 * before we take the lock and destroy the object. This is fine in the wast majority of cases, as usually
+	 * file operations are performed on a fobject while it's being referenced by the app.
+	 * However, there's a race here in cases when the last reference is being removed. The fobject can be
+	 * obtained by lo_do_lookup after the reference counter has been decreased and checked and before we take
+	 * the lock to remove the fobject from its parent's leafs list.
+	 * Thus we have to check the value of the reference counter once again to avoid deleting the fobject while
+	 * it's in use.
+	 */
+	refcount = __atomic_sub_fetch(&fobject->hdr.refcount, count, __ATOMIC_RELAXED);
 	if (refcount) {
-		spdk_spin_unlock(&parent_fobject->lock);
 		SPDK_DEBUGLOG(fsdev_aio, "%p urefed (cnt=%" PRIu32 " refcnt=%" PRIu64 ")\n",
 			      fobject, count, refcount);
 		return refcount;
 	}
 
-	spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
+	if (spdk_unlikely(!parent_fobject)) {
+		assert(fobject == fobject->vfsdev->root);
 
-	TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
+		spdk_spin_lock(&vfsdev->lock);
+		refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
+		if (!refcount) {
+			spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
+		}
+		spdk_spin_unlock(&vfsdev->lock);
+
+		if (!refcount) {
+			file_object_destroy(fobject);
+			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
+		}
+		return 0;
+	}
+
+	spdk_spin_lock(&vfsdev->lock);
+	spdk_spin_lock(&parent_fobject->lock);
+
+	refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
+	if (!refcount) {
+		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
+		TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
+	}
+
 	spdk_spin_unlock(&parent_fobject->lock);
+	spdk_spin_unlock(&vfsdev->lock);
+
+	if (refcount) {
+		return refcount;
+	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "%p finally urefed (cnt=%" PRIu32 ")\n",
 		      fobject, count);
@@ -403,7 +428,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 static inline void
 file_object_ref(struct aio_fsdev_file_object *fobject)
 {
-	__atomic_add_fetch(&fobject->refcount, 1, __ATOMIC_RELAXED);
+	/* The fobject is referenced by a caller, so it's' safe just increase the ref count */
+	__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED);
 }
 
 static struct aio_fsdev_file_object *
@@ -436,11 +462,11 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 
 	fobject->hdr.is_fobject = true;
 	fobject->hdr.lut_key = lut_key;
+	fobject->hdr.refcount = 1; /* ref by caller */
 
 	fobject->fd = fd;
 	fobject->key.ino = ino;
 	fobject->key.dev = dev;
-	fobject->refcount = 1;
 	fobject->is_symlink = S_ISLNK(mode) ? 1 : 0;
 	fobject->is_dir = S_ISDIR(mode) ? 1 : 0;
 	fobject->vfsdev = vfsdev;
@@ -452,7 +478,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
 		TAILQ_INSERT_TAIL(&parent_fobject->leafs, fobject, link);
-		parent_fobject->refcount++;
+		file_object_ref(parent_fobject); /* ref by leaf */
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "fobject created %p (lut=0x%" PRIx64 ")\n", fobject,
@@ -474,43 +500,75 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 		return NULL;
 	}
 
-	lut_key = spdk_lut_insert(vfsdev->lut, fhandle);
-	if (lut_key == SPDK_LUT_INVALID_KEY) {
-		SPDK_ERRLOG("Cannot insert fhandle into lookup table\n");
-		free(fhandle);
-		return NULL;
-	}
-
-	fhandle->hdr.lut_key = lut_key;
+	fhandle->hdr.refcount = 1; /* reference by caller */
 	fhandle->fobject = fobject;
 	fhandle->fd = fd;
 
-	spdk_spin_lock(&fobject->lock);
-	fobject->refcount++;
-	TAILQ_INSERT_TAIL(&fobject->handles, fhandle, link);
-	spdk_spin_unlock(&fobject->lock);
+	spdk_spin_lock(&vfsdev->lock);
+	lut_key = spdk_lut_insert(vfsdev->lut, fhandle);
+	if (lut_key != SPDK_LUT_INVALID_KEY) {
+		fhandle->hdr.lut_key = lut_key;
+		__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by fhandle */
+		spdk_spin_lock(&fobject->lock);
+		TAILQ_INSERT_TAIL(&fobject->handles, fhandle, link);
+		spdk_spin_unlock(&fobject->lock);
+	} else {
+		SPDK_ERRLOG("Cannot insert fhandle into lookup table\n");
+		free(fhandle);
+		fhandle = NULL;
+	}
+	spdk_spin_unlock(&vfsdev->lock);
 
 	return fhandle;
 }
 
-static void
-file_handle_delete(struct aio_fsdev_file_handle *fhandle)
+static uint64_t
+file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 {
 	struct aio_fsdev_file_object *fobject = fhandle->fobject;
 	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	uint64_t refcount;
 
-	spdk_spin_lock(&fobject->lock);
-	fobject->refcount--;
-	TAILQ_REMOVE(&fobject->handles, fhandle, link);
-	spdk_spin_unlock(&fobject->lock);
+	assert(fhandle->hdr.refcount > 0);
+
+	/* The IMPORTANT NOTE from the file_object_unref() applies here as well */
+	if (!force_removal) {
+		refcount = __atomic_sub_fetch(&fhandle->hdr.refcount, 1, __ATOMIC_RELAXED);
+		if (refcount) {
+			return refcount;
+		}
+	}
+
+	spdk_spin_lock(&vfsdev->lock);
+	refcount = force_removal ? 0 : __atomic_load_n(&fhandle->hdr.refcount, __ATOMIC_RELAXED);
+	if (!refcount) {
+		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
+		spdk_spin_lock(&fobject->lock);
+		TAILQ_REMOVE(&fobject->handles, fhandle, link);
+		spdk_spin_unlock(&fobject->lock);
+	}
+	spdk_spin_unlock(&vfsdev->lock);
+
+	if (refcount) {
+		return refcount;
+	}
+
+	file_object_unref(fobject, 1); /* unref by fhandle */
 
 	if (fhandle->dir.dp) {
 		closedir(fhandle->dir.dp);
 	}
 
-	spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
 	close(fhandle->fd);
 	free(fhandle);
+
+	return 0;
+}
+
+static inline uint64_t
+file_handle_unref(struct aio_fsdev_file_handle *fhandle)
+{
+	return file_handle_unref_ex(fhandle, false);
 }
 
 static int
@@ -570,16 +628,21 @@ utimensat_empty(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
 static void
 fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 {
+	uint64_t refcount;
+
+	/* ref to make sure it's not deleted when the last reference by a handle or a leaf removed */
+	file_object_ref(fobject);
+
 	while (!TAILQ_EMPTY(&fobject->handles)) {
 		struct aio_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
-		file_handle_delete(fhandle);
+		file_handle_unref_ex(fhandle, true);
 #ifdef __clang_analyzer__
 		/*
-		 * scan-build fails to comprehend that file_handle_delete() removes the fhandle
+		 * scan-build fails to comprehend that file_handle_unref_ex() removes the fhandle
 		 * from the queue, so it thinks it's remained accessible and throws the "Use of
 		 * memory after it is freed" error here.
 		 * The loop below "teaches" the scan-build that the freed fhandle is not on the
-		 * list anymore and supresses the error in this way.
+		 * list anymore and suppresses the error in this way.
 		 */
 		struct aio_fsdev_file_handle *tmp;
 		TAILQ_FOREACH(tmp, &fobject->handles, link) {
@@ -594,9 +657,10 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 		fsdev_free_leafs(leaf_fobject, true);
 	}
 
-	if (fobject->refcount && unref_fobject) {
-		/* if still referenced - zero refcount */
-		uint64_t refcount = file_object_unref(fobject, fobject->refcount);
+	refcount = file_object_unref(fobject, 1); /* a ref that we took at the beginning of this function */
+	if (refcount && unref_fobject) {
+		/* if still referenced - unref by refcount */
+		refcount = file_object_unref(fobject, refcount);
 		assert(refcount == 0);
 		UNUSED(refcount);
 	}
@@ -605,11 +669,11 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 static int
 lo_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.getattr.fobject);
+	struct aio_fsdev_file_object *fobject;
+	int res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -618,11 +682,14 @@ lo_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	res = file_object_fill_attr(fobject, &fsdev_io->u_out.getattr.attr);
 	if (res) {
 		SPDK_ERRLOG("Cannot fill attr for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
-		return res;
+		goto fop_failed;
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "GETATTR succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
-	return 0;
+
+fop_failed:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -631,13 +698,13 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int error;
 	int fd;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.opendir.fobject);
+	struct aio_fsdev_file_object *fobject;
 	uint32_t flags = fsdev_io->u_in.opendir.flags;
 	struct aio_fsdev_file_handle *fhandle = NULL;
 
 	UNUSED(flags);
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.opendir.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -647,7 +714,7 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fd == -1) {
 		error = -errno;
 		SPDK_ERRLOG("openat failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
-		goto out_err;
+		goto do_return;
 	}
 
 	fhandle = file_handle_create(fobject, fd);
@@ -655,14 +722,14 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		error = -ENOMEM;
 		SPDK_ERRLOG("file_handle_create failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject),
 			    error);
-		goto out_err;
+		goto do_return;
 	}
 
 	fhandle->dir.dp = fdopendir(fd);
 	if (fhandle->dir.dp == NULL) {
 		error = -errno;
 		SPDK_ERRLOG("fdopendir failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
-		goto out_err;
+		goto do_return;
 	}
 
 	fhandle->dir.offset = 0;
@@ -673,15 +740,20 @@ lo_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	fsdev_io->u_out.opendir.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
 
-	return 0;
+	error = 0;
 
-out_err:
-	if (fhandle) {
-		file_handle_delete(fhandle);
-	} else if (fd != -1) {
-		close(fd);
+do_return:
+	if (error) {
+		if (fhandle) {
+			uint64_t refcnt = file_handle_unref(fhandle);
+			assert(!refcnt);
+			UNUSED(refcnt);
+		} else if (fd != -1) {
+			close(fd);
+		}
 	}
 
+	file_object_unref(fobject, 1);
 	return error;
 }
 
@@ -689,22 +761,25 @@ static int
 lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.releasedir.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.releasedir.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
+	int res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.releasedir.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.releasedir.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
-	file_handle_delete(fhandle);
+	file_handle_unref(fhandle);
+	res = 0;
 
 	/*
 	 * scan-build doesn't understand that we only print the value of an already
@@ -715,7 +790,9 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		      FOBJECT_ARGS(fobject), fhandle);
 #endif
 
-	return 0;
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -873,11 +950,19 @@ lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int err;
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.lookup.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.lookup.name;
 
+	/* Don't use is_safe_path_component(), allow "." and ".." for NFS export
+	 * support.
+	 */
+	if (strchr(name, '/')) {
+		SPDK_ERRLOG("Invalid name: %s\n", name);
+		return -EINVAL;
+	}
+
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lookup.parent_fobject);
 	if (!parent_fobject) {
 		err = file_object_fill_attr(vfsdev->root, &fsdev_io->u_out.lookup.attr);
 		if (err) {
@@ -892,31 +977,28 @@ lo_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	SPDK_DEBUGLOG(fsdev_aio, "  name %s\n", name);
 
-	/* Don't use is_safe_path_component(), allow "." and ".." for NFS export
-	 * support.
-	 */
-	if (strchr(name, '/')) {
-		return -EINVAL;
-	}
-
 	err = lo_do_lookup(vfsdev, parent_fobject, name, &fobject, &fsdev_io->u_out.lookup.attr);
 	if (err) {
 		SPDK_DEBUGLOG(fsdev_aio, "lo_do_lookup(%s) failed with err=%d\n", name, err);
-		return err;
+		goto fop_failed;
 	}
 
 	fsdev_io->u_out.lookup.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
-	return 0;
+	err = 0;
+
+fop_failed:
+	file_object_unref(parent_fobject, 1);
+	return err;
 }
 
 static int
 lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int fd, res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.syncfs.fobject);
+	struct aio_fsdev_file_object *fobject;
+	int fd, res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.syncfs.fobject);
 	if (fobject != vfsdev->root) {
 		SPDK_ERRLOG("Syncfs expected root file object but received " FOBJECT_FMT
 			    "\n", FOBJECT_ARGS(fobject));
@@ -931,7 +1013,7 @@ lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fd == -1) {
 		res = -errno;
 		SPDK_ERRLOG("Cannot open root %s (err=%d)\n", vfsdev->root_path, res);
-		return res;
+		goto fop_failed;
 	}
 
 	res = syncfs(fd);
@@ -939,13 +1021,16 @@ lo_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = -errno;
 		SPDK_ERRLOG("Cannot syncfs for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
 		close(fd);
-		return res;
+		goto fop_failed;
 	}
 	close(fd);
 
-	SPDK_DEBUGLOG(fsdev_aio, "SYNCFS succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	SPDK_DEBUGLOG(fsdev_aio, "SYNCFS succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	res = 0;
 
-	return 0;
+fop_failed:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -953,13 +1038,24 @@ lo_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lseek.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.lseek.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	off_t offset = fsdev_io->u_in.lseek.offset;
 	enum spdk_fsdev_seek_whence whence = fsdev_io->u_in.lseek.whence;
 	int awhence;
+
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lseek.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		return -EINVAL;
+	}
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.lseek.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		res = -EINVAL;
+		goto bad_fhandle;
+	}
 
 	switch (whence) {
 	case SPDK_FSDEV_SEEK_SET:
@@ -989,11 +1085,17 @@ lo_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = -errno;
 		SPDK_ERRLOG("Failed to change read/write offset for " FOBJECT_FMT " (err=%d)\n",
 			    FOBJECT_ARGS(fobject), res);
-		return res;
+		goto fop_failed;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
-	return 0;
+	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	res = 0;
+
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static short
@@ -1080,25 +1182,36 @@ lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.poll.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.poll.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	short posix_events = fsdev_events_to_posix(fsdev_io->u_in.poll.events);
 	struct pollfd fds;
+
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.poll.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		return -EINVAL;
+	}
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.poll.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		res = -EINVAL;
+		goto bad_fhandle;
+	}
 
 	fds.fd = fhandle->fd;
 	fds.events = posix_events;
 	fds.revents = 0;
 
-	/* Zero timeout - return immediatelly even if no events available. */
+	/* Zero timeout - return immediately even if no events available. */
 	res = poll(&fds, 1, 0);
 	fsdev_io->u_out.poll.revents = posix_events_to_fsdev(fds.revents);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("Failed poll for " FOBJECT_FMT " (err=%d)\n",
 			    FOBJECT_ARGS(fobject), res);
-		return res;
+		goto fop_failed;
 	}
 
 	/*
@@ -1111,7 +1224,12 @@ lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = 0;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "POLL succeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+	SPDK_DEBUGLOG(fsdev_aio, "POLL succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
 	return res;
 }
 
@@ -1330,17 +1448,14 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.ioctl.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.ioctl.fhandle);
-	uint32_t request = fsdev_io->u_in.ioctl.request;
+	struct aio_fsdev_file_object *fobject;
+	uint32_t request =  fsdev_io->u_in.ioctl.request;
 
-	UNUSED(fobject);
 	UNUSED(request);
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.ioctl.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
@@ -1357,6 +1472,8 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	SPDK_DEBUGLOG(fsdev_aio, "IOCTL(%u) for " FOBJECT_FMT " handled with result=%d\n",
 		      request, FOBJECT_ARGS(fobject), res);
+
+	file_object_unref(fobject, 1);
 	return res;
 }
 
@@ -1494,15 +1611,21 @@ lo_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int res;
 	struct flock posix_lock;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getlk.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.getlk.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.getlk.lock;
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getlk.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
+	}
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.getlk.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	/*
@@ -1512,7 +1635,7 @@ lo_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 */
 	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
 	if (res) {
-		return res;
+		goto fop_failed;
 	}
 
 	res = fcntl(fhandle->fd, F_GETLK, &posix_lock);
@@ -1520,21 +1643,28 @@ lo_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = -errno;
 		SPDK_ERRLOG("Getlk failed for " FOBJECT_FMT " (err=%d)\n",
 			    FOBJECT_ARGS(fobject), res);
-		return res;
-	}
-	res = flock_to_fsdev_file_lock(fhandle, &posix_lock, &fsdev_io->u_out.getlk.lock);
-	if (res) {
-		return res;
+		goto fop_failed;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "GETLK succeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
+	res = flock_to_fsdev_file_lock(fhandle, &posix_lock, &fsdev_io->u_out.getlk.lock);
+	if (res) {
+		goto fop_failed;
+	}
+
+	res = 0;
+	SPDK_DEBUGLOG(fsdev_aio, "GETLK succeeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
 		      FOBJECT_ARGS(fobject), posix_lock.l_type, posix_lock.l_start, posix_lock.l_len);
-	return 0;
+
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 /*
  * This function is not fully functional implementation of setlk() operation.
- * In the enviroment where virtiofs is used the lock pid is usually wrong or 0
+ * In the environment where fsdev is used the lock pid is usually wrong or 0
  * which needs to be specially handled. Think of it as of an example or
  * tutorial of how it can be implemented.
  */
@@ -1544,20 +1674,26 @@ lo_setlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int res;
 	struct flock posix_lock;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setlk.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setlk.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.setlk.lock;
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setlk.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
+	}
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setlk.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
 	if (res) {
-		return res;
+		goto fop_failed;
 	}
 
 	res = fcntl(fhandle->fd, F_SETLK, &posix_lock);
@@ -1572,14 +1708,21 @@ lo_setlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			SPDK_ERRLOG("Fcntl failed for " FOBJECT_FMT " (err=%d)\n",
 				    FOBJECT_ARGS(fobject), res);
 		} else if (res == -EACCES) {
-			return -EAGAIN;
+			res = -EAGAIN;
+			goto fop_failed;
 		}
 		return res;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "SETLK succeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
+	res = 0;
+	SPDK_DEBUGLOG(fsdev_aio, "SETLK succeeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
 		      FOBJECT_ARGS(fobject), posix_lock.l_type, posix_lock.l_start, posix_lock.l_len);
-	return 0;
+
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 /*
@@ -1630,21 +1773,23 @@ static int
 lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readdir.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.readdir.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	uint64_t offset = fsdev_io->u_in.readdir.offset;
 	struct aio_fsdev_file_object *entry_fobject;
+	int res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readdir.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.readdir.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	if (((off_t)offset) != fhandle->dir.offset) {
@@ -1656,7 +1801,6 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	while (1) {
 		off_t nextoff;
 		const char *name;
-		int res;
 
 		if (!fhandle->dir.entry) {
 			errno = 0;
@@ -1665,7 +1809,7 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 				if (errno) {  /* Error */
 					res = -errno;
 					SPDK_ERRLOG("readdir failed with err=%d", res);
-					return res;
+					goto fop_failed;
 				} else {  /* End of stream */
 					break;
 				}
@@ -1693,7 +1837,7 @@ lo_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 				   &fsdev_io->u_out.readdir.attr);
 		if (res) {
 			SPDK_DEBUGLOG(fsdev_aio, "lo_do_lookup(%s) failed with err=%d\n", name, res);
-			return res;
+			goto fop_failed;
 		}
 
 		fsdev_io->u_out.readdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, entry_fobject);
@@ -1715,28 +1859,33 @@ skip_entry:
 		fhandle->dir.offset = nextoff;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
 		      FOBJECT_ARGS(fobject), fhandle, offset, fsdev_io->u_out.readdir.offset);
-	return 0;
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.readdir.fobject);
+	struct aio_fsdev_file_object *fobject;
 	uint64_t nlookup = fsdev_io->u_in.forget.nlookup;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readdir.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	file_object_unref(fobject, nlookup);
-	SPDK_DEBUGLOG(fsdev_aio, "FORGET succeeded for " FOBJECT_FMT "nlookup=%" PRIu64 "\n",
+	SPDK_DEBUGLOG(fsdev_aio, "FORGET for " FOBJECT_FMT " nlookup=%" PRIu64 "\n",
 		      FOBJECT_ARGS(fobject), nlookup);
+	file_object_unref(fobject, nlookup + 1 /* + 1 for the fsdev_aio_get_fobject */);
 
 	return 0;
 }
@@ -1779,11 +1928,12 @@ static int
 lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int fd, saverr;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.open.fobject);
+	int fd, res;
+	struct aio_fsdev_file_object *fobject;
 	uint32_t flags = fsdev_io->u_in.open.flags;
 	struct aio_fsdev_file_handle *fhandle;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.open.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -1793,78 +1943,88 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, flags & ~O_NOFOLLOW);
 	if (fd == -1) {
-		saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
-			    vfsdev->proc_self_fd, fobject->fd_str, flags, saverr);
-		return saverr;
+			    vfsdev->proc_self_fd, fobject->fd_str, flags, res);
+		goto fop_failed;
 	}
 
 	fhandle = file_handle_create(fobject, fd);
 	if (!fhandle) {
+		res = -ENOMEM;
 		SPDK_ERRLOG("cannot create a file handle (fd=%d)\n", fd);
 		close(fd);
-		return -ENOMEM;
+		goto fop_failed;
 	}
 
 	fsdev_io->u_out.open.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "OPEN succeeded for " FOBJECT_FMT " (fh=%p, fd=%d)\n",
 		      FOBJECT_ARGS(fobject), fhandle, fd);
 
-	return 0;
+fop_failed:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_flush(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flush.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flush.fhandle);
-	int res, saverr;
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
+	int res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flush.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flush.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	res = close(dup(fhandle->fd));
 	if (res) {
-		saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("close(dup(%d)) failed for " FOBJECT_FMT " (fh=%p, err=%d)\n",
-			    fhandle->fd, FOBJECT_ARGS(fobject), fhandle, saverr);
-		return saverr;
+			    fhandle->fd, FOBJECT_ARGS(fobject), fhandle, res);
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "FLUSH succeeded for " FOBJECT_FMT " (fh=%p)\n", FOBJECT_ARGS(fobject),
 		      fhandle);
 
-	return 0;
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int saverr;
 	int res;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setattr.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	uint32_t to_set = fsdev_io->u_in.setattr.to_set;
 	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_in.setattr.attr;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle);
 
 	if (to_set & FSDEV_SET_ATTR_MODE) {
 		if (fhandle) {
@@ -1873,9 +2033,9 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			res = fchmodat(vfsdev->proc_self_fd, fobject->fd_str, attr->mode, 0);
 		}
 		if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
-			return saverr;
+			res = -errno;
+			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
+			goto fop_failed;
 		}
 	}
 
@@ -1885,9 +2045,9 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 		if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("fchownat failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
-			return saverr;
+			res = -errno;
+			SPDK_ERRLOG("fchownat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
+			goto fop_failed;
 		}
 	}
 
@@ -1899,23 +2059,23 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		} else {
 			truncfd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 			if (truncfd < 0) {
-				saverr = -errno;
-				SPDK_ERRLOG("openat failed for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
-				return saverr;
+				res = -errno;
+				SPDK_ERRLOG("openat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
+				goto fop_failed;
 			}
 		}
 
 		res = ftruncate(truncfd, attr->size);
 		if (!fhandle) {
-			saverr = -errno;
+			int saverr = -errno;
 			close(truncfd);
 			errno = saverr;
 		}
 		if (res == -1) {
-			saverr = -errno;
+			res = -errno;
 			SPDK_ERRLOG("ftruncate failed for " FOBJECT_FMT " (size=%" PRIu64 ")\n", FOBJECT_ARGS(fobject),
 				    attr->size);
-			return saverr;
+			goto fop_failed;
 		}
 	}
 
@@ -1947,10 +2107,10 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			res = utimensat_empty(vfsdev, fobject, tv);
 		}
 		if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("futimens/utimensat_empty failed for " FOBJECT_FMT "\n",
-				    FOBJECT_ARGS(fobject));
-			return saverr;
+			res = -errno;
+			SPDK_ERRLOG("futimens/utimensat_empty failed for " FOBJECT_FMT " with %d\n",
+				    FOBJECT_ARGS(fobject), res);
+			goto fop_failed;
 		}
 	}
 
@@ -1958,23 +2118,28 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (res) {
 		SPDK_ERRLOG("file_object_fill_attr failed for " FOBJECT_FMT "\n",
 			    FOBJECT_ARGS(fobject));
-		return res;
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "SETATTR succeeded for " FOBJECT_FMT "\n",
 		      FOBJECT_ARGS(fobject));
 
-	return 0;
+fop_failed:
+	if (fhandle) {
+		file_handle_unref(fhandle);
+	}
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int fd;
+	int fd = -1;
 	int err;
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.create.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	const char *name = fsdev_io->u_in.create.name;
 	uint32_t mode = fsdev_io->u_in.create.mode;
 	uint32_t flags = fsdev_io->u_in.create.flags;
@@ -1987,6 +2152,12 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_handle *fhandle;
 	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_out.create.attr;
 
+	if (!is_safe_path_component(name)) {
+		SPDK_ERRLOG("CREATE: %s not a safe component\n", name);
+		return -EINVAL;
+	}
+
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.create.parent_fobject);
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
 		return -EINVAL;
@@ -1994,15 +2165,10 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	UNUSED(umask);
 
-	if (!is_safe_path_component(name)) {
-		SPDK_ERRLOG("CREATE: %s not a safe component\n", name);
-		return -EINVAL;
-	}
-
 	err = lo_change_cred(&new_cred, &old_cred);
 	if (err) {
 		SPDK_ERRLOG("CREATE: cannot change credentials\n");
-		return err;
+		goto fop_failed;
 	}
 
 	flags = update_open_flags(vfsdev, flags);
@@ -2013,22 +2179,22 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (err) {
 		SPDK_ERRLOG("CREATE: openat failed with %d\n", err);
-		return err;
+		goto fop_failed;
 	}
 
 	err = lo_do_lookup(vfsdev, parent_fobject, name, &fobject, attr);
 	if (err) {
 		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
-		return err;
+		goto fop_failed;
 	}
 
 	fhandle = file_handle_create(fobject, fd);
 	if (!fhandle) {
 		SPDK_ERRLOG("cannot create a file handle (fd=%d)\n", fd);
-		close(fd);
-		file_object_unref(fobject, 1);
-		return -ENOMEM;
+		goto fop_failed;
 	}
+
+	fd = -1; /* the fd is now attached to the fhandle, so we don't want to close it */
 
 	SPDK_DEBUGLOG(fsdev_aio, "CREATE: succeeded (name=%s " FOBJECT_FMT " fh=%p)\n",
 		      name, FOBJECT_ARGS(fobject), fhandle);
@@ -2036,33 +2202,47 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fsdev_io->u_out.create.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	fsdev_io->u_out.create.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
 
-	return 0;
+	err = 0;
+
+fop_failed:
+	if (fd >= 0) {
+		close(fd);
+	}
+	file_object_unref(parent_fobject, 1);
+	return err;
 }
 
 static int
 lo_release(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.release.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.release.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
+	int res;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.release.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.release.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
-	file_handle_delete(fhandle);
+	file_handle_unref(fhandle); /* the release */
+	file_handle_unref(fhandle); /* for fsdev_aio_get_fhandle */
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "RELEASE succeeded for " FOBJECT_FMT " fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
-	return 0;
+
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static void
@@ -2093,6 +2273,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	uint32_t flags = fsdev_io->u_in.read.flags;
 	struct iovec *outvec = fsdev_io->u_in.read.iov;
 	uint32_t outcnt = fsdev_io->u_in.read.iovcnt;
+	int res;
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.read.opts || !fsdev_io->u_in.read.opts->memory_domain);
@@ -2116,16 +2297,16 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.read.fobject);
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
-
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, lo_read_cb, fsdev_io, fhandle->fd, offs, size, outvec,
@@ -2135,7 +2316,12 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
 
-	return IO_STATUS_ASYNC;
+	res = IO_STATUS_ASYNC;
+
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static void
@@ -2166,6 +2352,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	uint32_t flags = fsdev_io->u_in.write.flags;
 	const struct iovec *invec = fsdev_io->u_in.write.iov;
 	uint32_t incnt =  fsdev_io->u_in.write.iovcnt;
+	int res;
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.write.opts || !fsdev_io->u_in.write.opts->memory_domain);
@@ -2190,16 +2377,16 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
-
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, lo_write_cb, fsdev_io,
@@ -2209,7 +2396,12 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
 
-	return IO_STATUS_ASYNC;
+	res = IO_STATUS_ASYNC;
+
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2218,9 +2410,9 @@ lo_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
 	char *buf;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.readlink.fobject);
+	struct aio_fsdev_file_object *fobject;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readlink.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2229,28 +2421,33 @@ lo_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	buf = malloc(PATH_MAX + 1);
 	if (!buf) {
 		SPDK_ERRLOG("malloc(%zu) failed\n", (size_t)(PATH_MAX + 1));
-		return -ENOMEM;
+		res = -ENOMEM;
+		goto alloc_failed;
 	}
 
 	res = readlinkat(fobject->fd, "", buf, PATH_MAX + 1);
 	if (res == -1) {
-		int saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("readlinkat failed for " FOBJECT_FMT " with %d\n",
-			    FOBJECT_ARGS(fobject), saverr);
-		free(buf);
-		return saverr;
+			    FOBJECT_ARGS(fobject), res);
+		goto fop_failed;
 	}
 
 	if (((uint32_t)res) == PATH_MAX + 1) {
 		SPDK_ERRLOG("buffer is too short\n");
-		free(buf);
-		return -ENAMETOOLONG;
+		res = -ENAMETOOLONG;
+		goto fop_failed;
 	}
 
 	buf[res] = 0;
 	fsdev_io->u_out.readlink.linkname = buf;
+	res = 0;
 
-	return 0;
+fop_failed:
+	free(buf);
+alloc_failed:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2258,10 +2455,10 @@ lo_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.statfs.fobject);
+	struct aio_fsdev_file_object *fobject;
 	struct statvfs stbuf;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.statfs.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2269,9 +2466,9 @@ lo_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	res = fstatvfs(fobject->fd, &stbuf);
 	if (res == -1) {
-		int saverr = -errno;
-		SPDK_ERRLOG("fstatvfs failed with %d\n", saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("fstatvfs failed with %d\n", res);
+		goto fop_failed;
 	}
 
 	fsdev_io->u_out.statfs.statfs.blocks = stbuf.f_blocks;
@@ -2283,7 +2480,11 @@ lo_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fsdev_io->u_out.statfs.statfs.namelen = stbuf.f_namemax;
 	fsdev_io->u_out.statfs.statfs.frsize = stbuf.f_frsize;
 
-	return 0;
+	res = 0;
+
+fop_failed:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2299,10 +2500,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 		.egid = egid,
 	};
 
-	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
-		return -EINVAL;
-	}
+	assert(parent_fobject != NULL);
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s isn'h safe\n", name);
@@ -2352,8 +2550,7 @@ static int
 lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.mknod.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.mknod.name;
 	mode_t mode = fsdev_io->u_in.mknod.mode;
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
@@ -2362,11 +2559,19 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject;
 	int rc;
 
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mknod.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
+		return -EINVAL;
+	}
+
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
 			      &fobject, &fsdev_io->u_out.mknod.attr);
 	if (!rc) {
 		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
+
+	file_object_unref(parent_fobject, 1);
 	return rc;
 }
 
@@ -2374,8 +2579,7 @@ static int
 lo_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.mkdir.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.mkdir.name;
 	mode_t mode = fsdev_io->u_in.mkdir.mode;
 	uid_t euid = fsdev_io->u_in.mkdir.euid;
@@ -2383,11 +2587,18 @@ lo_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject = NULL;
 	int rc;
 
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mkdir.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
+		return -EINVAL;
+	}
+
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, S_IFDIR | mode, 0, NULL, euid, egid,
 			      &fobject, &fsdev_io->u_out.mkdir.attr);
 	if (!rc) {
 		fsdev_io->u_out.mkdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
+	file_object_unref(parent_fobject, 1);
 	return rc;
 }
 
@@ -2395,8 +2606,7 @@ static int
 lo_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.symlink.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *target = fsdev_io->u_in.symlink.target;
 	char *linkpath = fsdev_io->u_in.symlink.linkpath;
 	uid_t euid = fsdev_io->u_in.symlink.euid;
@@ -2404,11 +2614,18 @@ lo_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject = NULL;
 	int rc;
 
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.symlink.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
+		return -EINVAL;
+	}
+
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, target, S_IFLNK, 0, linkpath, euid, egid,
 			      &fobject, &fsdev_io->u_out.symlink.attr);
 	if (!rc) {
 		fsdev_io->u_out.symlink.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
+	file_object_unref(parent_fobject, 1);
 	return rc;
 }
 
@@ -2451,48 +2668,52 @@ static int
 lo_unlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.unlink.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.unlink.name;
+	int res;
 
-	return lo_do_unlink(vfsdev, parent_fobject, name, false);
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.unlink.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
+		return -EINVAL;
+	}
+
+	res = lo_do_unlink(vfsdev, parent_fobject, name, false);
+	file_object_unref(parent_fobject, 1);
+	return res;
 }
 
 static int
 lo_rmdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.rmdir.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.rmdir.name;
+	int res;
 
-	return lo_do_unlink(vfsdev, parent_fobject, name, true);
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rmdir.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
+		return -EINVAL;
+	}
+
+	res = lo_do_unlink(vfsdev, parent_fobject, name, true);
+	file_object_unref(parent_fobject, 1);
+	return res;
 }
 
 static int
 lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res, saverr;
+	int res;
 	/* old_fobject must be initialized to avoid a scan-build false positive */
 	struct aio_fsdev_file_object *old_fobject = NULL;
-	struct aio_fsdev_file_object *parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.rename.parent_fobject);
+	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.rename.name;
-	struct aio_fsdev_file_object *new_parent_fobject = fsdev_aio_get_fobject(vfsdev,
-			fsdev_io->u_in.rename.new_parent_fobject);
+	struct aio_fsdev_file_object *new_parent_fobject;
 	char *new_name = fsdev_io->u_in.rename.new_name;
 	uint32_t flags = fsdev_io->u_in.rename.flags;
-
-	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid parent_fobject\n");
-		return -EINVAL;
-	}
-
-	if (!new_parent_fobject) {
-		SPDK_ERRLOG("Invalid new_parent_fobject\n");
-		return -EINVAL;
-	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("name '%s' isn't safe\n", name);
@@ -2504,39 +2725,63 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
+
+	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rename.parent_fobject);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid parent_fobject\n");
+		return -EINVAL;
+	}
+
+	new_parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rename.new_parent_fobject);
+	if (!new_parent_fobject) {
+		SPDK_ERRLOG("Invalid new_parent_fobject\n");
+		res = -EINVAL;
+		goto bad_new_parent_fobject;
+	}
+
 	res = lo_do_lookup(vfsdev, parent_fobject, name, &old_fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
-		return -EIO;
+		res = -EIO;
+		goto fop_failed;
 	}
 
-	saverr = 0;
+	res = 0;
 	if (flags) {
 #ifndef SYS_renameat2
 		SPDK_ERRLOG("flags are not supported\n");
-		return -ENOTSUP;
+		res = -ENOTSUP;
+		goto fop_failed;
 #else
 		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
 			      new_name, flags);
 		if (res == -1 && errno == ENOSYS) {
 			SPDK_ERRLOG("SYS_renameat2 returned ENOSYS\n");
-			saverr = -EINVAL;
+			res = -EINVAL;
+			goto fop_failed;
 		} else if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("SYS_renameat2 failed (err=%d))\n", saverr);
+			res = -errno;
+			SPDK_ERRLOG("SYS_renameat2 failed (err=%d))\n", res);
+			goto fop_failed;
 		}
 #endif
 	} else {
 		res = renameat(parent_fobject->fd, name, new_parent_fobject->fd, new_name);
 		if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("renameat failed (err=%d)\n", saverr);
+			res = -errno;
+			SPDK_ERRLOG("renameat failed (err=%d)\n", res);
+			goto fop_failed;
 		}
 	}
 
 	file_object_unref(old_fobject, 1);
+	res = 0;
 
-	return saverr;
+fop_failed:
+	file_object_unref(new_parent_fobject, 1);
+bad_new_parent_fobject:
+	file_object_unref(parent_fobject, 1);
+	return res;
 }
 
 static int
@@ -2563,44 +2808,55 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int saverr;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.fobject);
-	struct aio_fsdev_file_object *new_parent_fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.new_parent_fobject);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_object *new_parent_fobject;
 	char *name = fsdev_io->u_in.link.name;
 	struct aio_fsdev_file_object *link_fobject;
-
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s is not a safe component\n", name);
 		return -EINVAL;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.fobject);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		return -EINVAL;
+	}
+
+	new_parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.new_parent_fobject);
+	if (!new_parent_fobject) {
+		SPDK_ERRLOG("Invalid new_parent_fobject: %p\n", new_parent_fobject);
+		res = -EINVAL;
+		goto bad_new_parent_fobject;
+	}
+
 	res = linkat_empty_nofollow(vfsdev, fobject, new_parent_fobject->fd, name);
 	if (res == -1) {
-		saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("linkat_empty_nofollow failed " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s (err=%d)\n",
-			    FOBJECT_ARGS(fobject), FOBJECT_ARGS(new_parent_fobject), name, saverr);
-		return saverr;
+			    FOBJECT_ARGS(fobject), FOBJECT_ARGS(new_parent_fobject), name, res);
+		goto fop_failed;
 	}
 
 	res = lo_do_lookup(vfsdev, new_parent_fobject, name, &link_fobject,
 			   &fsdev_io->u_out.link.attr);
 	if (res) {
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
-		return res;
+		goto fop_failed;
 	}
 
 	fsdev_io->u_out.link.fobject = fsdev_aio_get_spdk_fobject(vfsdev, link_fobject);
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "LINK succeeded for " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s\n",
 		      FOBJECT_ARGS(fobject), FOBJECT_ARGS(link_fobject), name);
 
-	return 0;
+fop_failed:
+	file_object_unref(new_parent_fobject, 1);
+bad_new_parent_fobject:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2609,31 +2865,32 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, saverr, fd;
 	char *buf;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsync.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsync.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	bool datasync = fsdev_io->u_in.fsync.datasync;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsync.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsync.fhandle);
+
 	if (!fhandle) {
 		res = asprintf(&buf, "%i", fobject->fd);
 		if (res == -1) {
-			saverr = -errno;
-			SPDK_ERRLOG("asprintf failed (errno=%d)\n", saverr);
-			return saverr;
+			res = -errno;
+			SPDK_ERRLOG("asprintf failed (errno=%d)\n", res);
+			goto fop_failed;
 		}
 
 		fd = openat(vfsdev->proc_self_fd, buf, O_RDWR);
-		saverr = -errno;
+		res = -errno;
 		free(buf);
 		if (fd == -1) {
-			SPDK_ERRLOG("openat failed (errno=%d)\n", saverr);
-			return saverr;
+			SPDK_ERRLOG("openat failed (errno=%d)\n", res);
+			goto fop_failed;
 		}
 	} else {
 		fd = fhandle->fd;
@@ -2651,15 +2908,24 @@ lo_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	if (res == -1) {
+		res = saverr;
 		SPDK_ERRLOG("fdatasync/fsync failed for " FOBJECT_FMT " fh=%p (err=%d)\n",
-			    FOBJECT_ARGS(fobject), fhandle, saverr);
-		return saverr;
+			    FOBJECT_ARGS(fobject), fhandle, res);
+		goto fop_failed;
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "FSYNC succeeded for " FOBJECT_FMT " fh=%p\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 
-	return 0;
+	res = 0;
+
+fop_failed:
+	if (fhandle) {
+		file_handle_unref(fhandle);
+	}
+	file_object_unref(fobject, 1);
+
+	return res;
 }
 
 #define XATTR_FLAGS_MAP \
@@ -2687,11 +2953,9 @@ static int
 lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	ssize_t ret;
-	int saverr;
+	int res;
 	int fd = -1;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.setxattr.fobject);
+	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.setxattr.name;
 	char *value = fsdev_io->u_in.setxattr.value;
 	uint32_t size = fsdev_io->u_in.setxattr.size;
@@ -2703,6 +2967,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -ENOSYS;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setxattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2711,74 +2976,81 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to removexattr on symlink. */
 		SPDK_ERRLOG("cannot set xattr for symlink\n");
-		return -EPERM;
+		res = -EPERM;
+		goto fop_failed;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
 		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
-		saverr = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+		goto fop_failed;
 	}
 
-	ret = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
-	if (ret == -1) {
-		saverr = -errno;
-		if (saverr == -ENOTSUP) {
+	res = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
+	if (res == -1) {
+		res = -errno;
+		if (res == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "fsetxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("fsetxattr failed with errno=%d\n", saverr);
+			SPDK_ERRLOG("fsetxattr failed with errno=%d\n", res);
 		}
-		close(fd);
-		return saverr;
+		goto fop_failed;
 	}
 
 	/* Clear SGID when system.posix_acl_access is set. */
 	if ((flags & SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
 		struct spdk_fsdev_file_attr st;
+		mode_t new_mode;
 
-		saverr = file_object_fill_attr(fobject, &st);
-		if (saverr) {
+		res = file_object_fill_attr(fobject, &st);
+		if (res) {
 			SPDK_ERRLOG("Failed to get file attrs for cleaning SGID on behalf of changed "
-				    "\"%s\" with error=%d - ignoring.\n", acl_access_name, saverr);
-		} else {
-			mode_t new_mode = st.mode & ~S_ISGID;
-			ret = fchmod(fd, new_mode);
-			if (ret == -1) {
-				saverr = -errno;
-				SPDK_ERRLOG("Failed to clean SGID on behalf of changed "
-					    "\"%s\" with errno=%d - ignoring.\n", acl_access_name, saverr);
-			}
+				    "\"%s\" with error=%d - ignoring.\n", acl_access_name, res);
+			goto fop_failed;
+		}
+
+		new_mode = st.mode & ~S_ISGID;
+		res = fchmod(fd, new_mode);
+		if (res == -1) {
+			SPDK_WARNLOG("Failed to clean SGID on behalf of changed '%s' with errno=%d - ignoring.\n",
+				     acl_access_name, -errno);
 		}
 	}
-	close(fd);
+
+	res = 0;
 
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "SETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s size=%" PRIu32 " flags=0x%lx" PRIx64 "\n",
 		      FOBJECT_ARGS(fobject), name, value, size, flags);
 
-	return 0;
+fop_failed:
+	if (fd >= 0) {
+		close(fd);
+	}
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	ssize_t ret;
-	int saverr;
+	int res;
 	int fd = -1;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.getxattr.fobject);
+	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.getxattr.name;
 	void *buffer = fsdev_io->u_in.getxattr.buffer;
 	size_t size = fsdev_io->u_in.getxattr.size;
+	ssize_t value_size;
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getxattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2787,46 +3059,53 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to getxattr on symlink. */
 		SPDK_ERRLOG("cannot get xattr for symlink\n");
-		return -EPERM;
+		res = -EPERM;
+		goto fop_failed;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
 		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
-		saverr = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+		goto fop_failed;
 	}
 
-	ret = fgetxattr(fd, name, buffer, size);
-	saverr = -errno;
-	close(fd);
-	if (ret == -1) {
-		if (saverr == -ENODATA) {
+	value_size = fgetxattr(fd, name, buffer, size);
+	if (value_size == -1) {
+		res = -errno;
+		if (res == -ENODATA) {
 			SPDK_INFOLOG(fsdev_aio, "fgetxattr: no extended attribute '%s' found\n", name);
-		} else if (saverr == -ENOTSUP) {
+		} else if (res == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "fgetxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("fgetxattr failed with errno=%d\n", saverr);
+			SPDK_ERRLOG("fgetxattr failed with errno=%d\n", res);
 		}
-		return saverr;
+
+		goto fop_failed;
 	}
 
-	fsdev_io->u_out.getxattr.value_size = ret;
+	fsdev_io->u_out.getxattr.value_size = value_size;
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
-		      FOBJECT_ARGS(fobject), name, (char *)buffer, ret);
+		      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
 
-	return 0;
+fop_failed:
+	if (fd >= 0) {
+		close(fd);
+	}
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	ssize_t ret;
-	int saverr;
+	ssize_t data_size;
+	int res;
 	int fd = -1;
 	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
 						fsdev_io->u_in.listxattr.fobject);
@@ -2846,47 +3125,51 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to listxattr on symlink. */
 		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		return -EPERM;
+		res = -EPERM;
+		goto fop_failed;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
 		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
-		saverr = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+		goto fop_failed;
 	}
 
-	ret = flistxattr(fd, buffer, size);
-	saverr = -errno;
-	close(fd);
-	if (ret == -1) {
-		if (saverr == -ENOTSUP) {
+	data_size = flistxattr(fd, buffer, size);
+	if (data_size == -1) {
+		res = -errno;
+		if (res == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "flistxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("flistxattr failed with errno=%d\n", saverr);
+			SPDK_ERRLOG("flistxattr failed with errno=%d\n", res);
 		}
-		return saverr;
+		goto fop_failed;
 	}
 
-	fsdev_io->u_out.listxattr.data_size = ret;
+	fsdev_io->u_out.listxattr.data_size = data_size;
 	fsdev_io->u_out.listxattr.size_only = (size == 0);
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " data_size=%zu\n",
-		      FOBJECT_ARGS(fobject), ret);
+		      FOBJECT_ARGS(fobject), data_size);
 
-	return 0;
+fop_failed:
+	if (fd >= 0) {
+		close(fd);
+	}
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	ssize_t ret;
-	int saverr;
+	int res;
 	int fd = -1;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.removexattr.fobject);
+	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.removexattr.name;
 
 	if (!vfsdev->opts.xattr_enabled) {
@@ -2894,6 +3177,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -ENOSYS;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.removexattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2902,35 +3186,41 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (fobject->is_symlink) {
 		/* Sorry, no race free way to setxattr on symlink. */
 		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		return -EPERM;
+		res = -EPERM;
+		goto fop_failed;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
 		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
 	if (fd < 0) {
-		saverr = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+		goto fop_failed;
 	}
 
-	ret = fremovexattr(fd, name);
-	saverr = -errno;
-	close(fd);
-	if (ret == -1) {
-		if (saverr == -ENODATA) {
+	res = fremovexattr(fd, name);
+	if (res == -1) {
+		res = -errno;
+		if (res == -ENODATA) {
 			SPDK_INFOLOG(fsdev_aio, "fremovexattr: no extended attribute '%s' found\n", name);
-		} else if (saverr == -ENOTSUP) {
+		} else if (res == -ENOTSUP) {
 			SPDK_INFOLOG(fsdev_aio, "fremovexattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("fremovexattr failed with errno=%d\n", saverr);
+			SPDK_ERRLOG("fremovexattr failed with errno=%d\n", res);
 		}
-		return saverr;
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "REMOVEXATTR succeeded for " FOBJECT_FMT " name=%s\n",
 		      FOBJECT_ARGS(fobject), name);
 
-	return 0;
+fop_failed:
+	if (fd >= 0) {
+		close(fd);
+	}
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2938,21 +3228,21 @@ lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int saverr = 0;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsyncdir.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsyncdir.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	bool datasync = fsdev_io->u_in.fsyncdir.datasync;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsyncdir.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsyncdir.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	if (datasync) {
@@ -2962,16 +3252,21 @@ lo_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	if (res == -1) {
-		saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("%s failed for fh=%p with err=%d\n",
-			    datasync ? "fdatasync" : "fsync", fhandle, saverr);
-		return saverr;
+			    datasync ? "fdatasync" : "fsync", fhandle, res);
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "FSYNCDIR succeeded for " FOBJECT_FMT " fh=%p datasync=%d\n",
 		      FOBJECT_ARGS(fobject), fhandle, datasync);
 
-	return 0;
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -2979,11 +3274,8 @@ lo_flock(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int saverr = 0;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flock.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flock.fhandle);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	int operation;
 
 	switch (fsdev_io->u_in.flock.operation) {
@@ -3002,67 +3294,83 @@ lo_flock(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flock.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flock.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
 	res = flock(fhandle->fd, operation | LOCK_NB);
 	if (res == -1) {
-		saverr = -errno;
-		SPDK_ERRLOG("flock failed for fh=%p with err=%d\n", fhandle, saverr);
-		return saverr;
+		res = -errno;
+		SPDK_ERRLOG("flock failed for fh=%p with err=%d\n", fhandle, res);
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "FLOCK succeeded for " FOBJECT_FMT " fh=%p operation=%d\n",
 		      FOBJECT_ARGS(fobject), fhandle, operation);
 
-	return 0;
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
 lo_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int err;
-	struct aio_fsdev_file_object *fobject =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fallocate.fobject);
-	struct aio_fsdev_file_handle *fhandle =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fallocate.fhandle);
+	int res;
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_handle *fhandle;
 	uint32_t mode = fsdev_io->u_in.fallocate.mode;
 	uint64_t offset  = fsdev_io->u_in.fallocate.offset;
 	uint64_t length = fsdev_io->u_in.fallocate.length;
 
+	if (mode) {
+		SPDK_ERRLOG("non-zero mode is not suppored\n");
+		res = -EOPNOTSUPP;
+	}
+
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fallocate.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fallocate.fhandle);
+	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle;
 	}
 
-	if (mode) {
-		SPDK_ERRLOG("non-zero mode is not suppored\n");
-		return -EOPNOTSUPP;
-	}
-
-	err = posix_fallocate(fhandle->fd, offset, length);
-	if (err) {
+	res = posix_fallocate(fhandle->fd, offset, length);
+	if (res) {
 		SPDK_ERRLOG("posix_fallocate failed for fh=%p with err=%d\n",
-			    fhandle, err);
+			    fhandle, res);
+		goto fop_failed;
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "FALLOCATE returns %d for " FOBJECT_FMT " fh=%p offset=%" PRIu64 " length=%" PRIu64 "\n",
-		      err, FOBJECT_ARGS(fobject), fhandle, offset, length);
-	return err;
+		      res, FOBJECT_ARGS(fobject), fhandle, offset, length);
+	res = 0;
+
+fop_failed:
+	file_handle_unref(fhandle);
+bad_fhandle:
+	file_object_unref(fobject, 1);
+	return res;
 }
 
 static int
@@ -3085,40 +3393,56 @@ lo_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	size_t len = fsdev_io->u_in.copy_file_range.len;
 	uint32_t flags = fsdev_io->u_in.copy_file_range.flags;
 
+	fobject_in = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_in);
 	if (!fobject_in) {
 		SPDK_ERRLOG("Invalid fobject_in\n");
 		return -EINVAL;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle_in)) {
+	fhandle_in = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_in);
+	if (!fhandle_in) {
 		SPDK_ERRLOG("Invalid fhandle_in: %p\n", fhandle_in);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle_in;
 	}
 
+	fobject_out = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_out);
 	if (!fobject_out) {
 		SPDK_ERRLOG("Invalid fobject_out\n");
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fobject_out;
 	}
 
-	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle_out)) {
+	fhandle_out = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_out);
+	if (!fhandle_out) {
 		SPDK_ERRLOG("Invalid fhandle_out: %p\n", fhandle_out);
-		return -EINVAL;
+		res = -EINVAL;
+		goto bad_fhandle_out;
 	}
 
 	res = copy_file_range(fhandle_in->fd, &off_in, fhandle_out->fd, &off_out, len, flags);
 	if (res < 0) {
-		saverr = -errno;
+		res = -errno;
 		SPDK_ERRLOG("copy_file_range failed with err=%d\n", saverr);
-		return saverr;
+		goto fop_failed;
 	}
 
+	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "COPY_FILE_RANGE succeeded for " FOBJECT_FMT " fh=%p offset=%" PRIu64 " -> " FOBJECT_FMT
 		      " fh=%p offset=%" PRIu64 " (len-%zu flags=0x%" PRIx32 ")\n",
 		      FOBJECT_ARGS(fobject_in), fhandle_in, (uint64_t)off_in, FOBJECT_ARGS(fobject_out), fhandle_out,
 		      (uint64_t)off_out, len, flags);
 
-	return 0;
+fop_failed:
+	file_handle_unref(fhandle_out);
+bad_fhandle_out:
+	file_object_unref(fobject_out, 1);
+bad_fobject_out:
+	file_handle_unref(fhandle_in);
+bad_fhandle_in:
+	file_object_unref(fobject_in, 1);
+	return res;
 #else
 	return -ENOSYS;
 #endif
@@ -3240,6 +3564,7 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 
 	if (vfsdev->lut) {
 		spdk_lut_free(vfsdev->lut);
+		spdk_spin_destroy(&vfsdev->lock);
 	}
 
 	free(vfsdev->fsdev.name);
@@ -3633,6 +3958,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		fsdev_aio_free(vfsdev);
 		return -ENOMEM;
 	}
+
+	spdk_spin_init(&vfsdev->lock);
 
 	rc = setup_root(vfsdev);
 	if (rc) {

@@ -38,7 +38,6 @@ struct spdk_lut {
 	uint64_t num_nodes;
 	uint64_t growth_step;
 	uint64_t max_size;
-	struct spdk_spinlock lock;
 	STAILQ_HEAD(, spdk_lut_node) free_nodes;
 };
 
@@ -131,7 +130,6 @@ spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint64_t max_size)
 		return NULL;
 	}
 
-	spdk_spin_init(&lut->lock);
 	lut->growth_step = growth_step;
 
 	return lut;
@@ -143,12 +141,10 @@ spdk_lut_insert(struct spdk_lut *lut, void *value)
 	struct spdk_lut_node *node;
 	uint64_t key = SPDK_LUT_INVALID_KEY;
 
-	spdk_spin_lock(&lut->lock);
 	node = spdk_lut_insert_unsafe(lut, value);
 	if (node) {
 		key = node->key;
 	}
-	spdk_spin_unlock(&lut->lock);
 
 	return key;
 }
@@ -159,14 +155,12 @@ spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 	struct spdk_lut_node *node;
 	void *value = SPDK_LUT_INVALID_VALUE;
 
-	spdk_spin_lock(&lut->lock);
 	if (key < lut->num_nodes) {
 		node = spdk_lut_get_node(lut, key);
 		if (node->valid) {
 			value = node->u.ptr;
 		}
 	}
-	spdk_spin_unlock(&lut->lock);
 
 	return value;
 }
@@ -178,7 +172,6 @@ spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 	uint64_t key;
 	int rc = 0;
 
-	spdk_spin_lock(&lut->lock);
 	for (key = 0; key < lut->num_nodes ; key++) {
 		node = spdk_lut_get_node(lut, key);
 
@@ -191,7 +184,6 @@ spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 			break;
 		}
 	}
-	spdk_spin_unlock(&lut->lock);
 
 	return rc;
 }
@@ -202,7 +194,6 @@ spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 	struct spdk_lut_node *node;
 	bool rc = false;
 
-	spdk_spin_lock(&lut->lock);
 	if (key < lut->num_nodes) {
 		node = spdk_lut_get_node(lut, key);
 		if (node->valid) {
@@ -211,7 +202,6 @@ spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 			rc = true;
 		}
 	}
-	spdk_spin_unlock(&lut->lock);
 
 	return rc;
 }
@@ -219,7 +209,6 @@ spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 void
 spdk_lut_free(struct spdk_lut *lut)
 {
-	spdk_spin_destroy(&lut->lock);
 	free(lut->nodes);
 	free(lut);
 }
