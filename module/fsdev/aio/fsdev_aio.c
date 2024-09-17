@@ -2701,7 +2701,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	/* Clear SGID when system.posix_acl_access is set. */
-	if (!!(flags && SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
+	if ((flags & SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
 		struct spdk_fsdev_file_attr st;
 
 		saverr = file_object_fill_attr(fobject, &st);
