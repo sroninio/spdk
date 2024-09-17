@@ -13280,6 +13280,7 @@ root_path               | Required | string      | Path on the system directory 
 enable_xattr            | Optional | bool        | true to enable the extended attributes, false otherwise
 enable_writeback_cache  | Optional | bool        | true to enable the writeback cache, false otherwise
 max_xfer_size           | Optional | int         | The maximum size allowed for data transfers, in bytes
+max_readahead           | Optional | int         | The maximum size allowed for readahead, in bytes
 enable_skip_rw          | Optional | bool        | true to enbale skipping read/write IOs, false otherwise
 
 #### Example
@@ -13296,6 +13297,7 @@ Example request:
     "enable_xattr": false,
     "enable_writeback_cache": true,
     "max_xfer_size": 65535,
+    "max_readahead": 65535,
     "enable_skip_rw": true
   }
 }
