@@ -1308,6 +1308,9 @@ lo_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.ioctl.fhandle);
 	uint32_t request = fsdev_io->u_in.ioctl.request;
 
+	UNUSED(fobject);
+	UNUSED(request);
+
 	if (!fsdev_aio_is_valid_fhandle(vfsdev, fhandle)) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
