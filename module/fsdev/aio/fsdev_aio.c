@@ -8,6 +8,7 @@
 #include "spdk/config.h"
 #include "spdk/util.h"
 #include "spdk/thread.h"
+#include "spdk/likely.h"
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
 #include "lut.h"
@@ -338,47 +339,66 @@ lo_find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 	return NULL;
 }
 
-/* This function returns:
- * 1 if the refcount is still non zero
- * a negative  error number if the refcount became zero, the file object was deleted but the defered underlying file deletion failed
- * 0 if the refcount became zero, the file object was deleted and eithr the underlying file deletion wasn't defered or succeeded
- */
-static int
-file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
+static void
+file_object_destroy(struct aio_fsdev_file_object *fobject)
 {
-	int res = 0;
+	assert(!fobject->refcount);
 
-	spdk_spin_lock(&fobject->lock);
-	assert(fobject->refcount >= count);
-	fobject->refcount -= count;
-	spdk_spin_unlock(&fobject->lock);
-
-	if (!fobject->refcount) {
-		struct aio_fsdev_file_object *parent_fobject = fobject->parent_fobject;
-
-		if (parent_fobject) {
-			spdk_spin_lock(&parent_fobject->lock);
-			TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
-			spdk_spin_unlock(&parent_fobject->lock);
-			file_object_unref(parent_fobject, 1); /* unref by the leaf */
-		}
-
-		spdk_spin_destroy(&fobject->lock);
-		close(fobject->fd);
-		free(fobject->fd_str);
-		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
-		free(fobject);
-	}
-
-	return res;
+	spdk_spin_destroy(&fobject->lock);
+	close(fobject->fd);
+	free(fobject->fd_str);
+	free(fobject);
 }
 
-static void
+/* This function returns the result reference counter */
+static uint64_t
+file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
+{
+	struct aio_fsdev_file_object *parent_fobject = fobject->parent_fobject;
+	uint64_t refcount;
+
+	if (spdk_unlikely(!parent_fobject)) {
+		assert(fobject == fobject->vfsdev->root);
+		assert(fobject->refcount >= count);
+
+		refcount = __atomic_sub_fetch(&fobject->refcount, count, __ATOMIC_RELAXED);
+		if (!refcount) {
+			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
+			spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
+			file_object_destroy(fobject);
+		}
+
+		return refcount;
+	}
+
+	assert(fobject->refcount >= count);
+
+	spdk_spin_lock(&parent_fobject->lock);
+
+	refcount = __atomic_sub_fetch(&fobject->refcount, count, __ATOMIC_RELAXED);
+	if (refcount) {
+		spdk_spin_unlock(&parent_fobject->lock);
+		return refcount;
+	}
+
+	spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
+
+	TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
+	spdk_spin_unlock(&parent_fobject->lock);
+
+	SPDK_DEBUGLOG(fsdev_aio, "fobject removed %p\n", fobject);
+
+	file_object_destroy(fobject);
+
+	file_object_unref(parent_fobject, 1); /* unref by the leaf */
+
+	return 0;
+}
+
+static inline void
 file_object_ref(struct aio_fsdev_file_object *fobject)
 {
-	spdk_spin_lock(&fobject->lock);
-	fobject->refcount++;
-	spdk_spin_unlock(&fobject->lock);
+	__atomic_add_fetch(&fobject->refcount, 1, __ATOMIC_RELAXED);
 }
 
 static struct aio_fsdev_file_object *
@@ -429,6 +449,9 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		TAILQ_INSERT_TAIL(&parent_fobject->leafs, fobject, link);
 		parent_fobject->refcount++;
 	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "fobject created %p (lut=0x%" PRIx64 ")\n", fobject,
+		      (uint64_t)fobject->hdr.lut_key);
 
 	return fobject;
 }
@@ -568,9 +591,9 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 
 	if (fobject->refcount && unref_fobject) {
 		/* if still referenced - zero refcount */
-		int res = file_object_unref(fobject, fobject->refcount);
-		assert(res == 0);
-		UNUSED(res);
+		uint64_t refcount = file_object_unref(fobject, fobject->refcount);
+		assert(refcount == 0);
+		UNUSED(refcount);
 	}
 }
 
@@ -3201,9 +3224,9 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 	}
 
 	if (vfsdev->root) {
-		int destroyed = file_object_unref(vfsdev->root, 1);
-		assert(destroyed == 0);
-		UNUSED(destroyed);
+		uint64_t refcount = file_object_unref(vfsdev->root, 1);
+		assert(refcount == 0);
+		UNUSED(refcount);
 
 	}
 
