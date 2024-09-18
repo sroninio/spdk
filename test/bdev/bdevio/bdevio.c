@@ -193,7 +193,7 @@ bdevio_cleanup_targets(void)
 static bool g_completion_success;
 
 static void
-initialize_buffer(char **buf, int pattern, int size, uint32_t block_size)
+initialize_buffer(char **buf, int pattern, uint32_t size, uint32_t block_size)
 {
 	CU_ASSERT(block_size != 0);
 
@@ -201,7 +201,7 @@ initialize_buffer(char **buf, int pattern, int size, uint32_t block_size)
 	memset(*buf, pattern, size);
 
 	if (pattern) {
-		for (int offset = 0, block = 0; offset < size; offset += block_size, block++) {
+		for (uint32_t offset = 0, block = 0; offset < size; offset += block_size, block++) {
 			*(*buf + offset) = block;
 		}
 	}

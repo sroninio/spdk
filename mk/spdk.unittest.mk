@@ -23,6 +23,7 @@ CFLAGS += -I$(SPDK_ROOT_DIR)/module
 CFLAGS += -I$(SPDK_ROOT_DIR)/test
 CFLAGS += -ffunction-sections
 CFLAGS += -DSPDK_UNIT_TEST=1
+CFLAGS += -Wno-maybe-uninitialized
 LDFLAGS += -Wl,--gc-sections
 
 SPDK_LIB_LIST += thread trace util log ut
