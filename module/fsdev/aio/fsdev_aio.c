@@ -2435,6 +2435,7 @@ lo_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	buf[res] = 0;
 	fsdev_io->u_out.readlink.linkname = buf;
+	buf = NULL;
 	res = 0;
 
 fop_failed:
