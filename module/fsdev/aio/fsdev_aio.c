@@ -2016,7 +2016,9 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle);
+	/* fhandle is optional here */
+	fhandle = fsdev_io->u_in.setattr.fhandle ?
+		  fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle) : NULL;
 
 	if (to_set & FSDEV_SET_ATTR_MODE) {
 		if (fhandle) {
