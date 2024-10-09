@@ -1,0 +1,373 @@
+I am trying to create a data based that support recovery in case of a procces crash, that is also backed up by a file - i want your help in making a file of tests cases for it (you can do this in python, C, CPP or whatever you prefer, but dont chnage the original code )
+please read ALL MY CODE before making any tests, and try to examine all cases possiable.
+NOTES:
+- MAKE ANOTHER ENTIER FILE FOR THE TESTS
+- TAKE AS MUCH TIME AS YOU NEED TO READ ALL MY CODE
+- MAKE THE PRINTING FUNCITONS READABLE AND UNDERSTANDABLE 
+- DONT CHANGE ANY GIVEN CODE 
+
+
+persistent_map.h file:
+#ifndef MYDB_H
+#define MYDB_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include "mymap.h"
+
+
+#define MAGIC_NUMBER 0x12345678
+#define END_OF_LIST -1
+#define ALL_FILLED -9
+#define NONE_ZERO_VALUE 17
+
+struct Header
+{
+    int head;
+    int magic;
+    size_t size;
+};
+
+struct Entry
+{
+    unsigned long key;
+    struct nfs_fh3 value;
+    int next;
+};
+
+struct DataBase
+{
+    struct Header header;
+    struct Entry entries[];
+};
+
+typedef struct DataBase *DBptr;
+typedef void *MyMap;
+
+/**
+ * @brief Initializes or restores a persistent map database
+ *
+ * @param filename The name of the log file to be used for persistence
+ * @param fast_map Address of a pointer initialized to NULL by the user.
+ *                 This will be set by the function to point to a DRAM-based std::unordered_map
+ * @param size The number of entries to allocate in the data structure
+ *
+ * @return DBptr A pointer to the Database structure, which is memory-mapped in shared memory
+ *
+ * @details
+ * If this is the first time the function is called for this file:
+ * - Initializes an empty data structure
+ * - Creates an empty fast map
+ * - Creates an empty slow map
+ *
+ * If the database was previously initialized:
+ * - Restores the fast map from the file
+ * - Ignores the 'size' parameter and maintains the original size of the map
+ *
+ * @note The fast_map parameter should be a pointer initialized to NULL before calling this function
+ */
+DBptr init_map_db(const char *filename, MyMap *fast_map, int size);
+
+/**
+ * @brief Inserts a new key-value pair into the database
+ *
+ * @param db Pointer to the database structure
+ * @param fast_map The in-memory map for fast access
+ * @param key The key to insert
+ * @param value Pointer to the value (nfs_fh3 structure) to insert
+ *
+ * @return bool True if insertion was successful, false if the map is full
+ *
+ * @details
+ * - Checks if the map is full before insertion
+ * - Inserts the key-value pair into both the persistent storage and the fast map
+ * - Updates the linked list of free cells
+ * - Uses a memory barrier to ensure proper ordering of memory operations
+ *
+ * @note Returns false and prints an error message if the map is already full
+ */
+bool insert_db(DBptr db, MyMap fast_map, unsigned long key, struct nfs_fh3 *value);
+
+/**
+ * @brief Deletes an entry from the database
+ *
+ * @param db Pointer to the database structure
+ * @param fast_map The in-memory map for fast access
+ * @param key The key of the entry to delete
+ *
+ * @return bool True if deletion was successful, false if the key doesn't exist
+ *
+ * @details
+ * - Removes the entry from both the fast map and the persistent storage
+ * - Updates the linked list of free cells
+ * - Uses a memory barrier to ensure proper ordering of memory operations
+ *
+ * @note Returns false and prints an error message if the key doesn't exist in the map
+ */
+bool delete_entry_db(DBptr db, MyMap fast_map, unsigned long key);
+
+/**
+ * @brief Retrieves a value from the database given a key
+ *
+ * @param fast_map The in-memory map for fast access
+ * @param key The key to look up
+ *
+ * @return struct nfs_fh3* Pointer to the value associated with the key, or NULL if not found
+ *
+ * @details
+ * - Searches for the key in the fast map
+ * - Returns the associated value if found
+ * - The index of the entry in the persistent storage is stored in a temporary variable,
+ *   but not used in this function
+ *
+ * @note This function only accesses the fast map, not the persistent storage
+ */
+struct nfs_fh3 *get_db(MyMap fast_map, unsigned long key);
+
+#endif // MYDB_H
+
+
+persistent_map.c file (main implemenation - only API THAT is extracted to the user):
+#include "persistent_map.h"
+
+DBptr init_map_db(const char *filename, MyMap *fast_map, int size)
+{
+    if (size <= 0)
+    {
+        printf("Error: negative size in not valid parameter \n");
+        return NULL;
+    }
+
+    int fd = open(filename, O_RDWR | O_CREAT, 0666);
+    if (fd == -1)
+    {
+        perror("Error: in opening file");
+        return NULL;
+    }
+
+    size_t full_size = sizeof(struct DataBase) + (size_t)size * sizeof(struct Entry);
+    if (ftruncate(fd, full_size) == -1)
+    {
+        perror("Error: setting file size");
+        close(fd);
+        return NULL;
+    }
+
+    DBptr db = mmap(NULL, full_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (db == MAP_FAILED)
+    {
+        perror("Error: error mapping file");
+        close(fd);
+        return NULL;
+    }
+
+    *fast_map = create_my_map();
+    if (db->header.magic != MAGIC_NUMBER)
+    {
+        db->header.size = size;
+        db->header.head = 0;
+        for (int i = 0; i < db->header.size - 1; ++i)
+        {
+            db->entries[i].next = i + 1;
+        }
+        db->entries[db->header.size - 1].next = END_OF_LIST;
+
+        __sync_synchronize();
+
+        db->header.magic = MAGIC_NUMBER;
+    }
+    else
+    {
+        if (db->header.head == ALL_FILLED)
+        {
+            for (int i = 0; i < db->header.size; ++i)
+            {
+                my_insert(*fast_map, db->entries[i].key, &db->entries[i].value, i);
+            }
+        }
+        else
+        {
+            int *temp_arr = calloc(db->header.size, sizeof(int));
+            if (temp_arr == NULL)
+            {
+                printf("Error: calloc failed in restoring attempt\n");
+                close(fd);
+                munmap(db, full_size);
+                return NULL;
+            }
+            int curr_index = db->header.head;
+            while (db->entries[curr_index].next != END_OF_LIST)
+            {
+                temp_arr[curr_index] = NONE_ZERO_VALUE;
+                curr_index = db->entries[curr_index].next;
+            }
+            temp_arr[curr_index] = NONE_ZERO_VALUE;
+            for (int i = 0; i < db->header.size; ++i)
+            {
+                if (temp_arr[i] == 0)
+                {
+                    my_insert(*fast_map, db->entries[i].key, &db->entries[i].value, i);
+                }
+            }
+            free(temp_arr);
+        }
+    }
+    return db;
+}
+
+bool insert_db(DBptr db, MyMap fast_map, unsigned long key, struct nfs_fh3 *value)
+{
+    if (db->header.head == ALL_FILLED)
+    {
+        printf("error: MAP IS FILLED !\n");
+        return false;
+    }
+
+    int free_cell = db->header.head;
+    db->entries[free_cell].key = key;
+    memcpy(&db->entries[free_cell].value, value, sizeof(struct nfs_fh3));
+    my_insert(fast_map, key, value, free_cell);
+
+    int new_head;
+    if (db->entries[free_cell].next == END_OF_LIST)
+    {
+        new_head = ALL_FILLED;
+    }
+    else
+    {
+        new_head = db->entries[free_cell].next;
+    }
+
+    __sync_synchronize();
+
+    db->header.head = new_head;
+    return true;
+}
+
+bool delete_entry_db(DBptr db, MyMap fast_map, unsigned long key)
+{
+    int index = -9;
+    my_get_value(fast_map, key, &index);
+    my_remove(fast_map, key);
+
+    if (index == -9)
+    {
+        printf("Error: error in removing a none existing entry\n");
+        return false;
+    }
+
+    if (db->header.head == ALL_FILLED)
+    {
+        db->entries[index].next = END_OF_LIST;
+    }
+    else
+    {
+        db->entries[index].next = db->header.head;
+    }
+
+    __sync_synchronize();
+
+    db->header.head = index;
+
+    return true;
+}
+
+struct nfs_fh3 *get_db(MyMap fast_map, unsigned long key)
+{
+    int temp_index;
+    return my_get_value(fast_map, key, &temp_index);
+}
+
+mymap.h:
+#ifndef MYLIB_H
+#define MYLIB_H
+
+struct nfs_fh3
+{
+    int x;
+    char st[3];
+};
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+    void *create_my_map(void);
+    struct nfs_fh3 *my_get_value(void *map, unsigned long key, int *index);
+    void my_insert(void *map, unsigned long key, struct nfs_fh3 *fh, int index);
+    bool my_remove(void *map, unsigned long key);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // MYLIB_H
+
+mymap.cpp file:
+#include "mymap.h"
+#include <iostream>
+#include <unordered_map>
+#include <cstring>
+
+extern "C"
+{
+    void *create_my_map(void)
+    {
+        // return new std::unordered_map<unsigned long, struct nfs_fh3>;
+        return new std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>>;
+    }
+
+    // returning the value, and putting the map[key].index in the index pointer we got
+    struct nfs_fh3 *my_get_value(void *map, unsigned long key, int *index)
+    {
+        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+
+        auto it = my_map->find(key);
+        if (it != my_map->end())
+        {
+            *index = it->second.second;
+            return &(it->second.first);
+        }
+
+        // Key not found
+        *index = -1; // or some other sentinel value
+        return nullptr;
+    }
+
+    void my_insert(void *map, unsigned long key, struct nfs_fh3 *fh, int index)
+    {
+        struct nfs_fh3 tmp = {};
+        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+
+        tmp.data.data_len = fh->data.data_len;
+        tmp.data.data_val = (char *)malloc(tmp.data.data_len);
+        memcpy(tmp.data.data_val, fh->data.data_val, tmp.data.data_len);
+        (*my_map)[key] = std::make_pair(tmp, index);
+    }
+
+    bool my_remove(void *map, unsigned long key)
+    {
+        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+
+        auto it = my_map->find(key);
+        if (it != my_map->end())
+        {
+            // Free the dynamically allocated memory for nfs_fh3
+            free(it->second.first.data.data_val);
+
+            // Remove the element from the map
+            my_map->erase(it);
+            return true;
+        }
+
+        // Key not found
+        return false;
+    }
+}
