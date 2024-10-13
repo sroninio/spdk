@@ -41,7 +41,7 @@ def fsdev_nfs_create(client, name):
     Args:
         name: nfs filesystem name
     """
-    print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+    # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB fsdev_nfs_create (fdsev.py)")
     params = {
         'name': name,
     }

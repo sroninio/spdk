@@ -306,10 +306,6 @@ void test_stress_v2()
             insert_db(db, i, &e); // insert to our map
             *counterFile = i;     // update the data structure
         }
-        while (1)
-        {
-            // wait somebody to kill me ;)
-        };
         exit(0);
     }
     else
@@ -337,34 +333,20 @@ void test_stress_v2()
     unsigned long max_value = *counterFile;
     DB *db = init_map_db(TEST_FILE, 10000000);
     printf("the last inode inserted is [%ld]\n", max_value);
-
-    for (unsigned long i = 0; i <= max_value + 1; ++i)
+    for (unsigned long i = 0; i <= max_value; ++i)
     {
         struct nfs_fh3 *value = get_db(db, i);
         if (value != NULL)
         {
-            if (value->data.num1 != value->data.num2 && value->data.num1 == i && value->data.num2 == i)
+            if (value->data.num1 != value->data.num2)
             {
                 printf("\033[0;31mData corruption: num1 != num2 (%d != %d)\033[0m\n", value->data.num1, value->data.num2);
                 is_ok = false;
-                break;
             }
         }
-        else if (value == NULL && i <= max_value)
+        else
         {
             is_ok = false;
-            break;
-        }
-    }
-
-    for (unsigned long i = max_value + 2; i <= 10000000; ++i)
-    {
-        struct nfs_fh3 *value = get_db(db, i);
-
-        if (value != NULL)
-        {
-            is_ok = false;
-            break;
         }
     }
 

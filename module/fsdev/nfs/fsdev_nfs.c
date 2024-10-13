@@ -9,7 +9,6 @@
 #include "spdk/util.h"
 #include "spdk/thread.h"
 #include "fsdev_nfs.h"
-#include "mymap.h"
 #include <sys/sysmacros.h> // For makedev
 #include <sys/stat.h>      // For S_ISCHR and S_ISBLK
 #include <stdio.h>
@@ -21,6 +20,8 @@
 #include "libnfs-raw.h"
 #include "libnfs-raw-mount.h"
 #include "libnfs-raw-nfs.h"
+
+#include "persistent_map.h"
 
 #define ST_ATIM_NSEC(stbuf) ((stbuf)->st_atim.tv_nsec)
 #define ST_CTIM_NSEC(stbuf) ((stbuf)->st_ctim.tv_nsec)
@@ -62,7 +63,7 @@ struct nfs_fsdev
     struct spdk_fsdev fsdev;
     char *server;
     char *export;
-    void *map;
+    DB *db;
 };
 
 struct nfs_io_channel
@@ -148,7 +149,7 @@ lo_fill_attr(struct spdk_fsdev_file_attr *dest, fattr3 *res, int inode)
         dest->mode = 0010000 + res->mode; // FIFO
         break;
     default:
-        // Handle unexpected file type
+        // Handle unexpected file type as Regular file
         dest->mode = 0100000 + res->mode;
         SPDK_ERRLOG("Unexpected file type: %d\n", res->type); // this is not neccerliy an error (!?)
         break;
@@ -178,6 +179,7 @@ generate_new_key(void)
     return global_key++;
 }
 
+/*
 static unsigned long
 inode_of_filehandle_if_exist(void *map, struct nfs_fh3 *fh) // if not exist we return 16 - unused inode number
 {
@@ -211,6 +213,7 @@ inode_of_filehandle_if_exist(void *map, struct nfs_fh3 *fh) // if not exist we r
     }
     return 16;
 }
+*/
 
 static int
 lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
@@ -238,7 +241,7 @@ lo_write_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
-
+    // result->READ3res_u.resok.count //from read call back
     fsdev_io->u_out.write.data_size = fsdev_io->u_in.write.size;
 
     spdk_fsdev_io_complete(fsdev_io, 0);
@@ -258,25 +261,33 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     }
 
     unsigned long inode_key = (unsigned long)fsdev_io->u_in.read.fhandle;
-    struct nfs_fh3 *fh = my_get(vfsdev->map, inode_key);
+    // struct nfs_fh3 *fh = my_get(vfsdev->map, inode_key);
+    struct nfs_fh3 *fh = get_db(vfsdev->db, inode_key);
 
     size_t size = fsdev_io->u_in.write.size;
     uint64_t offs = fsdev_io->u_in.write.offs;
     const struct iovec *invec = fsdev_io->u_in.write.iov;
-    uint32_t incnt = fsdev_io->u_in.write.iovcnt;
+    // uint32_t incnt = fsdev_io->u_in.write.iovcnt;
 
-    if (incnt != 1)
-    {
-        printf("buffer is splitted\n"); // we should check what this is ?!??
-        return -EINVAL;
-    }
+    // if (incnt != 1)
+    // {
+    //     printf("buffer is splitted\n"); // we should check what this is ?!??
+    //     return -EINVAL;
+    // }
 
     struct WRITE3args args = {0};
     args.file = *fh;
     args.offset = offs;
     args.count = size;
     args.data.data_val = invec[0].iov_base;
-    args.data.data_len = invec[0].iov_len;
+    args.data.data_len = size; // invec[0].iov_len;
+    args.stable = FILE_SYNC;
+
+    /* The choice of stability affects the trade-off between performance and data safety:
+       UNSTABLE is fastest but least safe
+       FILE_SYNC is slowest but most safe
+       DATA_SYNC is a middle ground
+    */
 
     if (rpc_nfs3_write_task(nfs_get_rpc_context(vch->nfs),
                             lo_write_cb, &args, fsdev_io) == NULL)
@@ -331,7 +342,9 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     }
 
     unsigned long inode_key = (unsigned long)fsdev_io->u_in.read.fhandle;
-    struct nfs_fh3 *fh = my_get(vfsdev->map, inode_key);
+
+    // struct nfs_fh3 *fh = my_get(vfsdev->map, inode_key);
+    struct nfs_fh3 *fh = get_db(vfsdev->db, inode_key);
 
     struct iovec *outvec = fsdev_io->u_in.read.iov;
     // uint32_t outcnt = fsdev_io->u_in.read.iovcnt;
@@ -395,7 +408,8 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     struct GETATTR3args args = {0};
 
-    struct nfs_fh3 *nfsfh = my_get(vfsdev->map, key);
+    // struct nfs_fh3 *nfsfh = my_get(vfsdev->map, key);
+    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
 
     if (nfsfh == NULL)
     {
@@ -460,18 +474,32 @@ static void lo_lookup_cb(struct rpc_context *rpc, int status, void *data, void *
         }
         return;
     }
-    int i = inode_of_filehandle_if_exist(vfsdev->map, fh);
-    bool is_exist = (i != INVALIDINODE) ? true : false;
+
+    // int i = inode_of_filehandle_if_exist(vfsdev->map, fh);
+    // bool is_exist = (i != INVALIDINODE) ? true : false;
+    // unsigned long new_key;
+    // if (is_exist)
+    // {
+    //     new_key = i;
+    // }
+    // else
+    // {
+    //     new_key = generate_new_key();
+    //     my_insert(vfsdev->map, new_key, &(result->LOOKUP3res_u.resok.object));
+    // }
+
     unsigned long new_key;
-    if (is_exist)
+    unsigned long old_inode = 16;
+    if (fh_exist_db(vfsdev->db, fh, &old_inode))
     {
-        new_key = i;
+        new_key = old_inode;
     }
     else
     {
         new_key = generate_new_key();
-        my_insert(vfsdev->map, new_key, &(result->LOOKUP3res_u.resok.object));
+        insert_db(vfsdev->db, new_key, &(result->LOOKUP3res_u.resok.object));
     }
+
     printf("$$$$$$ WE ARE RETURNNING INDOE %ld\n", new_key); //
 
     fsdev_io->u_out.lookup.fobject = (struct spdk_fsdev_file_object *)new_key;
@@ -525,7 +553,8 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         fsdev_io->u_out.lookup.fobject = (struct spdk_fsdev_file_object *)(1);
 
         struct GETATTR3args args = {0};
-        struct nfs_fh3 *nfsfh = my_get(vfsdev->map, 1);
+        // struct nfs_fh3 *nfsfh = my_get(vfsdev->map, 1);
+        struct nfs_fh3 *nfsfh = get_db(vfsdev->db, 1);
 
         if (nfsfh == NULL)
         {
@@ -548,7 +577,9 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return OP_STATUS_ASYNC;
     }
 
-    struct nfs_fh3 *nfsfh_parent = my_get(vfsdev->map, key_parent);
+    // struct nfs_fh3 *nfsfh_parent = my_get(vfsdev->map, key_parent);
+    struct nfs_fh3 *nfsfh_parent = get_db(vfsdev->db, key_parent);
+
     if (nfsfh_parent->data.data_len == 0)
     {
         printf("Not Existing FH for fuse inode %ld", key_parent);
@@ -605,25 +636,32 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
     entryplus3 *curr_entry = list_head.entries;
     while (curr_entry != NULL)
     {
-        // if (curr_entry->name[0] == '.' && curr_entry->name[1] == '0' && fsdev_io->u_in.readdir.fobject == 1)
+        // unsigned long new_key;
+        // bool is_exist = false;
+        // unsigned long i = inode_of_filehandle_if_exist(vfsdev->map, &(curr_entry->name_handle.post_op_fh3_u.handle));
+        // is_exist = (i != INVALIDINODE) ? true : false;
+        // if (is_exist)
         // {
-        //     curr_entry = curr_entry->nextentry;
-
-        //     continue;
+        //     new_key = i;
         // }
+        // else
+        // {
+        //     new_key = generate_new_key();
+        //     my_insert(vfsdev->map, new_key, &(curr_entry->name_handle.post_op_fh3_u.handle));
+        // }
+
         unsigned long new_key;
-        bool is_exist = false;
-        unsigned long i = inode_of_filehandle_if_exist(vfsdev->map, &(curr_entry->name_handle.post_op_fh3_u.handle));
-        is_exist = (i != INVALIDINODE) ? true : false;
-        if (is_exist)
+        unsigned long old_inode = 16;
+        if (fh_exist_db(vfsdev->db, &(curr_entry->name_handle.post_op_fh3_u.handle), &old_inode))
         {
-            new_key = i;
+            new_key = old_inode;
         }
         else
         {
             new_key = generate_new_key();
-            my_insert(vfsdev->map, new_key, &(curr_entry->name_handle.post_op_fh3_u.handle));
+            insert_db(vfsdev->db, new_key, &(curr_entry->name_handle.post_op_fh3_u.handle));
         }
+
         printf("READDIR ENTRY : NAME=[%s] AND GIVEN INODE [%ld]\n", curr_entry->name, new_key);
         printf("ENTRY DATA:   DATA_LEN =[%d], DATA_VAL =[",
                curr_entry->name_handle.post_op_fh3_u.handle.data.data_len);
@@ -658,14 +696,16 @@ lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     }
 
     unsigned long key = (unsigned long)fsdev_io->u_in.readdir.fobject;
-    struct nfs_fh3 *nfsfh = my_get(vfsdev->map, key);
+
+    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
+    // struct nfs_fh3 *nfsfh = my_get(vfsdev->map, key);
+
     printf("+=+=+=+=+=+=+=+=  {lo_readdir} FUNCTION CALLED for inode number [%ld]\n", key);
 
     struct READDIRPLUS3args args = {0};
     args.dir = *nfsfh;
     args.cookie = fsdev_io->u_in.readdir.offset;
-    // args.cookieverf = 0; // what should i put in this field ??? we are getting this field in the call back
-    // should we keep it in the map also ??
+    // args.cookieverf = 0; // we are ignoring this field.
     args.dircount = 1000000;
     args.maxcount = 1000000;
 
@@ -705,8 +745,19 @@ lo_create_cb(struct rpc_context *rpc, int status, void *data, void *private_data
         return;
     }
 
-    unsigned long new_key = generate_new_key(); // should we check if this file already exist ? can it be ?
-    my_insert(vfsdev->map, new_key, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle);
+    unsigned long old_inode = 16;
+    unsigned long new_key;
+    if (fh_exist_db(vfsdev->db, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle, &old_inode))
+    {
+        new_key = old_inode;
+    }
+    else
+    {
+        new_key = generate_new_key();
+    }
+
+    insert_db(vfsdev->db, new_key, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle);
+    // my_insert(vfsdev->map, new_key, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle);
 
     fattr3 *res = &result->CREATE3res_u.resok.obj_attributes.post_op_attr_u.attributes;
     lo_fill_attr(&fsdev_io->u_out.mknod.attr, res, new_key);
@@ -723,16 +774,20 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
-    // Determine the file type (we can also extract it from major+minor )
+    // Determine the file type (we can also extract it from rdev via major+minor )
     switch (fsdev_io->u_in.mknod.mode & 0170000) // 0170000 is the mask for file type bits
     {
     case 0100000: // regular files
-        // printf("regular file called mknod instead of create !! \n"); // delete later
         struct CREATE3args args2 = {0};
-        args2.where.dir = *my_get(vfsdev->map, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
+
+        args2.where.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
+        // args2.where.dir = *my_get(vfsdev->map, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
+
         args2.where.name = fsdev_io->u_in.mknod.name;
-        args2.how.mode = UNCHECKED; // Or GUARDED, or EXCLUSIVE (UNCHECKED mode creates the file regardless
-                                    // of whether it exists. GUARDED fails if the file exists. EXCLUSIVE is for atomic file creation.)
+
+        // Or GUARDED, or EXCLUSIVE (UNCHECKED mode creates the file regardless of whether it exists. GUARDED fails if the file exists. EXCLUSIVE is for atomic file creation.)
+        args2.how.mode = UNCHECKED;
+
         args2.how.createhow3_u.obj_attributes.mode.set_it = 1;
         args2.how.createhow3_u.obj_attributes.mode.set_mode3_u.mode = fsdev_io->u_in.mknod.mode & 0777;
         args2.how.createhow3_u.obj_attributes.uid.set_it = 1;
@@ -751,6 +806,79 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         printf("Unexpected file type in mode: %o\n", fsdev_io->u_in.mknod.mode);
         return -EINVAL;
     }
+}
+
+static void
+lo_mkdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_mkdir_cb} FUNCTION CALLED \n");
+
+    struct spdk_fsdev_io *fsdev_io = private_data;
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("lo_mkdir failed with error [%s]\n", (char *)data);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("lo_mkdir failed \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+
+    struct MKDIR3res *result = data;
+
+    unsigned long old_inode = 16;
+    unsigned long new_key;
+    if (fh_exist_db(vfsdev->db, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle, &old_inode))
+    {
+        new_key = old_inode;
+    }
+    else
+    {
+        new_key = generate_new_key();
+    }
+
+    // my_insert(vfsdev->map, new_key, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle);
+    insert_db(vfsdev->db, new_key, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle);
+
+    fattr3 *res = &result->MKDIR3res_u.resok.obj_attributes.post_op_attr_u.attributes;
+    lo_fill_attr(&fsdev_io->u_out.mkdir.attr, res, new_key);
+    fsdev_io->u_out.mkdir.fobject = (struct spdk_fsdev_file_object *)new_key;
+
+    spdk_fsdev_io_complete(fsdev_io, 0);
+}
+
+static int
+lo_mkdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_mkdir} FUNCTION CALLED \n");
+
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+    struct MKDIR3args args = {0};
+    args.where.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mkdir.parent_fobject);
+    // args.where.dir = *my_get(vfsdev->map, (unsigned long)fsdev_io->u_in.mkdir.parent_fobject);
+    args.where.name = fsdev_io->u_in.mkdir.name;
+    args.attributes.gid.set_it = 1;
+    args.attributes.gid.set_gid3_u.gid = fsdev_io->u_in.mkdir.egid;
+    args.attributes.uid.set_it = 1;
+    args.attributes.uid.set_uid3_u.uid = fsdev_io->u_in.mkdir.euid;
+    args.attributes.mode.set_it = 1;
+    args.attributes.mode.set_mode3_u.mode = fsdev_io->u_in.mkdir.mode & 0777; // i am not sure this is the same format !! maybe should add & 0777
+
+    // rpc_set_xid1(nfs_get_rpc_context(vch->nfs), 17);
+    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), 12345);
+
+    if (rpc_nfs3_mkdir_task(nfs_get_rpc_context(vch->nfs), lo_mkdir_cb, &args, fsdev_io) == NULL)
+    {
+        printf("ERROR in calling mkdir\n");
+        return -EINVAL;
+    }
+    return OP_STATUS_ASYNC;
 }
 
 /*
@@ -884,62 +1012,6 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 }
 */
 
-static void
-lo_mkdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
-{
-    printf("+=+=+=+=+=+=+=+=  {lo_mkdir_cb} FUNCTION CALLED \n");
-
-    struct spdk_fsdev_io *fsdev_io = private_data;
-    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    if (status == RPC_STATUS_ERROR)
-    {
-        printf("lo_mkdir failed with error [%s]\n", (char *)data);
-        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
-        return;
-    }
-    else if (status == RPC_STATUS_CANCEL)
-    {
-        printf("lo_mkdir failed \n");
-        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
-        return;
-    }
-    struct MKDIR3res *result = data;
-    unsigned long new_key = generate_new_key(); // should we check if this symlink already exist ? can it be ?
-    my_insert(vfsdev->map, new_key, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle);
-
-    fattr3 *res = &result->MKDIR3res_u.resok.obj_attributes.post_op_attr_u.attributes;
-    lo_fill_attr(&fsdev_io->u_out.mkdir.attr, res, new_key);
-    fsdev_io->u_out.mkdir.fobject = (struct spdk_fsdev_file_object *)new_key;
-
-    spdk_fsdev_io_complete(fsdev_io, 0);
-}
-
-static int
-lo_mkdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
-{
-    printf("+=+=+=+=+=+=+=+=  {lo_mkdir} FUNCTION CALLED \n");
-
-    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
-
-    struct MKDIR3args args = {0};
-    args.where.dir = *my_get(vfsdev->map, (unsigned long)fsdev_io->u_in.mkdir.parent_fobject);
-    args.where.name = fsdev_io->u_in.mkdir.name;
-    args.attributes.gid.set_it = 1;
-    args.attributes.gid.set_gid3_u.gid = fsdev_io->u_in.mkdir.egid;
-    args.attributes.uid.set_it = 1;
-    args.attributes.uid.set_uid3_u.uid = fsdev_io->u_in.mkdir.euid;
-    args.attributes.mode.set_it = 1;
-    args.attributes.mode.set_mode3_u.mode = fsdev_io->u_in.mkdir.mode & 0777; // i am not sure this is the same format !! maybe should add & 0777
-
-    if (rpc_nfs3_mkdir_task(nfs_get_rpc_context(vch->nfs), lo_mkdir_cb, &args, fsdev_io) == NULL)
-    {
-        printf("ERROR in calling mkdir\n");
-        return -EINVAL;
-    }
-    return OP_STATUS_ASYNC;
-}
-
 /*
 static void
 lo_symlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
@@ -1001,6 +1073,140 @@ lo_symlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 }
 */
 
+static void
+lo_setattr_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_setattr_cb} FUNCTION CALLED \n");
+    fflush(stdout);
+
+    struct spdk_fsdev_io *fsdev_io = private_data;
+
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("setattr failed with error [%s]\n", (char *)data);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("setattr failed \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    struct SETATTR3res *result = data;
+    fattr3 *res = &result->SETATTR3res_u.resok.obj_wcc.after.post_op_attr_u.attributes;
+    lo_fill_attr(&fsdev_io->u_out.setattr.attr, res, (unsigned long)fsdev_io->u_in.setattr.fobject);
+
+    spdk_fsdev_io_complete(fsdev_io, 0);
+}
+
+static int
+lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    unsigned long key = (unsigned long)fsdev_io->u_in.setattr.fobject;
+    printf("+=+=+=+=+=+=+=+=  {lo_setattr} FUNCTION CALLED with inode number [%ld] \n", key);
+    struct spdk_fsdev_file_attr *attr = &fsdev_io->u_in.setattr.attr;
+
+    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
+
+    struct SETATTR3args args = {0};
+
+    args.object = *nfsfh;
+
+    if (fsdev_io->u_in.setattr.to_set & (FSDEV_SET_ATTR_ATIME | FSDEV_SET_ATTR_MTIME))
+    {
+        args.new_attributes.atime.set_it = 1;
+        args.new_attributes.atime.set_atime_u.atime.seconds = attr->atime;
+        args.new_attributes.atime.set_atime_u.atime.nseconds = attr->atimensec;
+
+        args.new_attributes.mtime.set_it = 1;
+        args.new_attributes.mtime.set_mtime_u.mtime.seconds = attr->mtime;
+        args.new_attributes.mtime.set_mtime_u.mtime.nseconds = attr->mtimensec;
+    }
+
+    if (fsdev_io->u_in.setattr.to_set & (FSDEV_SET_ATTR_UID | FSDEV_SET_ATTR_GID))
+    {
+        args.new_attributes.gid.set_it = 1;
+        args.new_attributes.gid.set_gid3_u.gid = attr->gid;
+
+        args.new_attributes.uid.set_it = 1;
+        args.new_attributes.uid.set_uid3_u.uid = attr->uid;
+    }
+
+    if (fsdev_io->u_in.setattr.to_set & FSDEV_SET_ATTR_SIZE)
+    {
+        args.new_attributes.size.set_it = 1;
+        args.new_attributes.size.set_size3_u.size = attr->size;
+    }
+
+    if (fsdev_io->u_in.setattr.to_set & FSDEV_SET_ATTR_MODE)
+    {
+        args.new_attributes.mode.set_it = 1;
+        args.new_attributes.mode.set_mode3_u.mode = attr->mode & 0777;
+    }
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+    if (rpc_nfs3_setattr_task(nfs_get_rpc_context(vch->nfs), lo_setattr_cb, &args, fsdev_io) == NULL)
+    {
+        printf("error in setting attributes \n");
+        return -EINVAL;
+    }
+
+    return OP_STATUS_ASYNC;
+}
+
+/*
+static void
+lo_unlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_unlink_cb} FUNCTION CALLED \n");
+    fflush(stdout);
+
+    struct spdk_fsdev_io *fsdev_io = private_data;
+
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("unlink failed with error [%s]\n", (char *)data);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("unlink failed \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+
+    // struct SETATTR3res *result = data;
+    // fattr3 *res = &result->SETATTR3res_u.resok.obj_wcc.after.post_op_attr_u.attributes;
+    // lo_fill_attr(&fsdev_io->u_out.setattr.attr, res, (unsigned long)fsdev_io->u_in.setattr.fobject);
+
+    spdk_fsdev_io_complete(fsdev_io, 0);
+}
+
+static int
+lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    printf("+=+=+=+=+=+=+=+=  {lo_unlink} FUNCTION CALLED with name [%s] \n", fsdev_io->u_in.unlink.name);
+
+    struct REMOVE3args args = {0};
+    args.object.dir = *get_db(vfsdev->db, fsdev_io->u_in.unlink.parent_fobject);
+    args.object.name = fsdev_io->u_in.unlink.name;
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+    if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_unlink_cb, &args, fsdev_io) == NULL)
+    {
+        printf("error in unlink a file \n");
+        return -EINVAL;
+    }
+
+    return OP_STATUS_ASYNC;
+}
+
+*/
+
 static int
 fsdev_nfs_initialize(void)
 {
@@ -1047,21 +1253,21 @@ nimp(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 }
 
 static fsdev_op_handler_func handlers[] = {
-    [SPDK_FSDEV_OP_LOOKUP] = lo_lookup, //
+    [SPDK_FSDEV_OP_LOOKUP] = lo_lookup,
     [SPDK_FSDEV_OP_FORGET] = nimp,
-    [SPDK_FSDEV_OP_GETATTR] = lo_getattr, //
-    [SPDK_FSDEV_OP_SETATTR] = nimp,
+    [SPDK_FSDEV_OP_GETATTR] = lo_getattr,
+    [SPDK_FSDEV_OP_SETATTR] = lo_setattr,
     [SPDK_FSDEV_OP_READLINK] = nimp,
-    [SPDK_FSDEV_OP_SYMLINK] = nimp,   // new1
-    [SPDK_FSDEV_OP_MKNOD] = lo_mknod, // new2
-    [SPDK_FSDEV_OP_MKDIR] = lo_mkdir, // new3
-    [SPDK_FSDEV_OP_UNLINK] = nimp,
+    [SPDK_FSDEV_OP_SYMLINK] = nimp,
+    [SPDK_FSDEV_OP_MKNOD] = lo_mknod,
+    [SPDK_FSDEV_OP_MKDIR] = lo_mkdir,
+    [SPDK_FSDEV_OP_UNLINK] = nimp, // lo_unlink,
     [SPDK_FSDEV_OP_RMDIR] = nimp,
     [SPDK_FSDEV_OP_RENAME] = nimp,
     [SPDK_FSDEV_OP_LINK] = nimp,
-    [SPDK_FSDEV_OP_OPEN] = lo_open,   //
-    [SPDK_FSDEV_OP_READ] = lo_read,   //
-    [SPDK_FSDEV_OP_WRITE] = lo_write, //
+    [SPDK_FSDEV_OP_OPEN] = lo_open,
+    [SPDK_FSDEV_OP_READ] = lo_read,
+    [SPDK_FSDEV_OP_WRITE] = lo_write,
     [SPDK_FSDEV_OP_STATFS] = nimp,
     [SPDK_FSDEV_OP_RELEASE] = nimp,
     [SPDK_FSDEV_OP_FSYNC] = nimp,
@@ -1070,8 +1276,8 @@ static fsdev_op_handler_func handlers[] = {
     [SPDK_FSDEV_OP_LISTXATTR] = nimp,
     [SPDK_FSDEV_OP_REMOVEXATTR] = nimp,
     [SPDK_FSDEV_OP_FLUSH] = nimp,
-    [SPDK_FSDEV_OP_OPENDIR] = lo_opendir, //
-    [SPDK_FSDEV_OP_READDIR] = lo_readdir, //
+    [SPDK_FSDEV_OP_OPENDIR] = lo_opendir,
+    [SPDK_FSDEV_OP_READDIR] = lo_readdir,
     [SPDK_FSDEV_OP_RELEASEDIR] = nimp,
     [SPDK_FSDEV_OP_FSYNCDIR] = nimp,
     [SPDK_FSDEV_OP_FLOCK] = nimp,
@@ -1119,12 +1325,12 @@ static void
 fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 
-    // printf("fsdev_nfs_submit_request fucntion entered\n"); //
     enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
-    // printf("+=+=+=+=+=+=+=+=  {fsdev_nfs_submit_request} FUNCTION CALLED and we are calling FUNCTION [%s]\n", opNames[op]);
+
     printf("\033[33m+=+=+=+=+=+=+=+=  {fsdev_nfs_submit_request} FUNCTION CALLED and we are calling FUNCTION [%s]\033[0m\n", opNames[op]);
+
     assert(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
-    // printf("\tZXZXZXZXZX from submit request we are calling function : { %s }\n", opNames[op]); // delete later
+
     int status = handlers[op](ch, fsdev_io);
     if (status != OP_STATUS_ASYNC)
     {
@@ -1136,8 +1342,6 @@ static struct spdk_io_channel *
 fsdev_nfs_get_io_channel(void *ctx)
 {
     printf("+=+=+=+=+=+=+=+=  {fsdev_nfs_get_io_channel} FUNCTION CALLED\n");
-
-    // printf("fsdev_nfs_get_io_channel fucntion entered\n"); //
     return spdk_get_io_channel(ctx);
 }
 
@@ -1220,7 +1424,9 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
     const struct nfs_fh *root_fh = nfs_get_rootfh(vch->nfs);
     root_fh3.data.data_val = root_fh->val;
     root_fh3.data.data_len = root_fh->len;
-    my_insert(vfsdev->map, (unsigned long)1, &root_fh3);
+
+    // my_insert(vfsdev->map, (unsigned long)1, &root_fh3);
+    insert_db(vfsdev->db, (unsigned long)1, &root_fh3);
 
     vch->poller = SPDK_POLLER_REGISTER(nfs_io_progress_and_poll, vch, 0);
 
@@ -1248,7 +1454,11 @@ int spdk_fsdev_nfs_create(struct spdk_fsdev **fsdev, const char *name)
     vfsdev->server = "127.0.0.1"; //"10.209.80.42";
     vfsdev->export = "/VIRTUAL";
 
-    vfsdev->map = create_my_map();
+    // vfsdev->map = create_my_map();
+    const char *filename = "/tmp/dataBase_log153.bin";
+    unsigned long database_size = 10000;
+    vfsdev->db = alloc_init_map_db(filename, database_size);
+    printf("finished map init \n");
 
     vfsdev->fsdev.ctxt = vfsdev;
     vfsdev->fsdev.fn_table = &nfs_fn_table;

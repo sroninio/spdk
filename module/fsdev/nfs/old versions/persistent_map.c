@@ -59,7 +59,7 @@ static void intiallizeDB(DBptr db, size_t size)
 
 static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
 {
-    bool *is_free_arr = calloc(db->header.size, sizeof(bool));
+    bool *is_free_arr = calloc(db->header.size, sizeof(int));
     if (is_free_arr == NULL)
     {
         printf("Error: calloc failed in restoring attempt\n");
@@ -87,15 +87,7 @@ static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
 
 static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value, DBptr db, MyMapPtr fast_map, unsigned long key)
 {
-    db->entries[free_cell].key = key;
-    db->entries[free_cell].value.data.data_val = (char *)malloc(sizeof(char) * value->data.data_len);
-    if (db->entries[free_cell].value.data.data_val == NULL)
-    {
-        printf("Error: malloc falied\n");
-        return;
-    }
-    db->entries[free_cell].value.data.data_len = value->data.data_len;
-    memcpy(&db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
+    memcpy(&db->entries[free_cell].value, value, sizeof(struct nfs_fh3));
     my_insert(fast_map, key, value, free_cell);
 }
 
@@ -146,24 +138,32 @@ bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
 {
     int index_exists = -1;
 
-    if (my_get_value(data_base->fast_map, key, &index_exists) != NULL)
+    if (my_get_value(data_base->fast_map, key, &index_exists) != NULL && index_exists != -1)
     {
         memcpy(&data_base->db->entries[index_exists].value, value, sizeof(struct nfs_fh3));
         my_insert(data_base->fast_map, key, value, index_exists);
         return true;
     }
 
-    int free_cell = data_base->db->header.head;
-
-    if (free_cell == END_OF_LIST)
+    if (data_base->db->header.head == ALL_FILLED)
     {
         printf("error: MAP IS FILLED !\n");
         return false;
     }
 
+    int free_cell = data_base->db->header.head;
+    data_base->db->entries[free_cell].key = key;
     insert_entry_to_persistent_map(free_cell, value, data_base->db, data_base->fast_map, key);
 
-    int new_head = (data_base->db->entries[free_cell].next == END_OF_LIST) ? ALL_FILLED : data_base->db->entries[free_cell].next;
+    int new_head;
+    if (data_base->db->entries[free_cell].next == END_OF_LIST)
+    {
+        new_head = ALL_FILLED;
+    }
+    else
+    {
+        new_head = data_base->db->entries[free_cell].next;
+    }
 
     __sync_synchronize();
     data_base->db->header.head = new_head;
