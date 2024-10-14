@@ -6,7 +6,10 @@ static void intiallizeDB(DBptr db, size_t size)
     db->header.head = 0;
     for (int i = 0; i < (int)db->header.size; ++i)
     {
-        db->entries->value.data.data_val = NULL;
+        for (int j = 0; j < FH_DATA_MAX_SIZE; j++)
+        {
+            db->entries->value.data.data_val[j] = '\0';
+        }
         db->entries->value.data.data_len = 0;
         db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
     }
@@ -37,7 +40,12 @@ static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
     {
         if (is_free_arr[i] == false)
         {
-            volatile_map_insert(fast_map, db->entries[i].key, &db->entries[i].value, i);
+            struct nfs_fh3 tmp = {};
+            tmp.data.data_len = db->entries[i].value.data.data_len;
+            tmp.data.data_val = (char *)malloc(sizeof(char) * db->entries[i].value.data.data_len);
+            memcpy(tmp.data.data_val, db->entries[i].value.data.data_val, tmp.data.data_len);
+            volatile_map_insert(fast_map, db->entries[i].key, &tmp, i);
+            free(tmp.data.data_val);
         }
     }
     free(is_free_arr);
@@ -45,17 +53,25 @@ static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
 
 static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value, DBptr db, MyMapPtr fast_map, unsigned long key)
 {
-    db->entries[free_cell].key = key;
-    db->entries[free_cell].value.data.data_len = value->data.data_len;
-    db->entries[free_cell].value.data.data_val = (char *)malloc(sizeof(char) * value->data.data_len);
-
-    if (db->entries[free_cell].value.data.data_val == NULL)
+    if (value->data.data_len > FH_DATA_MAX_SIZE)
     {
-        printf("Error: failed to allocate memory for new FH in persistent map \n");
+        printf("Error: file handle data larger than allowed : [ %d > %d ]\n", value->data.data_len, FH_DATA_MAX_SIZE);
         return;
     }
 
+    db->entries[free_cell].key = key;
+    db->entries[free_cell].value.data.data_len = value->data.data_len;
     memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
+
+    //  db->entries[free_cell].value.data.data_val = (char *)malloc(sizeof(char) * value->data.data_len);
+
+    // if (db->entries[free_cell].value.data.data_val == NULL)
+    //  {
+    //      printf("Error: failed to allocate memory for new FH in persistent map \n");
+    //      return;
+    //  }
+
+    //  memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
     volatile_map_insert(fast_map, key, value, free_cell);
 }
 

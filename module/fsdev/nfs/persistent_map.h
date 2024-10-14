@@ -20,7 +20,7 @@
 #define END_OF_LIST -1
 #define NONE_ZERO_VALUE 17
 #define INVALID -1
-
+#define FH_DATA_MAX_SIZE 300
 struct Header
 {
     int head;
@@ -28,10 +28,20 @@ struct Header
     size_t size;
 };
 
+struct persistent_nfs_fh3
+{
+    struct
+    {
+        unsigned int data_len;
+        char data_val[FH_DATA_MAX_SIZE];
+    } data;
+};
+
 struct Entry
 {
     unsigned long key;
-    struct nfs_fh3 value;
+    // struct nfs_fh3 value;
+    struct persistent_nfs_fh3 value;
     int next;
 };
 

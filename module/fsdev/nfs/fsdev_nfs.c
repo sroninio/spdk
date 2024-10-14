@@ -1464,8 +1464,8 @@ int spdk_fsdev_nfs_create(struct spdk_fsdev **fsdev, const char *name)
     vfsdev->export = "/VIRTUAL";
 
     // vfsdev->map = create_my_map();
-    const char *filename = "/tmp/dataBase_log153.bin";
-    unsigned long database_size = 10;
+    const char *filename = "/tmp/dataBase_log.bin";
+    unsigned long database_size = 200000;
     vfsdev->db = alloc_init_map_db(filename, database_size);
     printf("finished map init \n");
 
