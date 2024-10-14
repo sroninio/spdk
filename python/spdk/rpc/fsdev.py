@@ -47,44 +47,32 @@ def fsdev_get_fsdevs(client, name: str = None):
     return client.call('fsdev_get_fsdevs', params)
 
 
-def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
-                     enable_writeback_cache: bool = None, max_xfer_size: int = None,
-                     enable_skip_rw: bool = None, max_readahead: int = None):
-    """Create a aio filesystem.
+
+
+
+def fsdev_nfs_create(client, name):
+    """Create an nfs filesystem.
 
     Args:
-        name: aio filesystem name
-        root_path: path on system fs to expose as SPDK fs
-        xattr_enabled: true if extended attributes should be enabled
-        writeback_cache: enable/disable the write cache
-        max_xfer_size: max data transfer size in bytes
-        skip_rw: if true skips read/write IOs
-        max_readahead: max readahead size
+        name: nfs filesystem name
     """
+    # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB fsdev_nfs_create (fdsev.py)")
     params = {
         'name': name,
-        'root_path': root_path
     }
-    if enable_xattr is not None:
-        params['enable_xattr'] = enable_xattr
-    if enable_writeback_cache is not None:
-        params['enable_writeback_cache'] = enable_writeback_cache
-    if max_xfer_size is not None:
-        params['max_xfer_size'] = max_xfer_size
-    if enable_skip_rw is not None:
-        params['enable_skip_rw'] = enable_skip_rw
-    if max_readahead is not None:
-        params['max_readahead'] = max_readahead
-    return client.call('fsdev_aio_create', params)
+    return client.call('fsdev_nfs_create', params)
 
 
-def fsdev_aio_delete(client, name):
-    """Delete a aio filesystem.
+
+
+
+def fsdev_nfs_delete(client, name):
+    """Delete an nfs filesystem.
 
     Args:
-        name: aio filesystem name
+        name: nfs filesystem name
     """
     params = {
         'name': name
     }
-    return client.call('fsdev_aio_delete', params)
+    return client.call('fsdev_nfs_delete', params)
