@@ -1422,6 +1422,15 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
 
     struct nfs_fh3 root_fh3;
     const struct nfs_fh *root_fh = nfs_get_rootfh(vch->nfs);
+
+    printf("\033[38;5;208m"); // Set text color to bright orange
+    printf("the value of the root FH is = [");
+    for (int i = 0; i < root_fh->len; ++i)
+    {
+        printf("%c", *(root_fh->val + i));
+    }
+    printf("]\n");
+    printf("\033[0m"); // Reset text color to default
     root_fh3.data.data_val = root_fh->val;
     root_fh3.data.data_len = root_fh->len;
 
@@ -1456,7 +1465,7 @@ int spdk_fsdev_nfs_create(struct spdk_fsdev **fsdev, const char *name)
 
     // vfsdev->map = create_my_map();
     const char *filename = "/tmp/dataBase_log153.bin";
-    unsigned long database_size = 10000;
+    unsigned long database_size = 10;
     vfsdev->db = alloc_init_map_db(filename, database_size);
     printf("finished map init \n");
 

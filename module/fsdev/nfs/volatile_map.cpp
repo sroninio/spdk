@@ -40,7 +40,12 @@ extern "C"
         std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
 
         tmp.data.data_len = fh->data.data_len;
-        tmp.data.data_val = (char *)malloc(tmp.data.data_len);
+        tmp.data.data_val = (char *)malloc(fh->data.data_len * sizeof(char));
+        if (tmp.data.data_val == NULL)
+        {
+            printf("Error: not able to allocated new memory for entries of map\n");
+            return;
+        }
         memcpy(tmp.data.data_val, fh->data.data_val, tmp.data.data_len);
         (*my_map)[key] = std::make_pair(tmp, index);
     }

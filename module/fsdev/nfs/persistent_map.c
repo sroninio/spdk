@@ -6,6 +6,8 @@ static void intiallizeDB(DBptr db, size_t size)
     db->header.head = 0;
     for (int i = 0; i < (int)db->header.size; ++i)
     {
+        db->entries->value.data.data_val = NULL;
+        db->entries->value.data.data_len = 0;
         db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
     }
 
