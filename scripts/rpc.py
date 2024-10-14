@@ -3470,38 +3470,19 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-c', '--fsdev-io-cache-size', help='Size of fsdev IO objects cache per thread', type=int)
     p.set_defaults(func=fsdev_set_opts)
 
-    def fsdev_aio_create(args):
-        print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
-                                         enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
-                                         max_write=args.max_write, enable_skip_rw=args.enable_skip_rw))
+    def fsdev_nfs_create(args):
+        print(rpc.fsdev.fsdev_nfs_create(args.client, name=args.name))
 
-    p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
-    p.add_argument('name', help='Filesystem name. Example: aio0.')
-    p.add_argument('root_path', help='Path on the system fs to expose as SPDK filesystem')
+    p = subparsers.add_parser('fsdev_nfs_create', help='Create an nfs filesystem')
+    p.add_argument('name', help='Filesystem name. Example: nfs0.')
+    p.set_defaults(func=fsdev_nfs_create)
 
-    group = p.add_mutually_exclusive_group()
-    group.add_argument('--enable-xattr', help='Enable extended attributes', action='store_true', default=None)
-    group.add_argument('--disable-xattr', help='Disable extended attributes', dest='enable_xattr', action='store_false', default=None)
+    def fsdev_nfs_delete(args):
+        print(rpc.fsdev.fsdev_nfs_delete(args.client, name=args.name))
 
-    group = p.add_mutually_exclusive_group()
-    group.add_argument('--enable-writeback-cache', help='Enable writeback cache', action='store_true', default=None)
-    group.add_argument('--disable-writeback-cache', help='Disable writeback cache', dest='enable_writeback_cache', action='store_false',
-                       default=None)
-
-    p.add_argument('-w', '--max-write', help='Max write size in bytes', type=int)
-
-    group = p.add_mutually_exclusive_group()
-    group.add_argument('--enable-skip-rw', help='Enabled skiping on read/write IOs', action='store_true', default=None)
-    group.add_argument('--disable-skip-rw', help='Disable skiping on read/write IOs', dest='enable_skip_rw', action='store_false',
-                       default=None)
-    p.set_defaults(func=fsdev_aio_create)
-
-    def fsdev_aio_delete(args):
-        print(rpc.fsdev.fsdev_aio_delete(args.client, name=args.name))
-
-    p = subparsers.add_parser('fsdev_aio_delete', help='Delete a aio filesystem')
-    p.add_argument('name', help='Filesystem name. Example: aio0.')
-    p.set_defaults(func=fsdev_aio_delete)
+    p = subparsers.add_parser('fsdev_nfs_delete', help='Delete an nfs filesystem')
+    p.add_argument('name', help='Filesystem name. Example: nfs0.')
+    p.set_defaults(func=fsdev_nfs_delete)
 
     # sock
     def sock_impl_get_options(args):
