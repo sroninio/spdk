@@ -538,9 +538,14 @@ lo_lookuproot_cb(struct rpc_context *rpc, int status, void *data, void *private_
 }
 
 static int
+lo_mount(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+    return 0;
+}
+
+static int
 lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     unsigned long key_parent = (unsigned long)fsdev_io->u_in.lookup.parent_fobject;
     char *name = fsdev_io->u_in.lookup.name;
@@ -671,11 +676,12 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
         }
         printf("]\n");
         //
+        bool forget = false;
         fsdev_io->u_out.readdir.name = curr_entry->name;
         fsdev_io->u_out.readdir.offset = curr_entry->cookie;
         lo_fill_attr(&fsdev_io->u_out.readdir.attr, &curr_entry->name_attributes.post_op_attr_u.attributes, new_key);
         fsdev_io->u_out.readdir.fobject = (struct spdk_fsdev_file_object *)new_key;
-        fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+        fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
         curr_entry = curr_entry->nextentry;
     }
 
@@ -1253,38 +1259,39 @@ nimp(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 }
 
 static fsdev_op_handler_func handlers[] = {
-    [SPDK_FSDEV_OP_LOOKUP] = lo_lookup,
-    [SPDK_FSDEV_OP_FORGET] = nimp,
-    [SPDK_FSDEV_OP_GETATTR] = lo_getattr,
-    [SPDK_FSDEV_OP_SETATTR] = lo_setattr,
-    [SPDK_FSDEV_OP_READLINK] = nimp,
-    [SPDK_FSDEV_OP_SYMLINK] = nimp,
-    [SPDK_FSDEV_OP_MKNOD] = lo_mknod,
-    [SPDK_FSDEV_OP_MKDIR] = lo_mkdir,
-    [SPDK_FSDEV_OP_UNLINK] = nimp, // lo_unlink,
-    [SPDK_FSDEV_OP_RMDIR] = nimp,
-    [SPDK_FSDEV_OP_RENAME] = nimp,
-    [SPDK_FSDEV_OP_LINK] = nimp,
-    [SPDK_FSDEV_OP_OPEN] = lo_open,
-    [SPDK_FSDEV_OP_READ] = lo_read,
-    [SPDK_FSDEV_OP_WRITE] = lo_write,
-    [SPDK_FSDEV_OP_STATFS] = nimp,
-    [SPDK_FSDEV_OP_RELEASE] = nimp,
-    [SPDK_FSDEV_OP_FSYNC] = nimp,
-    [SPDK_FSDEV_OP_SETXATTR] = nimp,
-    [SPDK_FSDEV_OP_GETXATTR] = nimp,
-    [SPDK_FSDEV_OP_LISTXATTR] = nimp,
-    [SPDK_FSDEV_OP_REMOVEXATTR] = nimp,
-    [SPDK_FSDEV_OP_FLUSH] = nimp,
-    [SPDK_FSDEV_OP_OPENDIR] = lo_opendir,
-    [SPDK_FSDEV_OP_READDIR] = lo_readdir,
-    [SPDK_FSDEV_OP_RELEASEDIR] = nimp,
-    [SPDK_FSDEV_OP_FSYNCDIR] = nimp,
-    [SPDK_FSDEV_OP_FLOCK] = nimp,
-    [SPDK_FSDEV_OP_CREATE] = nimp,
-    [SPDK_FSDEV_OP_ABORT] = nimp,
-    [SPDK_FSDEV_OP_FALLOCATE] = nimp,
-    [SPDK_FSDEV_OP_COPY_FILE_RANGE] = nimp,
+    [SPDK_FSDEV_IO_MOUNT] = lo_mount,
+    [SPDK_FSDEV_IO_LOOKUP] = lo_lookup,
+    [SPDK_FSDEV_IO_FORGET] = nimp,
+    [SPDK_FSDEV_IO_GETATTR] = lo_getattr,
+    [SPDK_FSDEV_IO_SETATTR] = lo_setattr,
+    [SPDK_FSDEV_IO_READLINK] = nimp,
+    [SPDK_FSDEV_IO_SYMLINK] = nimp,
+    [SPDK_FSDEV_IO_MKNOD] = lo_mknod,
+    [SPDK_FSDEV_IO_MKDIR] = lo_mkdir,
+    [SPDK_FSDEV_IO_UNLINK] = nimp, // lo_unlink,
+    [SPDK_FSDEV_IO_RMDIR] = nimp,
+    [SPDK_FSDEV_IO_RENAME] = nimp,
+    [SPDK_FSDEV_IO_LINK] = nimp,
+    [SPDK_FSDEV_IO_OPEN] = lo_open,
+    [SPDK_FSDEV_IO_READ] = lo_read,
+    [SPDK_FSDEV_IO_WRITE] = lo_write,
+    [SPDK_FSDEV_IO_STATFS] = nimp,
+    [SPDK_FSDEV_IO_RELEASE] = nimp,
+    [SPDK_FSDEV_IO_FSYNC] = nimp,
+    [SPDK_FSDEV_IO_SETXATTR] = nimp,
+    [SPDK_FSDEV_IO_GETXATTR] = nimp,
+    [SPDK_FSDEV_IO_LISTXATTR] = nimp,
+    [SPDK_FSDEV_IO_REMOVEXATTR] = nimp,
+    [SPDK_FSDEV_IO_FLUSH] = nimp,
+    [SPDK_FSDEV_IO_OPENDIR] = lo_opendir,
+    [SPDK_FSDEV_IO_READDIR] = lo_readdir,
+    [SPDK_FSDEV_IO_RELEASEDIR] = nimp,
+    [SPDK_FSDEV_IO_FSYNCDIR] = nimp,
+    [SPDK_FSDEV_IO_FLOCK] = nimp,
+    [SPDK_FSDEV_IO_CREATE] = nimp,
+    [SPDK_FSDEV_IO_ABORT] = nimp,
+    [SPDK_FSDEV_IO_FALLOCATE] = nimp,
+    [SPDK_FSDEV_IO_COPY_FILE_RANGE] = nimp,
 };
 
 const char *opNames[] = {
@@ -1324,12 +1331,11 @@ const char *opNames[] = {
 static void
 fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-
-    enum spdk_fsdev_op op = spdk_fsdev_io_get_op(fsdev_io);
+    enum spdk_fsdev_io_type op = spdk_fsdev_io_get_type(fsdev_io);
 
     printf("\033[33m+=+=+=+=+=+=+=+=  {fsdev_nfs_submit_request} FUNCTION CALLED and we are calling FUNCTION [%s]\033[0m\n", opNames[op]);
 
-    assert(op >= 0 && op < __SPDK_FSDEV_OP_LAST);
+    assert(op >= 0 && op < __SPDK_FSDEV_IO_LAST);
 
     int status = handlers[op](ch, fsdev_io);
     if (status != OP_STATUS_ASYNC)
@@ -1343,13 +1349,6 @@ fsdev_nfs_get_io_channel(void *ctx)
 {
     printf("+=+=+=+=+=+=+=+=  {fsdev_nfs_get_io_channel} FUNCTION CALLED\n");
     return spdk_get_io_channel(ctx);
-}
-
-static int
-fsdev_nfs_negotiate_opts(void *ctx, struct spdk_fsdev_open_opts *opts)
-{
-    // TO DO ?
-    return 0;
 }
 
 static void
@@ -1369,7 +1368,6 @@ static const struct spdk_fsdev_fn_table nfs_fn_table = {
     .destruct = fsdev_nfs_destruct,
     .submit_request = fsdev_nfs_submit_request,
     .get_io_channel = fsdev_nfs_get_io_channel,
-    .negotiate_opts = fsdev_nfs_negotiate_opts,
     .write_config_json = fsdev_nfs_write_config_json,
     .reset = fsdev_nfs_reset,
 };
