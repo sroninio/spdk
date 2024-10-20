@@ -1416,7 +1416,8 @@ fsdev_nfs_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 static int
 fsdev_nfs_reset(void *_ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 {
-    // TO DO ?
+    cb(cb_arg, 0);
+
     return 0;
 }
 
