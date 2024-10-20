@@ -31,6 +31,8 @@
 #define PAGE_SIZE 4096
 #endif
 
+static bool init_done = false;
+
 /*
  * NOTE: It appeared that the open flags have different values on the different HW architechtures.
  *
@@ -3772,6 +3774,15 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 	}
 
 	// check global, if false- set disp values
+
+	if (fuse_io->hdr.opcode != FUSE_INIT && init_done == false) {
+		disp->root_fobject = (struct spdk_fsdev_file_object *) 1;
+		disp->proto_major = 7;
+		disp->proto_minor = 34;
+		disp->mount_flags = 1004469371;
+	}
+
+	init_done = true;
 
 	if (!fuse_ll_ops[fuse_io->hdr.opcode].func) {
 		SPDK_ERRLOG("Bad IO: no handler for (%" PRIu32 ") %s\n", fuse_io->hdr.opcode,
