@@ -2261,6 +2261,7 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	supported |= fsdev_mount_flags_to_fuse(negotiated_opts->flags);
 	outarg.flags = fsdev_io_h2d_u32(fuse_io, supported);
 	disp->mount_flags = supported;
+	printf("disp->mount_flags = %u\n", disp->mount_flags);
 
 	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io, negotiated_opts->max_readahead);
 
@@ -2343,6 +2344,7 @@ do_mount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "%s: spdk_fsdev_mount succeeded\n", fuse_dispatcher_name(disp));
 	disp->root_fobject = root_fobject;
+	printf("disp->root_fobject: %p\n", disp->root_fobject);
 	rc = do_mount_prepare_completion(fuse_io, opts);
 	if (rc) {
 		SPDK_ERRLOG("%s: mount completion preparation failed with %d\n", fuse_dispatcher_name(disp), rc);
@@ -2375,6 +2377,7 @@ do_init(struct fuse_io *fuse_io)
 
 	disp->proto_major = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->major);
 	disp->proto_minor = fsdev_io_d2h_u32(fuse_io, fuse_io->u.init.in->minor);
+	printf("proto major: %u proto minor: %u\n", disp->proto_major, disp->proto_minor);
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "Proto version: %" PRIu32 ".%" PRIu32 "\n",
 		      disp->proto_major,
@@ -3767,6 +3770,8 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 		fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
 		return 0;
 	}
+
+	// check global, if false- set disp values
 
 	if (!fuse_ll_ops[fuse_io->hdr.opcode].func) {
 		SPDK_ERRLOG("Bad IO: no handler for (%" PRIu32 ") %s\n", fuse_io->hdr.opcode,
