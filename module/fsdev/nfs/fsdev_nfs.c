@@ -31,6 +31,16 @@
 #define ST_MTIM_NSEC_SET(stbuf, val) (stbuf)->st_mtim.tv_nsec = (val)
 #define INVALIDINODE 16
 
+#define MAX_BACKGROUND (100)
+#define TIME_GRAN (1)
+#define MAX_AIOS 256
+#define DEFAULT_WRITEBACK_CACHE true
+#define DEFAULT_MAX_XFER_SIZE 0x00020000
+#define DEFAULT_MAX_READAHEAD 0x00020000
+#define DEFAULT_XATTR_ENABLED false
+#define DEFAULT_SKIP_RW false
+#define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -540,6 +550,48 @@ lo_lookuproot_cb(struct rpc_context *rpc, int status, void *data, void *private_
 static int
 lo_mount(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
+    fsdev_io->u_out.mount.root_fobject = (struct spdk_fsdev_file_object *)1;
+
+    fsdev_io->u_out.mount.opts = fsdev_io->u_in.mount.opts;
+
+    fsdev_io->u_out.mount.opts.max_readahead = DEFAULT_MAX_READAHEAD;
+
+    fsdev_io->u_out.mount.opts.max_xfer_size = DEFAULT_MAX_XFER_SIZE;
+
+    // fsdev_io->u_out.mount.opts.opts_size = ; already assigned
+
+    // bool writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
+    bool writeback_cache_enabled = false;
+
+    // bool writeback_cache_enabled = !!(opts->flags & SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+
+    uint64_t flags = 0;
+
+#define AIO_SET_MOUNT_FLAG(cond, store, flag)                                     \
+    if ((cond) && (fsdev_io->u_out.mount.opts.flags & (SPDK_FSDEV_MOUNT_##flag))) \
+    {                                                                             \
+        store |= (SPDK_FSDEV_MOUNT_##flag);                                       \
+    }
+
+    AIO_SET_MOUNT_FLAG(true, flags, DOT_PATH_LOOKUP);
+    AIO_SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
+    AIO_SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
+    AIO_SET_MOUNT_FLAG(true, flags, POSIX_ACL);
+
+    /* Based on the setting above. */
+    AIO_SET_MOUNT_FLAG(writeback_cache_enabled, flags, WRITEBACK_CACHE);
+
+    /* Updating negotiated flags. */
+    fsdev_io->u_out.mount.opts.flags = flags;
+
+#undef AIO_SET_MOUNT_FLAG
+
+    return 0;
+}
+
+static int
+lo_empty(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
     return 0;
 }
 
@@ -555,6 +607,9 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (key_parent == 0)
     {
+        printf("\033[1;31mERROR ! WE ARE CALLING LOOK UP WITH PARENT INODE = 0 !!\033[0m\n");
+        return -EINVAL;
+
         fsdev_io->u_out.lookup.fobject = (struct spdk_fsdev_file_object *)(1);
 
         struct GETATTR3args args = {0};
@@ -1260,8 +1315,9 @@ nimp(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 static fsdev_op_handler_func handlers[] = {
     [SPDK_FSDEV_IO_MOUNT] = lo_mount,
+    [SPDK_FSDEV_IO_UMOUNT] = lo_empty,
     [SPDK_FSDEV_IO_LOOKUP] = lo_lookup,
-    [SPDK_FSDEV_IO_FORGET] = nimp,
+    [SPDK_FSDEV_IO_FORGET] = lo_empty,
     [SPDK_FSDEV_IO_GETATTR] = lo_getattr,
     [SPDK_FSDEV_IO_SETATTR] = lo_setattr,
     [SPDK_FSDEV_IO_READLINK] = nimp,
