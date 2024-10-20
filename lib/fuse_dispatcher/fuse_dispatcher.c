@@ -16,6 +16,9 @@
 #include "spdk/fuse_dispatcher.h"
 #include "linux/fuse_kernel.h"
 
+bool b_init_called;
+bool inside_fake_init;
+
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
 #endif
@@ -2336,7 +2339,7 @@ do_mount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 	int rc;
 
 	if (status) {
-		SPDK_ERRLOG("%s: spdk_fsdev_mount failed (err=%d)\n", fuse_dispatcher_name(disp), status);
+		SPDK_ERRLOG("%s: AAAAAAAAAAAAAAA spdk_fsdev_mount failed (err=%d)\n", fuse_dispatcher_name(disp), status);
 		fuse_dispatcher_io_complete_err(fuse_io, status);
 		return;
 	}
@@ -2345,14 +2348,16 @@ do_mount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 	disp->root_fobject = root_fobject;
 	rc = do_mount_prepare_completion(fuse_io, opts);
 	if (rc) {
-		SPDK_ERRLOG("%s: mount completion preparation failed with %d\n", fuse_dispatcher_name(disp), rc);
+		SPDK_ERRLOG("%s:AAAAAAAAAAAAAAAAA mount completion preparation failed with %d\n", fuse_dispatcher_name(disp), rc);
 		fuse_io->u.init.error = rc;
 		disp->root_fobject = NULL;
 		fuse_dispatcher_mount_rollback(fuse_io);
 		return;
 	}
 
-	fuse_dispatcher_io_complete_ok(fuse_io, fuse_io->u.init.out_len);
+    if (!b_inside_fake_init) {
+        fuse_dispatcher_io_complete_ok(fuse_io, fuse_io->u.init.out_len);
+    }
 }
 
 static void
@@ -3724,6 +3729,28 @@ static const struct {
 	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
 };
 
+static int prepare_fd_forsave_restore()
+{
+    int fd = open("/tmp/fuse_io_init.struct", O_RDWR | O_CREAT, 0666);
+    if (fd == -1) (printf("BAD FD");assert(0);} 
+    if (ftruncate(fd, sizeof(struct fuse_io)) == -1) {printf("BAD TRUNCATE");assert(0);}
+    return fd;
+}
+
+static void save_init_fuse_io(struct fuse_io * fuse_io)
+{
+    fd = prepare_fd_forsave_restore()
+    struct fuse_io * saved_init_fuse_io = mmap(NULL, sizeof(struct fuse_io), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    *saved_init_fuse_io = *fuse_io;
+}
+
+struct fuse_io* void restore_init_fuse_io()
+{
+    fd = prepare_fd_forsave_restore();
+    return mmap(NULL, sizeof(struct fuse_io), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+}
+
+
 static int
 spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {
@@ -3786,10 +3813,24 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32 "\n", fuse_io->hdr.opcode,
 		      fuse_ll_ops[fuse_io->hdr.opcode].name, fuse_io->hdr.len, fuse_io->hdr.unique,
 		      fuse_io->hdr.nodeid, fuse_io->hdr.uid, fuse_io->hdr.gid, fuse_io->hdr.pid);
-
+    
+    if (fuse_io->hdr.opcode != FUSE_INIT)
+    {
+        if (!b_init_called) 
+        {
+            struct fuse_io * fuse_init_io = restore_init_fuse_io(); 
+            b_inside_fake_init = true;
+            do_init(fuse_init_io);
+            b_inside_fake_init = false;
+        }
+    }
+    else { 
+        save_init_fuse_io(fuse_io);
+    }
+    b_init_called = true; 
 	fuse_ll_ops[fuse_io->hdr.opcode].func(fuse_io);
+    
 	return 0;
-
 exit:
 	spdk_mempool_put(g_fuse_mgr.fuse_io_pool, fuse_io);
 	return -EINVAL;
