@@ -4,13 +4,15 @@ static void intiallizeDB(DBptr db, size_t size)
 {
     db->header.size = size;
     db->header.head = 0;
+    db->header.max_key = ROOT_INODE;
     for (int i = 0; i < (int)db->header.size; ++i)
     {
         for (int j = 0; j < FH_DATA_MAX_SIZE; j++)
         {
-            db->entries->value.data.data_val[j] = '\0';
+            db->entries[i].value.data.data_val[j] = '\0';
         }
-        db->entries->value.data.data_len = 0;
+        db->entries[i].ref_count = 0;
+        db->entries[i].value.data.data_len = 0;
         db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
     }
 
@@ -62,16 +64,7 @@ static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value,
     db->entries[free_cell].key = key;
     db->entries[free_cell].value.data.data_len = value->data.data_len;
     memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
-
-    //  db->entries[free_cell].value.data.data_val = (char *)malloc(sizeof(char) * value->data.data_len);
-
-    // if (db->entries[free_cell].value.data.data_val == NULL)
-    //  {
-    //      printf("Error: failed to allocate memory for new FH in persistent map \n");
-    //      return;
-    //  }
-
-    //  memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
+    db->entries[free_cell].ref_count = 1;
     volatile_map_insert(fast_map, key, value, free_cell);
 }
 
@@ -150,7 +143,7 @@ bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
     }
 
     insert_entry_to_persistent_map(free_cell, value, data_base->db, data_base->fast_map, key);
-
+    data_base->db->header.max_key = (data_base->db->header.max_key >= key) ? data_base->db->header.max_key : key;
     int new_head = (data_base->db->entries[free_cell].next == END_OF_LIST) ? END_OF_LIST : data_base->db->entries[free_cell].next;
 
     spdk_compiler_barrier();
@@ -186,7 +179,53 @@ struct nfs_fh3 *get_db(DB *data_base, unsigned long key)
     return volatile_map_get_value(data_base->fast_map, key, &temp_index);
 }
 
+unsigned long get_ref_count_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return 0;
+    }
+
+    return data_base->db->entries[index].ref_count;
+}
+
+void increment_ref_count_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return;
+    }
+    data_base->db->entries[index].ref_count++;
+    spdk_compiler_barrier();
+    return;
+}
+
+void decrement_ref_count_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return;
+    }
+    data_base->db->entries[index].ref_count--;
+    spdk_compiler_barrier();
+    return;
+}
+
 bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer)
 {
     return volatile_map_is_fh_exist(data_base->fast_map, fh, answer);
+}
+
+unsigned long get_initial_available_inode_db(DB *data_base)
+{
+    return data_base->db->header.max_key + 1;
 }

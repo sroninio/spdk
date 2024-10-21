@@ -21,10 +21,13 @@
 #define NONE_ZERO_VALUE 17
 #define INVALID -1
 #define FH_DATA_MAX_SIZE 300
+#define ROOT_INODE 1
+
 struct Header
 {
     int head;
     int magic;
+    unsigned long max_key;
     size_t size;
 };
 
@@ -40,7 +43,7 @@ struct persistent_nfs_fh3
 struct Entry
 {
     unsigned long key;
-    // struct nfs_fh3 value;
+    unsigned long ref_count;
     struct persistent_nfs_fh3 value;
     int next;
 };
@@ -136,5 +139,13 @@ bool delete_entry_db(DB *data_base, unsigned long key);
 struct nfs_fh3 *get_db(DB *data_base, unsigned long key);
 
 bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer);
+
+unsigned long get_initial_available_inode_db(DB *data_base);
+
+unsigned long get_ref_count_db(DB *data_base, unsigned long key);
+
+void increment_ref_count_db(DB *data_base, unsigned long key);
+
+void decrement_ref_count_db(DB *data_base, unsigned long key);
 
 #endif // MYDB_H
