@@ -22,12 +22,14 @@
 #define INVALID -1
 #define FH_DATA_MAX_SIZE 300
 #define ROOT_INODE 1
+#define REGULAR_STATE 1
+#define PENDING_DELETION_STATE 2
 
 struct Header
 {
     int head;
     int magic;
-    unsigned long max_key;
+    unsigned long global_key;
     size_t size;
 };
 
@@ -46,6 +48,7 @@ struct Entry
     unsigned long ref_count;
     struct persistent_nfs_fh3 value;
     int next;
+    int state;
 };
 
 struct PersistentDataBase
@@ -140,12 +143,16 @@ struct nfs_fh3 *get_db(DB *data_base, unsigned long key);
 
 bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer);
 
-unsigned long get_initial_available_inode_db(DB *data_base);
-
 unsigned long get_ref_count_db(DB *data_base, unsigned long key);
 
 void increment_ref_count_db(DB *data_base, unsigned long key);
 
 void decrement_ref_count_db(DB *data_base, unsigned long key);
+
+void set_pending_deletion_flag(DB *data_base, unsigned long key);
+
+bool is_valid_entry_db(DB *data_base, unsigned long key);
+
+unsigned long generate_new_key_db(DB *data_base);
 
 #endif // MYDB_H

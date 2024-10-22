@@ -1,16 +1,17 @@
 #include "persistent_map.h"
 
-static void intiallizeDB(DBptr db, size_t size)
+static void initializeDB(DBptr db, size_t size)
 {
     db->header.size = size;
     db->header.head = 0;
-    db->header.max_key = ROOT_INODE;
+    db->header.global_key = ROOT_INODE;
     for (int i = 0; i < (int)db->header.size; ++i)
     {
         for (int j = 0; j < FH_DATA_MAX_SIZE; j++)
         {
             db->entries[i].value.data.data_val[j] = '\0';
         }
+        db->entries[i].state = REGULAR_STATE;
         db->entries[i].ref_count = 0;
         db->entries[i].value.data.data_len = 0;
         db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
@@ -65,6 +66,7 @@ static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value,
     db->entries[free_cell].value.data.data_len = value->data.data_len;
     memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
     db->entries[free_cell].ref_count = 1;
+    db->entries[free_cell].state = REGULAR_STATE;
     volatile_map_insert(fast_map, key, value, free_cell);
 }
 
@@ -104,7 +106,7 @@ DB *alloc_init_map_db(const char *filename, size_t size)
 
     if (db->header.magic != MAGIC_NUMBER)
     {
-        intiallizeDB(db, size);
+        initializeDB(db, size);
         spdk_compiler_barrier();
     }
     else
@@ -143,7 +145,7 @@ bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
     }
 
     insert_entry_to_persistent_map(free_cell, value, data_base->db, data_base->fast_map, key);
-    data_base->db->header.max_key = (data_base->db->header.max_key >= key) ? data_base->db->header.max_key : key;
+    data_base->db->header.global_key = (data_base->db->header.global_key >= key) ? data_base->db->header.global_key : key;
     int new_head = (data_base->db->entries[free_cell].next == END_OF_LIST) ? END_OF_LIST : data_base->db->entries[free_cell].next;
 
     spdk_compiler_barrier();
@@ -225,7 +227,36 @@ bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer)
     return volatile_map_is_fh_exist(data_base->fast_map, fh, answer);
 }
 
-unsigned long get_initial_available_inode_db(DB *data_base)
+void set_pending_deletion_flag(DB *data_base, unsigned long key)
 {
-    return data_base->db->header.max_key + 1;
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return;
+    }
+    data_base->db->entries[index].state = PENDING_DELETION_STATE;
+    spdk_compiler_barrier();
+    return;
+}
+
+bool is_valid_entry_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return;
+    }
+    bool ret = (data_base->db->entries[index].state == REGULAR_STATE) ? true : false;
+    return ret;
+}
+
+unsigned long generate_new_key_db(DB *data_base)
+{
+    ++data_base->db->header.global_key;
+    spdk_compiler_barrier();
+    return data_base->db->header.global_key;
 }
