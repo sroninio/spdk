@@ -1005,6 +1005,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     {
         new_key = generate_new_key_db(vfsdev->db);
         insert_db(vfsdev->db, new_key, fh);
+        decrement_ref_count_db(vfsdev->db, new_key); // we want to insert with refcount = 0.
         set_pending_deletion_flag_db(vfsdev->db, new_key);
     }
     cb_data->key = new_key;
