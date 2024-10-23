@@ -248,7 +248,7 @@ bool is_valid_entry_db(DB *data_base, unsigned long key)
 
     if (index == INVALID)
     {
-        return;
+        return true;
     }
     bool ret = (data_base->db->entries[index].state == REGULAR_STATE) ? true : false;
     return ret;

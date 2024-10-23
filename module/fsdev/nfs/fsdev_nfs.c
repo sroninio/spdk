@@ -449,19 +449,19 @@ lo_umount(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static bool
 lo_validate_and_insert_inode(unsigned long *new_key, struct nfs_fsdev *vfsdev, struct nfs_fh3 *fh)
 {
-    if (fh_exist_db(vfsdev->db, fh, &new_key))
+    if (fh_exist_db(vfsdev->db, fh, new_key))
     {
-        if (is_valid_entry_db(vfsdev->db, new_key) == false)
+        if (is_valid_entry_db(vfsdev->db, *new_key) == false)
         {
             return false;
         }
 
-        increment_ref_count_db(vfsdev->db, new_key);
+        increment_ref_count_db(vfsdev->db, *new_key);
     }
     else
     {
-        new_key = generate_new_key_db(vfsdev->db);
-        insert_db(vfsdev->db, new_key, &(result->LOOKUP3res_u.resok.object));
+        *new_key = generate_new_key_db(vfsdev->db);
+        insert_db(vfsdev->db, *new_key, fh);
     }
     return true;
 }
@@ -759,6 +759,11 @@ lo_mkdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     }
 
     struct MKDIR3res *result = data;
+    if(result->){
+        
+    }
+
+
 
     unsigned long new_key = INVALID_INODE;
     if (lo_validate_and_insert_inode(&new_key, vfsdev, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle) == false)
@@ -885,8 +890,9 @@ lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 }
 
 static fsdev_and_fsdev_io *
-lo_allocate_and_initialize_cb_data(void)
+lo_allocate_and_initialize_cb_data(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     fsdev_and_fsdev_io *cb_data = calloc(1, sizeof(*cb_data));
     cb_data->vfsdev = vfsdev;
     cb_data->fsdev_io = fsdev_io;
@@ -997,7 +1003,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     cb_data->key = new_key;
 
     struct REMOVE3args args = {0};
-    args.object.dir = *get_db(vfsdev->db, fsdev_io->u_in.unlink.parent_fobject);
+    args.object.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
     args.object.name = fsdev_io->u_in.unlink.name;
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
@@ -1006,7 +1012,8 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_unlink_cb, &args, cb_data) == NULL)
     {
         printf("ERROR: in unlinking a file \n");
-        return -EINVAL;
+            spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+            return;
     }
 }
 
@@ -1030,7 +1037,7 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     args.what.dir = *nfsfh_parent;
     args.what.name = name;
 
-    fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data();
+    fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data(_ch, fsdev_io);
 
     if (fsdev_io->internal.unique + XID_OFFSET > 0xffffffff)
     {
@@ -1213,7 +1220,7 @@ fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
             printf("Error: the xid of the next io request is out of bounds.\n");
             return;
         }
-        struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+        struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(ch);
         rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)fsdev_io->internal.unique);
     }
     int status = handlers[op](ch, fsdev_io);
