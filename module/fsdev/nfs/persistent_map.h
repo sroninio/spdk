@@ -18,12 +18,17 @@
 
 #define MAGIC_NUMBER 0x12345678
 #define END_OF_LIST -1
-#define NONE_ZERO_VALUE 17
 #define INVALID -1
-#define FH_DATA_MAX_SIZE 300
 #define ROOT_INODE 1
-#define REGULAR_STATE 1
-#define PENDING_DELETION_STATE 2
+
+#define FH_DATA_MAX_SIZE 300
+#define MAX_FILE_NAME 255
+
+enum EntryState
+{
+    REGULAR_STATE = 1,
+    PENDING_DELETION_STATE = 2
+};
 
 struct Header
 {
@@ -48,7 +53,9 @@ struct Entry
     unsigned long ref_count;
     struct persistent_nfs_fh3 value;
     int next;
-    int state;
+    enum EntryState state;
+    struct persistent_nfs_fh3 parent_fh;
+    char name[MAX_FILE_NAME];
 };
 
 struct PersistentDataBase
@@ -143,16 +150,24 @@ struct nfs_fh3 *get_db(DB *data_base, unsigned long key);
 
 bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer);
 
-unsigned long get_ref_count_db(DB *data_base, unsigned long key);
-
 void increment_ref_count_db(DB *data_base, unsigned long key);
 
 void decrement_ref_count_db(DB *data_base, unsigned long key);
 
-void set_pending_deletion_flag(DB *data_base, unsigned long key);
+void set_pending_deletion_flag_db(DB *data_base, unsigned long key);
 
-bool is_valid_entry_db(DB *data_base, unsigned long key);
+bool set_parent_fh_and_name_db(DB *data_base, unsigned long key, const char *name, struct nfs_fh3 *parent_fh);
 
 unsigned long generate_new_key_db(DB *data_base);
+
+unsigned long get_ref_count_db(DB *data_base, unsigned long key);
+
+char *get_entry_parent_data_val_db(DB *data_base, unsigned long key);
+
+int get_entry_parent_data_len_db(DB *data_base, unsigned long key);
+
+char *get_entry_name_db(DB *data_base, unsigned long key);
+
+enum EntryState get_entry_state_db(DB *data_base, unsigned long key);
 
 #endif // MYDB_H

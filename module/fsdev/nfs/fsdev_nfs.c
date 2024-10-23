@@ -113,6 +113,13 @@ struct fsdev_and_fsdev_io
 };
 typedef struct fsdev_and_fsdev_io fsdev_and_fsdev_io;
 
+enum UnlinkReplyStatus
+{
+    NO_REPLY_UNLINK = 1,
+    REPLY_UNLINK_SENT = 2,
+    REPLY_UNLINK_FAILED = 3
+};
+
 static inline struct nfs_fsdev_io_device *
 fsdev_to_nfs_io(const struct spdk_fsdev_io *fsdev_io)
 {
@@ -198,7 +205,7 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
     fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
 
-    if (is_valid_entry_db(vfsdev->db, (unsigned long)fsdev_io->u_in.open.fobject) == false)
+    if (get_entry_state_db(vfsdev->db, (unsigned long)fsdev_io->u_in.open.fobject) == PENDING_DELETION_STATE)
     {
         printf("Error: trying to OPEN an file that is pending deletion\n");
         return -EINVAL;
@@ -216,13 +223,13 @@ lo_write_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     struct spdk_fsdev_io *fsdev_io = private_data;
     if (status == RPC_STATUS_ERROR)
     {
-        printf("read failed with error [%s]\n", (char *)data);
+        printf("Error: write failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("read failed \n");
+        printf("Error: write failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -240,7 +247,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (fsdev_io->u_in.write.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.write.fobject)
     {
-        printf("fh != fobj when should be equal\n");
+        printf("Error: fh != fobj when should be equal\n");
         return -EINVAL;
     }
 
@@ -269,7 +276,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     if (rpc_nfs3_write_task(nfs_get_rpc_context(vch->nfs),
                             lo_write_cb, &args, fsdev_io) == NULL)
     {
-        printf("error in write opertion\n");
+        printf("Error: in write opertion\n");
         return -EINVAL;
     }
 
@@ -284,20 +291,17 @@ lo_read_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     struct spdk_fsdev_io *fsdev_io = private_data;
     if (status == RPC_STATUS_ERROR)
     {
-        printf("read failed with error [%s]\n", (char *)data);
+        printf("Error: read failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("read failed \n");
+        printf("Error: read failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     struct READ3res *result = data;
-
-    printf("reached here 1 \n");
-    printf("reached here 2 \n");
 
     fsdev_io->u_out.read.data_size = result->READ3res_u.resok.count;
 
@@ -314,7 +318,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (fsdev_io->u_in.read.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.read.fobject)
     {
-        printf("fh != fobj when should be equal\n");
+        printf("Error: fh != fobj when should be equal\n");
         return -EINVAL;
     }
 
@@ -333,7 +337,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     if (rpc_nfs3_read_task(nfs_get_rpc_context(vch->nfs), lo_read_cb, outvec[0].iov_base,
                            outvec[0].iov_len, &args, fsdev_io) == NULL)
     {
-        printf("error in read request \n");
+        printf("Error: in read request \n");
         return -EINVAL;
     }
     return OP_STATUS_ASYNC;
@@ -349,13 +353,13 @@ lo_getattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 
     if (status == RPC_STATUS_ERROR)
     {
-        printf("getattr failed with error [%s]\n", (char *)data);
+        printf("Error: getattr failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("getattr failed \n");
+        printf("Error: getattr failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -380,13 +384,13 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (nfsfh == NULL)
     {
-        printf("the file handle is NULL !! \n");
+        printf("Error: the file handle is NULL !! \n");
         return -EINVAL;
     }
 
     if (nfsfh->data.data_val == 0)
     {
-        printf("not in the map \n");
+        printf("Error: not in the map \n");
         return -EINVAL;
     }
 
@@ -396,7 +400,7 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_getattr_task(nfs_get_rpc_context(vch->nfs), lo_getattr_cb, &args, fsdev_io) == NULL)
     {
-        printf("error in getting attributes \n");
+        printf("Error: in getting attributes \n");
         return -EINVAL;
     }
 
@@ -451,7 +455,7 @@ lo_validate_and_insert_inode(unsigned long *new_key, struct nfs_fsdev *vfsdev, s
 {
     if (fh_exist_db(vfsdev->db, fh, new_key))
     {
-        if (is_valid_entry_db(vfsdev->db, *new_key) == false)
+        if (get_entry_state_db(vfsdev->db, *new_key) == PENDING_DELETION_STATE)
         {
             return false;
         }
@@ -476,13 +480,13 @@ lo_lookup_cb(struct rpc_context *rpc, int status, void *data, void *private_data
 
     if (status == RPC_STATUS_ERROR)
     {
-        printf("LOOKUP failed with error [%s]\n", (char *)data);
+        printf("Error: LOOKUP failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("LOOKUP failed \n");
+        printf("Error: LOOKUP failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -493,12 +497,12 @@ lo_lookup_cb(struct rpc_context *rpc, int status, void *data, void *private_data
     {
         if (ret == NFS3ERR_NOENT)
         {
-            printf("reached here !!RET == NFS3ERR_NOENT \n");
+            printf("Error: lookup result is NFS3ERR_NOENT \n");
             spdk_fsdev_io_complete(fsdev_io, -ENOENT);
         }
         else
         {
-            printf("ERROR: lookup result is other than OK or NOENT = [%d]\n", ret);
+            printf("Error: lookup result is other than OK or NOENT = [%d]\n", ret);
             spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         }
         return;
@@ -533,7 +537,7 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (key_parent == 0)
     {
-        printf("\033[1;31mERROR ! WE ARE CALLING LOOK UP WITH PARENT INODE = 0 !!\033[0m\n");
+        printf("\033[1;31mError: WE ARE CALLING LOOK UP WITH PARENT INODE = 0 !!\033[0m\n");
         return -EINVAL;
     }
 
@@ -548,7 +552,7 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_lookup_task(nfs_get_rpc_context(vch->nfs), lo_lookup_cb, &args, fsdev_io) == NULL)
     {
-        printf("ERROR in calling lookup\n");
+        printf("Error: in calling lookup\n");
         return -EINVAL;
     }
 
@@ -573,13 +577,13 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     if (status == RPC_STATUS_ERROR)
     {
-        printf("READDIR failed with error [%s]\n", (char *)data);
+        printf("Error: READDIR failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("READDIR failed \n");
+        printf("Error: READDIR failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -630,7 +634,7 @@ lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (fsdev_io->u_in.readdir.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.readdir.fobject)
     {
-        printf("Failed in readdir because fh != fobj when should be equal\n");
+        printf("Error: Failed in readdir because fh != fobj when should be equal\n");
         return -EINVAL;
     }
 
@@ -648,7 +652,7 @@ lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_readdirplus_task(nfs_get_rpc_context(vch->nfs), lo_readdir_cb, &args, fsdev_io) == NULL)
     {
-        printf("ERROR in calling readdir\n");
+        printf("Error: in calling readdir\n");
         return -EINVAL;
     }
 
@@ -664,20 +668,20 @@ lo_create_cb(struct rpc_context *rpc, int status, void *data, void *private_data
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     if (status == RPC_STATUS_ERROR)
     {
-        printf("lo_create failed with error [%s]\n", (char *)data);
+        printf("Error: lo_create failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("lo_create failed \n");
+        printf("Error: lo_create failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     struct CREATE3res *result = data;
     if (result->status != NFS3_OK)
     {
-        printf("ERROR: create returned error [%d]\n", result->status);
+        printf("Error: create returned error [%d]\n", result->status);
         spdk_fsdev_io_complete(fsdev_io, result->status);
         return;
     }
@@ -727,13 +731,13 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
         if (rpc_nfs3_create_task(nfs_get_rpc_context(vch->nfs), lo_create_cb, &args2, fsdev_io) == NULL)
         {
-            printf("ERROR in calling create\n");
+            printf("Error: in calling create\n");
             return -EINVAL;
         }
         return OP_STATUS_ASYNC;
         break;
     default:
-        printf("Unexpected file type in mode: %o\n", fsdev_io->u_in.mknod.mode);
+        printf("Error: Unexpected file type in mode: %o\n", fsdev_io->u_in.mknod.mode);
         return -EINVAL;
     }
 }
@@ -747,23 +751,24 @@ lo_mkdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     if (status == RPC_STATUS_ERROR)
     {
-        printf("lo_mkdir failed with error [%s]\n", (char *)data);
+        printf("Error: lo_mkdir failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("lo_mkdir failed \n");
+        printf("Error: lo_mkdir failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
 
     struct MKDIR3res *result = data;
-    if(result->){
-        
+    if (result->status != NFS3_OK)
+    {
+        printf("Error: problem in mkdir error code =[%d]\n", result->status);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
     }
-
-
 
     unsigned long new_key = INVALID_INODE;
     if (lo_validate_and_insert_inode(&new_key, vfsdev, &result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle) == false)
@@ -800,7 +805,7 @@ lo_mkdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_mkdir_task(nfs_get_rpc_context(vch->nfs), lo_mkdir_cb, &args, fsdev_io) == NULL)
     {
-        printf("ERROR in calling mkdir\n");
+        printf("Error: in calling mkdir\n");
         return -EINVAL;
     }
     return OP_STATUS_ASYNC;
@@ -816,13 +821,13 @@ lo_setattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 
     if (status == RPC_STATUS_ERROR)
     {
-        printf("setattr failed with error [%s]\n", (char *)data);
+        printf("Error: setattr failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("setattr failed \n");
+        printf("Error: setattr failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -882,7 +887,7 @@ lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_setattr_task(nfs_get_rpc_context(vch->nfs), lo_setattr_cb, &args, fsdev_io) == NULL)
     {
-        printf("error in setting attributes \n");
+        printf("Error: in setting attributes \n");
         return -EINVAL;
     }
 
@@ -912,13 +917,13 @@ lo_unlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data
 
     if (status == RPC_STATUS_ERROR)
     {
-        printf("unlink failed with error [%s]\n", (char *)data);
+        printf("Error: unlink failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("unlink failed \n");
+        printf("Error: unlink failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -942,13 +947,13 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
 
     if (status == RPC_STATUS_ERROR)
     {
-        printf("LOOKUP FROM UNLINK failed with error [%s]\n", (char *)data);
+        printf("Error: LOOKUP FROM UNLINK failed with error [%s]\n", (char *)data);
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
     else if (status == RPC_STATUS_CANCEL)
     {
-        printf("LOOKUP FROM UNLINK failed \n");
+        printf("Error: LOOKUP FROM UNLINK failed \n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
@@ -961,15 +966,13 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     {
         if (ret == NFS3ERR_NOENT)
         {
-            printf("reached here !!RET == NFS3ERR_NOENT \n");
+            printf("Error: lookup result is NFS3ERR_NOENT \n");
             spdk_fsdev_io_complete(fsdev_io, -ENOENT);
-            printf("yy\n");
         }
         else
         {
-            printf("ERROR: lookup result is other than OK or NOENT = [%d]\n", ret);
+            printf("Error: lookup result is other than OK or NOENT = [%d]\n", ret);
             spdk_fsdev_io_complete(fsdev_io, -EINVAL);
-            printf("xx\n");
         }
         return;
     }
@@ -977,20 +980,24 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     unsigned long new_key = INVALID_INODE;
     if (fh_exist_db(vfsdev->db, fh, &new_key))
     {
+
         if (get_ref_count_db(vfsdev->db, new_key) == 0)
         {
-            if (is_valid_entry_db(vfsdev->db, new_key) == false)
+
+            if (get_entry_state_db(vfsdev->db, new_key) == PENDING_DELETION_STATE)
             {
-                printf("Trying to UNLINK a file that is already pending deletion\n"); // recovery problem
+                printf("Trying to UNLINK a file that is already pending deletion\n"); // recovery problem ?
                 // spdk_fsdev_io_complete(fsdev_io, -EINVAL);
                 // return;
             }
-            set_pending_deletion_flag(vfsdev->db, new_key);
+            set_pending_deletion_flag_db(vfsdev->db, new_key);
         }
         else
         {
-            printf("ERROR: Trying to UNLINK a file that has positive refrence count \n");
-            spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+            printf("Trying to UNLINK a file that has positive refrence count this io request will be delayed...\n");
+            set_parent_fh_and_name_db(vfsdev->db, new_key, fsdev_io->u_in.unlink.name, get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject));
+            set_pending_deletion_flag_db(vfsdev->db, new_key);
+            spdk_fsdev_io_complete(fsdev_io, 0);
             return;
         }
     }
@@ -998,7 +1005,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     {
         new_key = generate_new_key_db(vfsdev->db);
         insert_db(vfsdev->db, new_key, fh);
-        set_pending_deletion_flag(vfsdev->db, new_key);
+        set_pending_deletion_flag_db(vfsdev->db, new_key);
     }
     cb_data->key = new_key;
 
@@ -1011,9 +1018,9 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
 
     if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_unlink_cb, &args, cb_data) == NULL)
     {
-        printf("ERROR: in unlinking a file \n");
-            spdk_fsdev_io_complete(fsdev_io, -EINVAL);
-            return;
+        printf("Error: in unlinking a file \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
     }
 }
 
@@ -1027,7 +1034,7 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (key_parent == 0)
     {
-        printf("\033[1;31mERROR ! WE ARE CALLING LOOK UP WITH PARENT INODE = 0 !! \n Trying to delete root directory \033[0m\n");
+        printf("\033[1;31mError: WE ARE CALLING LOOK UP WITH PARENT INODE = 0 !! \n Trying to delete root directory \033[0m\n");
         return -EINVAL;
     }
 
@@ -1049,26 +1056,109 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (rpc_nfs3_lookup_task(nfs_get_rpc_context(vch->nfs), lo_unlink_lookup_cb, &args, cb_data) == NULL)
     {
-        printf("ERROR: in calling lookup from UNLINK function\n");
+        printf("Error: in calling lookup from UNLINK function\n");
         return -EINVAL;
     }
 
     return OP_STATUS_ASYNC;
 }
 
+static void
+lo_reply_unlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_reply_unlink_cb} FUNCTION CALLED \n");
+    fflush(stdout);
+
+    struct spdk_fsdev_io *fsdev_io = private_data;
+
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("Error: unlink failed with error [%s]\n", (char *)data);
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("Error: unlink failed \n");
+        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        return;
+    }
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    delete_entry_db(vfsdev->db, (unsigned long)fsdev_io->u_in.forget.fobject);
+    spdk_fsdev_io_complete(fsdev_io, 0);
+}
+
+static struct nfs_fh3
+lo_initialize_parent_fh(struct nfs_fsdev *vfsdev, unsigned long inode)
+{
+    struct nfs_fh3 parent_fh = {0};
+    parent_fh.data.data_val = get_entry_parent_data_val_db(vfsdev->db, inode);
+    parent_fh.data.data_len = get_entry_parent_data_len_db(vfsdev->db, inode);
+    return parent_fh;
+}
+
+static enum UnlinkReplyStatus
+lo_handle_inode_ref_count_and_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io, unsigned long inode)
+{
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    decrement_ref_count_db(vfsdev->db, inode);
+    if (get_ref_count_db(vfsdev->db, inode) == 0)
+    {
+
+        if (get_entry_state_db(vfsdev->db, inode) == PENDING_DELETION_STATE)
+        {
+            struct nfs_fh3 parent_fh = lo_initialize_parent_fh(vfsdev, inode);
+
+            struct REMOVE3args args = {0};
+            args.object.dir = parent_fh;
+            args.object.name = get_entry_name_db(vfsdev->db, inode);
+
+            struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+            if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_reply_unlink_cb, &args, fsdev_io) == NULL) // we are sending this with the same xid (of forget/release). (?)
+            {
+                printf("Error: in unlinking (reply) a file \n");
+                return REPLY_UNLINK_FAILED;
+            }
+
+            return REPLY_UNLINK_SENT;
+        }
+
+        delete_entry_db(vfsdev->db, inode);
+    }
+    return NO_REPLY_UNLINK;
+}
+
 static int
 lo_forget(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    decrement_ref_count_db(vfsdev->db, (unsigned long)fsdev_io->u_in.forget.fobject);
+    enum UnlinkReplyStatus answer = lo_handle_inode_ref_count_and_unlink(_ch, fsdev_io, (unsigned long)(fsdev_io->u_in.forget.fobject));
+
+    if (answer == REPLY_UNLINK_SENT)
+    {
+        return OP_STATUS_ASYNC;
+    }
+    else if (answer == REPLY_UNLINK_FAILED)
+    {
+        return -EINVAL;
+    }
     return 0;
 }
 
 static int
 lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    decrement_ref_count_db(vfsdev->db, (unsigned long)fsdev_io->u_in.release.fobject);
+    enum UnlinkReplyStatus answer = lo_handle_inode_ref_count_and_unlink(_ch, fsdev_io, (unsigned long)fsdev_io->u_in.release.fobject);
+
+    if (answer == REPLY_UNLINK_SENT)
+    {
+        return OP_STATUS_ASYNC;
+    }
+    else if (answer == REPLY_UNLINK_FAILED)
+    {
+        return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -1129,7 +1219,7 @@ static fsdev_op_handler_func handlers[] = {
     [SPDK_FSDEV_IO_MKNOD] = lo_mknod,
     [SPDK_FSDEV_IO_MKDIR] = lo_mkdir,
     [SPDK_FSDEV_IO_UNLINK] = lo_unlink,
-    [SPDK_FSDEV_IO_RMDIR] = nimp, // TO DO
+    [SPDK_FSDEV_IO_RMDIR] = nimp,
     [SPDK_FSDEV_IO_RENAME] = nimp,
     [SPDK_FSDEV_IO_LINK] = nimp,
     [SPDK_FSDEV_IO_OPEN] = lo_open,
@@ -1218,6 +1308,7 @@ fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
         if (fsdev_io->internal.unique > 0xffffffff)
         {
             printf("Error: the xid of the next io request is out of bounds.\n");
+            spdk_fsdev_io_complete(fsdev_io, -EINVAL);
             return;
         }
         struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(ch);

@@ -10,11 +10,17 @@ static void initializeDB(DBptr db, size_t size)
         for (int j = 0; j < FH_DATA_MAX_SIZE; j++)
         {
             db->entries[i].value.data.data_val[j] = '\0';
+            db->entries[i].parent_fh.data.data_val[j] = '\0';
         }
         db->entries[i].state = REGULAR_STATE;
         db->entries[i].ref_count = 0;
         db->entries[i].value.data.data_len = 0;
+        db->entries[i].parent_fh.data.data_len = 0;
         db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
+        for (int j = 0; j < MAX_FILE_NAME; ++j)
+        {
+            db->entries[i].name[j] = '\0';
+        }
     }
 
     spdk_compiler_barrier();
@@ -67,6 +73,7 @@ static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value,
     memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
     db->entries[free_cell].ref_count = 1;
     db->entries[free_cell].state = REGULAR_STATE;
+    db->entries[free_cell].parent_fh.data.data_len = 0;
     volatile_map_insert(fast_map, key, value, free_cell);
 }
 
@@ -227,7 +234,7 @@ bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer)
     return volatile_map_is_fh_exist(data_base->fast_map, fh, answer);
 }
 
-void set_pending_deletion_flag(DB *data_base, unsigned long key)
+void set_pending_deletion_flag_db(DB *data_base, unsigned long key)
 {
     int index = INVALID;
     volatile_map_get_value(data_base->fast_map, key, &index);
@@ -241,17 +248,77 @@ void set_pending_deletion_flag(DB *data_base, unsigned long key)
     return;
 }
 
-bool is_valid_entry_db(DB *data_base, unsigned long key)
+enum EntryState get_entry_state_db(DB *data_base, unsigned long key)
 {
     int index = INVALID;
     volatile_map_get_value(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
-        return true;
+        return REGULAR_STATE;
     }
-    bool ret = (data_base->db->entries[index].state == REGULAR_STATE) ? true : false;
-    return ret;
+
+    return data_base->db->entries[index].state;
+}
+
+bool set_parent_fh_and_name_db(DB *data_base, unsigned long key, const char *name, struct nfs_fh3 *parent_fh)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return false;
+    }
+    int length = strlen(name);
+    if (length > MAX_FILE_NAME)
+    {
+        printf("Error: name is too long \n");
+        return false;
+    }
+
+    memcpy(data_base->db->entries[index].name, name, length + 1);
+    data_base->db->entries[index].parent_fh.data.data_len = parent_fh->data.data_len;
+    memcpy(data_base->db->entries[index].parent_fh.data.data_val, parent_fh->data.data_val, parent_fh->data.data_len);
+
+    spdk_compiler_barrier();
+    return true;
+}
+
+char *get_entry_parent_data_val_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return NULL;
+    }
+    return data_base->db->entries[index].parent_fh.data.data_val;
+}
+
+int get_entry_parent_data_len_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return -1;
+    }
+    return data_base->db->entries[index].parent_fh.data.data_len;
+}
+
+char *get_entry_name_db(DB *data_base, unsigned long key)
+{
+    int index = INVALID;
+    volatile_map_get_value(data_base->fast_map, key, &index);
+
+    if (index == INVALID)
+    {
+        return NULL;
+    }
+    return data_base->db->entries[index].name;
 }
 
 unsigned long generate_new_key_db(DB *data_base)
