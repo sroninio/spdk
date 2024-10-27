@@ -315,23 +315,11 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
-
-    if (fsdev_io->u_in.read.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.read.fobject)
-    {
-        printf("Error: fh != fobj when should be equal\n");
-        return -EINVAL;
-    }
-
-    unsigned long inode_key = (unsigned long)fsdev_io->u_in.read.fhandle;
-
-    struct nfs_fh3 *fh = get_db(vfsdev->db, inode_key);
-
     struct iovec *outvec = fsdev_io->u_in.read.iov;
-    uint64_t offset = fsdev_io->u_in.read.offs;
 
     struct READ3args args = {0};
-    args.file = *fh;
-    args.offset = offset;
+    args.file = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle);
+    args.offset = fsdev_io->u_in.read.offs;
     args.count = outvec[0].iov_len;
 
     if (rpc_nfs3_read_task(nfs_get_rpc_context(vch->nfs), lo_read_cb, outvec[0].iov_base,
@@ -374,13 +362,10 @@ lo_getattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 static int
 lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
+    printf("+=+=+=+=+=+=+=+=  {lo_getattr} FUNCTION CALLED with inode number [%ld] \n", (unsigned long)fsdev_io->u_in.getattr.fobject);
+
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    unsigned long key = (unsigned long)fsdev_io->u_in.getattr.fobject;
-    printf("+=+=+=+=+=+=+=+=  {lo_getattr} FUNCTION CALLED with inode number [%ld] \n", key);
-
-    struct GETATTR3args args = {0};
-
-    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
+    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.getattr.fobject);
 
     if (nfsfh == NULL)
     {
@@ -394,8 +379,8 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
+    struct GETATTR3args args = {0};
     args.object = *nfsfh;
-
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
     if (rpc_nfs3_getattr_task(nfs_get_rpc_context(vch->nfs), lo_getattr_cb, &args, fsdev_io) == NULL)
@@ -411,15 +396,10 @@ static int
 lo_mount(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
     fsdev_io->u_out.mount.root_fobject = (struct spdk_fsdev_file_object *)1;
-
     fsdev_io->u_out.mount.opts = fsdev_io->u_in.mount.opts;
-
     fsdev_io->u_out.mount.opts.max_readahead = DEFAULT_MAX_READAHEAD;
-
     fsdev_io->u_out.mount.opts.max_xfer_size = DEFAULT_MAX_XFER_SIZE;
-
     bool writeback_cache_enabled = false;
-
     uint64_t flags = 0;
 
 #define AIO_SET_MOUNT_FLAG(cond, store, flag)                                     \
@@ -511,12 +491,12 @@ lo_lookup_cb(struct rpc_context *rpc, int status, void *data, void *private_data
     unsigned long new_key = INVALID_INODE;
     if (lo_validate_and_insert_inode(&new_key, vfsdev, fh) == false)
     {
-        printf("Error: trying to approach an entry that is pending deletion\n");
+        printf("Error: trying to access an entry that is pending deletion\n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
     }
 
-    printf("$$$$$$ WE ARE RETURNNING INDOE %ld\n", new_key); //
+    printf("$$$$$$ WE ARE RETURNNING INODE %ld\n", new_key); //
 
     fsdev_io->u_out.lookup.fobject = (struct spdk_fsdev_file_object *)new_key;
     fattr3 *res = &result->LOOKUP3res_u.resok.obj_attributes.post_op_attr_u.attributes;
@@ -541,11 +521,8 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
-    struct nfs_fh3 *nfsfh_parent = get_db(vfsdev->db, key_parent);
-
     struct LOOKUP3args args = {0};
-
-    args.what.dir = *nfsfh_parent;
+    args.what.dir = *get_db(vfsdev->db, key_parent);
     args.what.name = name;
 
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
@@ -563,7 +540,6 @@ static int
 lo_opendir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
     printf("+=+=+=+=+=+=+=+=  {lo_opendir} FUNCTION CALLED \n");
-
     fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
     return 0;
 }
@@ -628,24 +604,12 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 static int
 lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-
+    printf("+=+=+=+=+=+=+=+=  {lo_readdir} FUNCTION CALLED for inode number [%ld]\n", (unsigned long)fsdev_io->u_in.readdir.fobject);
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
-    if (fsdev_io->u_in.readdir.fhandle != (struct spdk_fsdev_file_handle *)fsdev_io->u_in.readdir.fobject)
-    {
-        printf("Error: Failed in readdir because fh != fobj when should be equal\n");
-        return -EINVAL;
-    }
-
-    unsigned long key = (unsigned long)fsdev_io->u_in.readdir.fobject;
-
-    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
-
-    printf("+=+=+=+=+=+=+=+=  {lo_readdir} FUNCTION CALLED for inode number [%ld]\n", key);
-
     struct READDIRPLUS3args args = {0};
-    args.dir = *nfsfh;
+    args.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.readdir.fobject);
     args.cookie = fsdev_io->u_in.readdir.offset;
     args.dircount = 1000000;
     args.maxcount = 1000000;
@@ -1031,7 +995,6 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     unsigned long key_parent = (unsigned long)fsdev_io->u_in.unlink.parent_fobject;
-    char *name = fsdev_io->u_in.unlink.name;
 
     if (key_parent == 0)
     {
@@ -1039,11 +1002,9 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
-    struct nfs_fh3 *nfsfh_parent = get_db(vfsdev->db, key_parent);
-
     struct LOOKUP3args args = {0};
-    args.what.dir = *nfsfh_parent;
-    args.what.name = name;
+    args.what.dir = *get_db(vfsdev->db, key_parent);
+    args.what.name = fsdev_io->u_in.unlink.name;
 
     fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data(_ch, fsdev_io);
 
