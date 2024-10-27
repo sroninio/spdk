@@ -93,8 +93,8 @@ extern "C"
         auto it = my_map->left.find(key);
         if (it != my_map->left.end())
         {
-            my_map->left.erase(it);
             free(it->fh.data.data_val);
+            my_map->left.erase(it);
             return true;
         }
         return false;
