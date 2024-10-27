@@ -3,92 +3,121 @@
 #include <unordered_map>
 #include <cstring>
 #include <cassert>
+#include <boost/bimap.hpp>
+#include <boost/bimap/unordered_set_of.hpp>
+#include <boost/functional/hash.hpp>
+#include <iostream>
+#include <string>
 
 extern "C"
 {
-    void *create_volatile_map(void)
+    struct MapData
     {
-        // return new std::unordered_map<unsigned long, struct nfs_fh3>;
-        return new std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>>;
+        struct nfs_fh3 fh;
+        int index;
+
+        MapData(const struct nfs_fh3 *filehandle, int i) : index(i)
+        {
+            fh.data.data_len = filehandle->data.data_len;
+            fh.data.data_val = (char *)malloc(filehandle->data.data_len * sizeof(char));
+            if (fh.data.data_val == NULL)
+            {
+                printf("Error: not able to allocated new memory for entries of map\n");
+                return;
+            }
+            memcpy(fh.data.data_val, filehandle->data.data_val, fh.data.data_len);
+        }
+
+        bool operator==(const MapData &other) const
+        {
+            return (fh.data.data_len == other.fh.data.data_len) &&
+                   ((std::memcmp(fh.data.data_val, other.fh.data.data_val, fh.data.data_len)) == 0);
+        }
+    };
+
+    struct MapDataHash
+    {
+        std::size_t operator()(const MapData &data) const
+        {
+            return boost::hash_range(data.fh.data.data_val, data.fh.data.data_val + data.fh.data.data_len);
+        }
+    };
+
+    typedef boost::bimap<
+        boost::bimaps::unordered_set_of<unsigned long>,
+        boost::bimaps::unordered_set_of<MapData, MapDataHash>>
+        VolatileBimap;
+
+    void *
+    create_volatile_map(void)
+    {
+        return new VolatileBimap;
     }
 
     // returning the value, and putting the map[key].index in the index pointer we got
     struct nfs_fh3 *volatile_map_get_value(void *map, unsigned long key, int *index)
     {
-        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
-        size_t initial_size = my_map->size(); // Get initial size
-
-        auto it = my_map->find(key);
-        if (it != my_map->end())
+        VolatileBimap *my_map = static_cast<VolatileBimap *>(map);
+        size_t initial_size = my_map->size();
+        auto it = my_map->left.find(key);
+        if (it != my_map->left.end())
         {
-            *index = it->second.second;
-            return &(it->second.first);
+            *index = it->index;
+            return const_cast<struct nfs_fh3 *>(&(it->fh));
         }
 
-        // Key not found
-        *index = -1; // or some other sentinel value
-        if (my_map->size() != initial_size)
-        { // Verify size hasn't changed
-            printf("ERROR: inserting grabge value into MAP !!!\n");
+        *index = -1;
+        if (my_map->size() != initial_size) // Verify size hasn't changed
+        {
+            printf("ERROR: inserting garbage value into MAP !!!\n");
         }
         return nullptr;
     }
 
     void volatile_map_insert(void *map, unsigned long key, struct nfs_fh3 *fh, int index)
     {
-        struct nfs_fh3 tmp = {};
-        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+        VolatileBimap *my_map = static_cast<VolatileBimap *>(map);
 
-        tmp.data.data_len = fh->data.data_len;
-        tmp.data.data_val = (char *)malloc(fh->data.data_len * sizeof(char));
-        if (tmp.data.data_val == NULL)
+        MapData mapData(fh, index);
+
+        auto result = my_map->insert(VolatileBimap::value_type(key, mapData));
+
+        if (!result.second)
         {
-            printf("Error: not able to allocated new memory for entries of map\n");
-            return;
+            printf("Warning: Key %lu already exists in the map. Value not inserted.\n", key);
+            free(mapData.fh.data.data_val);
         }
-        memcpy(tmp.data.data_val, fh->data.data_val, tmp.data.data_len);
-        (*my_map)[key] = std::make_pair(tmp, index);
     }
 
     bool volatile_map_remove(void *map, unsigned long key)
     {
-        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map = (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+        VolatileBimap *my_map = static_cast<VolatileBimap *>(map);
 
-        auto it = my_map->find(key);
-        if (it != my_map->end())
+        auto it = my_map->left.find(key);
+        if (it != my_map->left.end())
         {
-            // Free the dynamically allocated memory for nfs_fh3
-            free(it->second.first.data.data_val);
-
-            // Remove the element from the map
-            my_map->erase(it);
+            free(it->fh.data.data_val);
+            my_map->left.erase(it);
             return true;
         }
-
-        // Key not found
         return false;
     }
 
     bool volatile_map_is_fh_exist(void *map, struct nfs_fh3 *fh, unsigned long *answer)
     {
-        std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *my_map =
-            (std::unordered_map<unsigned long, std::pair<struct nfs_fh3, int>> *)map;
+        VolatileBimap *my_map = static_cast<VolatileBimap *>(map);
 
-        for (const auto &pair : *my_map)
+        // Create a temporary MapData object for comparison
+        MapData search_data(fh, 0); // The index doesn't matter for searching
+
+        auto it = my_map->right.find(search_data);
+        if (it != my_map->right.end())
         {
-            const struct nfs_fh3 &current_fh = pair.second.first;
-
-            // Compare the nfs_fh3 structures
-            if (current_fh.data.data_len == fh->data.data_len &&
-                memcmp(current_fh.data.data_val, fh->data.data_val, current_fh.data.data_len) == 0)
-            {
-
-                *answer = pair.first; // Set the answer to the key
-                return true;
-            }
+            *answer = it->second; // Set the answer to the key (unsigned long)
+            return true;
         }
 
-        *answer = 2; // Set to 2 if not found
+        *answer = 0;
         return false;
     }
 }
