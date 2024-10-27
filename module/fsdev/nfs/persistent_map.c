@@ -1,25 +1,25 @@
 #include "persistent_map.h"
 
-static void initializeDB(DBptr db, size_t size)
+static void initializeDB(struct PersistentDataBase *db, size_t size)
 {
-    db->header.size = size;
-    db->header.head = 0;
+    db->header.persistenet_db_max_size = size;
+    db->header.free_list_head = 0;
     db->header.global_key = ROOT_INODE;
-    for (int i = 0; i < (int)db->header.size; ++i)
+    for (int i = 0; i < (int)db->header.persistent_db_max_size; ++i)
     {
         for (int j = 0; j < FH_DATA_MAX_SIZE; j++)
         {
             db->entries[i].value.data.data_val[j] = '\0';
-            db->entries[i].parent_fh.data.data_val[j] = '\0';
+            db->entries[i].delete_params.parent_fh.data.data_val[j] = '\0';
         }
         db->entries[i].state = REGULAR_STATE;
         db->entries[i].ref_count = 0;
         db->entries[i].value.data.data_len = 0;
-        db->entries[i].parent_fh.data.data_len = 0;
-        db->entries[i].next = (i == (int)db->header.size - 1) ? (int)END_OF_LIST : i + 1;
+        db->entries[i].delete_params.parent_fh.data.data_len = 0;
+        db->entries[i].next = (i == (int)db->header.persistent_db_max_size - 1) ? (int)END_OF_LIST : i + 1;
         for (int j = 0; j < MAX_FILE_NAME; ++j)
         {
-            db->entries[i].name[j] = '\0';
+            db->entries[i].delete_params.name[j] = '\0';
         }
     }
 
@@ -27,9 +27,9 @@ static void initializeDB(DBptr db, size_t size)
     db->header.magic = MAGIC_NUMBER;
 }
 
-static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
+static void restoreDB(struct PersistentDataBase *db, MyMapPtr fast_map, int fd, size_t full_size)
 {
-    bool *is_free_arr = calloc(db->header.size, sizeof(bool));
+    bool *is_free_arr = calloc(db->header.persistent_db_max_size, sizeof(bool));
     if (is_free_arr == NULL)
     {
         printf("Error: calloc failed in restoring attempt\n");
@@ -38,14 +38,14 @@ static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
         return;
     }
 
-    int curr_index = db->header.head;
+    int curr_index = db->header.free_list_head;
     while (curr_index != END_OF_LIST)
     {
         is_free_arr[curr_index] = true;
         curr_index = db->entries[curr_index].next;
     }
 
-    for (size_t i = 0; i < db->header.size; ++i)
+    for (size_t i = 0; i < db->header.persistent_db_max_size; ++i)
     {
         if (is_free_arr[i] == false)
         {
@@ -53,7 +53,7 @@ static void restoreDB(DBptr db, MyMapPtr fast_map, int fd, size_t full_size)
             tmp.data.data_len = db->entries[i].value.data.data_len;
             tmp.data.data_val = (char *)malloc(sizeof(char) * db->entries[i].value.data.data_len);
             memcpy(tmp.data.data_val, db->entries[i].value.data.data_val, tmp.data.data_len);
-            volatile_map_insert(fast_map, db->entries[i].key, &tmp, i);
+            volatile_map_insert_entry_with_persistent_map_index(fast_map, db->entries[i].key, &tmp, i);
             free(tmp.data.data_val);
         }
     }
@@ -73,11 +73,11 @@ static void insert_entry_to_persistent_map(int free_cell, struct nfs_fh3 *value,
     memcpy(db->entries[free_cell].value.data.data_val, value->data.data_val, value->data.data_len);
     db->entries[free_cell].ref_count = 1;
     db->entries[free_cell].state = REGULAR_STATE;
-    db->entries[free_cell].parent_fh.data.data_len = 0;
-    volatile_map_insert(fast_map, key, value, free_cell);
+    db->entries[free_cell].delete_params.parent_fh.data.data_len = 0;
+    volatile_map_insert_entry_with_persistent_map_index(fast_map, key, value, free_cell);
 }
 
-DB *alloc_init_map_db(const char *filename, size_t size)
+struct DB *alloc_init_map_db(const char *filename, size_t size)
 {
     printf("$$$$$");
     printf("\033[35m$$$$ INIT OF THE NEW DATA BASE $$$$$\033[0m"); // maybe delete later
@@ -123,14 +123,14 @@ DB *alloc_init_map_db(const char *filename, size_t size)
     return data_base;
 }
 
-bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
+bool insert_entry_db(struct DB *data_base, unsigned long key, struct nfs_fh3 *value)
 {
     printf("$$$$$\n");
     printf("\033[35m$$$$ INSERTING TO THE NEW DATA BASE $$$$$\033[0m"); // maybe delete later
     printf("$$$$$\n");
 
     int index_exists = -1;
-    if (volatile_map_get_value(data_base->fast_map, key, &index_exists) != NULL)
+    if (volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index_exists) != NULL)
     {
         printf("we got this value already !! key = %ld \n", key);
 
@@ -143,7 +143,7 @@ bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
         return false;
     }
 
-    int free_cell = data_base->db->header.head;
+    int free_cell = data_base->db->header.free_list_head;
 
     if (free_cell == END_OF_LIST)
     {
@@ -156,16 +156,16 @@ bool insert_db(DB *data_base, unsigned long key, struct nfs_fh3 *value)
     int new_head = (data_base->db->entries[free_cell].next == END_OF_LIST) ? END_OF_LIST : data_base->db->entries[free_cell].next;
 
     spdk_compiler_barrier();
-    data_base->db->header.head = new_head;
+    data_base->db->header.free_list_head = new_head;
     spdk_compiler_barrier();
 
     return true;
 }
 
-bool delete_entry_db(DB *data_base, unsigned long key)
+bool delete_entry_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID || volatile_map_remove(data_base->fast_map, key) == false)
     {
@@ -173,25 +173,25 @@ bool delete_entry_db(DB *data_base, unsigned long key)
         return false;
     }
 
-    data_base->db->entries[index].next = (data_base->db->header.head == END_OF_LIST) ? END_OF_LIST : data_base->db->header.head;
+    data_base->db->entries[index].next = (data_base->db->header.free_list_head == END_OF_LIST) ? END_OF_LIST : data_base->db->header.free_list_head;
 
     spdk_compiler_barrier();
-    data_base->db->header.head = index;
+    data_base->db->header.free_list_head = index;
     spdk_compiler_barrier();
 
     return true;
 }
 
-struct nfs_fh3 *get_db(DB *data_base, unsigned long key)
+struct nfs_fh3 *get_fh_db(struct DB *data_base, unsigned long key)
 {
     int temp_index;
-    return volatile_map_get_value(data_base->fast_map, key, &temp_index);
+    return volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &temp_index);
 }
 
-unsigned long get_ref_count_db(DB *data_base, unsigned long key)
+unsigned long get_ref_count_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -201,10 +201,10 @@ unsigned long get_ref_count_db(DB *data_base, unsigned long key)
     return data_base->db->entries[index].ref_count;
 }
 
-void increment_ref_count_db(DB *data_base, unsigned long key)
+void increment_ref_count_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -215,10 +215,10 @@ void increment_ref_count_db(DB *data_base, unsigned long key)
     return;
 }
 
-void decrement_ref_count_db(DB *data_base, unsigned long key)
+void decrement_ref_count_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -229,15 +229,15 @@ void decrement_ref_count_db(DB *data_base, unsigned long key)
     return;
 }
 
-bool fh_exist_db(DB *data_base, struct nfs_fh3 *fh, unsigned long *answer)
+bool fh_exist_db(struct DB *data_base, struct nfs_fh3 *fh, unsigned long *answer)
 {
     return volatile_map_is_fh_exist(data_base->fast_map, fh, answer);
 }
 
-void set_pending_deletion_flag_db(DB *data_base, unsigned long key)
+void set_pending_deletion_flag_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -248,10 +248,10 @@ void set_pending_deletion_flag_db(DB *data_base, unsigned long key)
     return;
 }
 
-enum EntryState get_entry_state_db(DB *data_base, unsigned long key)
+enum EntryState get_entry_state_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -261,10 +261,10 @@ enum EntryState get_entry_state_db(DB *data_base, unsigned long key)
     return data_base->db->entries[index].state;
 }
 
-bool set_parent_fh_and_name_db(DB *data_base, unsigned long key, const char *name, struct nfs_fh3 *parent_fh)
+bool set_parent_fh_and_name_db(struct DB *data_base, unsigned long key, const char *name, struct nfs_fh3 *parent_fh)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
@@ -277,51 +277,51 @@ bool set_parent_fh_and_name_db(DB *data_base, unsigned long key, const char *nam
         return false;
     }
 
-    memcpy(data_base->db->entries[index].name, name, length + 1);
-    data_base->db->entries[index].parent_fh.data.data_len = parent_fh->data.data_len;
-    memcpy(data_base->db->entries[index].parent_fh.data.data_val, parent_fh->data.data_val, parent_fh->data.data_len);
+    memcpy(data_base->db->entries[index].delete_params.name, name, length + 1);
+    data_base->db->entries[index].delete_params.parent_fh.data.data_len = parent_fh->data.data_len;
+    memcpy(data_base->db->entries[index].delete_params.parent_fh.data.data_val, parent_fh->data.data_val, parent_fh->data.data_len);
 
     spdk_compiler_barrier();
     return true;
 }
 
-char *get_entry_parent_data_val_db(DB *data_base, unsigned long key)
+char *get_entry_parent_data_val_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
         return NULL;
     }
-    return data_base->db->entries[index].parent_fh.data.data_val;
+    return data_base->db->entries[index].delete_params.parent_fh.data.data_val;
 }
 
-int get_entry_parent_data_len_db(DB *data_base, unsigned long key)
+int get_entry_parent_data_len_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
         return -1;
     }
-    return data_base->db->entries[index].parent_fh.data.data_len;
+    return data_base->db->entries[index].delete_params.parent_fh.data.data_len;
 }
 
-char *get_entry_name_db(DB *data_base, unsigned long key)
+char *get_entry_name_db(struct DB *data_base, unsigned long key)
 {
     int index = INVALID;
-    volatile_map_get_value(data_base->fast_map, key, &index);
+    volatile_map_get_fh_and_persistent_map_index(data_base->fast_map, key, &index);
 
     if (index == INVALID)
     {
         return NULL;
     }
-    return data_base->db->entries[index].name;
+    return data_base->db->entries[index].delete_params.name;
 }
 
-unsigned long generate_new_key_db(DB *data_base)
+unsigned long generate_new_key_db(struct DB *data_base)
 {
     ++data_base->db->header.global_key;
     spdk_compiler_barrier();

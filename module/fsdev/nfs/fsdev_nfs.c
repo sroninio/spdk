@@ -253,7 +253,7 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     unsigned long inode_key = (unsigned long)fsdev_io->u_in.read.fhandle;
 
-    struct nfs_fh3 *fh = get_db(vfsdev->db, inode_key);
+    struct nfs_fh3 *fh = get_fh_db(vfsdev->db, inode_key);
 
     size_t size = fsdev_io->u_in.write.size;
     uint64_t offs = fsdev_io->u_in.write.offs;
@@ -318,7 +318,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct iovec *outvec = fsdev_io->u_in.read.iov;
 
     struct READ3args args = {0};
-    args.file = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle);
+    args.file = *get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle);
     args.offset = fsdev_io->u_in.read.offs;
     args.count = outvec[0].iov_len;
 
@@ -365,7 +365,7 @@ lo_getattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     printf("+=+=+=+=+=+=+=+=  {lo_getattr} FUNCTION CALLED with inode number [%ld] \n", (unsigned long)fsdev_io->u_in.getattr.fobject);
 
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
-    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.getattr.fobject);
+    struct nfs_fh3 *nfsfh = get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.getattr.fobject);
 
     if (nfsfh == NULL)
     {
@@ -445,7 +445,7 @@ lo_validate_and_insert_inode(unsigned long *new_key, struct nfs_fsdev *vfsdev, s
     else
     {
         *new_key = generate_new_key_db(vfsdev->db);
-        insert_db(vfsdev->db, *new_key, fh);
+        insert_entry_db(vfsdev->db, *new_key, fh);
     }
     return true;
 }
@@ -522,7 +522,7 @@ lo_lookup(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     }
 
     struct LOOKUP3args args = {0};
-    args.what.dir = *get_db(vfsdev->db, key_parent);
+    args.what.dir = *get_fh_db(vfsdev->db, key_parent);
     args.what.name = name;
 
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
@@ -609,7 +609,7 @@ lo_readdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
     struct READDIRPLUS3args args = {0};
-    args.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.readdir.fobject);
+    args.dir = *get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.readdir.fobject);
     args.cookie = fsdev_io->u_in.readdir.offset;
     args.dircount = 1000000;
     args.maxcount = 1000000;
@@ -679,7 +679,7 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     case 0100000: // regular files
         struct CREATE3args args2 = {0};
 
-        args2.where.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
+        args2.where.dir = *get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
 
         args2.where.name = fsdev_io->u_in.mknod.name;
 
@@ -758,7 +758,7 @@ lo_mkdir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
     struct MKDIR3args args = {0};
-    args.where.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mkdir.parent_fobject);
+    args.where.dir = *get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.mkdir.parent_fobject);
     args.where.name = fsdev_io->u_in.mkdir.name;
     args.attributes.gid.set_it = 1;
     args.attributes.gid.set_gid3_u.gid = fsdev_io->u_in.mkdir.egid;
@@ -810,7 +810,7 @@ lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     printf("+=+=+=+=+=+=+=+=  {lo_setattr} FUNCTION CALLED with inode number [%ld] \n", key);
     struct spdk_fsdev_file_attr *attr = &fsdev_io->u_in.setattr.attr;
 
-    struct nfs_fh3 *nfsfh = get_db(vfsdev->db, key);
+    struct nfs_fh3 *nfsfh = get_fh_db(vfsdev->db, key);
 
     struct SETATTR3args args = {0};
 
@@ -959,7 +959,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
         else
         {
             printf("Trying to UNLINK a file that has positive refrence count this io request will be delayed...\n");
-            set_parent_fh_and_name_db(vfsdev->db, new_key, fsdev_io->u_in.unlink.name, get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject));
+            set_parent_fh_and_name_db(vfsdev->db, new_key, fsdev_io->u_in.unlink.name, get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject));
             set_pending_deletion_flag_db(vfsdev->db, new_key);
             spdk_fsdev_io_complete(fsdev_io, 0);
             return;
@@ -968,14 +968,14 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     else
     {
         new_key = generate_new_key_db(vfsdev->db);
-        insert_db(vfsdev->db, new_key, fh);
+        insert_entry_db(vfsdev->db, new_key, fh);
         decrement_ref_count_db(vfsdev->db, new_key); // we want to insert with refcount = 0.
         set_pending_deletion_flag_db(vfsdev->db, new_key);
     }
     cb_data->key = new_key;
 
     struct REMOVE3args args = {0};
-    args.object.dir = *get_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
+    args.object.dir = *get_fh_db(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
     args.object.name = fsdev_io->u_in.unlink.name;
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
@@ -1003,7 +1003,7 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     }
 
     struct LOOKUP3args args = {0};
-    args.what.dir = *get_db(vfsdev->db, key_parent);
+    args.what.dir = *get_fh_db(vfsdev->db, key_parent);
     args.what.name = fsdev_io->u_in.unlink.name;
 
     fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data(_ch, fsdev_io);
@@ -1373,7 +1373,7 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
     root_fh3.data.data_val = root_fh->val;
     root_fh3.data.data_len = root_fh->len;
 
-    insert_db(vfsdev->db, (unsigned long)1, &root_fh3);
+    insert_entry_db(vfsdev->db, (unsigned long)1, &root_fh3);
 
     vch->poller = SPDK_POLLER_REGISTER(nfs_io_progress_and_poll, vch, 0);
 
