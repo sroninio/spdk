@@ -98,7 +98,7 @@ struct DB *alloc_init_map_db(const char *filename, size_t size)
         return NULL;
     }
 
-    DBptr db = mmap(NULL, full_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    struct PersistentDataBase *db = mmap(NULL, full_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (db == MAP_FAILED)
     {
         printf("Error: error mapping file");
@@ -107,7 +107,7 @@ struct DB *alloc_init_map_db(const char *filename, size_t size)
     }
 
     MyMapPtr fast_map = create_volatile_map();
-    DB *data_base = malloc(sizeof(DB));
+    struct DB *data_base = malloc(sizeof(*data_base));
     data_base->db = db;
     data_base->fast_map = fast_map;
 
