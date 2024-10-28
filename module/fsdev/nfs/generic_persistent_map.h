@@ -14,9 +14,6 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <spdk/barrier.h>
-#include <boost/bimap.hpp>
-#include <boost/bimap/unordered_set_of.hpp>
-#include <boost/functional/hash.hpp>
 #include <vector>
 #include <memory>
 #include <algorithm>
@@ -27,63 +24,93 @@
 #define INVALID -1
 #define NA -2
 
-struct Right
-{
-    right index
-}
-
-struct Left
-{
-    Left index
-}
-
 class VolatileMap
 {
 private:
-    std::unordered_map<left, Right>
-        std::unordered_map<right, Left>
+    std::unordered_map<unsigned long, std::pair<std::string_view, int>> m_left_key_map;
+    std::unordered_map<std::string_view, std::pair<unsigned long, int>> m_right_key_map;
 
-            // BOOST::BIMAP
-            std::map<(int, std::string_view)> m_map;
+    bool Remove(unsigned long left, const std::string_view &right)
+    {
+        if (FindIndexViaLeftKey(left) == INVALID || FindIndexViaRightKey(right) == INVALID)
+        {
+            return false;
+        }
+
+        auto it1 = m_left_key_map.find(left);
+        m_left_key_map.erase(it1);
+
+        auto it2 = m_right_key_map.find(right);
+        m_right_key_map.erase(it2);
+
+        return true;
+    }
 
 public:
-    VolatileMap(some_param) : m_map(some)
-    {
-        // To Do
-    }
+    VolatileMap(void) : m_left_key_map(), m_right_key_map() {}
 
     VolatileMap(const VolatileMap &other) = delete;
     VolatileMap &operator=(const VolatileMap &other) = delete;
-    ~VolatileMap() = delete;
+    ~VolatileMap() = default;
 
-    bool insert(unsigned long left, const std::string_view &right, unsigned long persistent_db_index)
+    bool Insert(unsigned long left, const std::string_view &right, unsigned long persistent_db_index)
     {
-        // TO DO
+        if (FindIndexViaLeftKey(left) != INVALID || FindIndexViaRightKey(right) != INVALID)
+        {
+            return false;
+        }
+        m_left_key_map[left] = std::make_pair(right, persistent_db_index);
+        m_right_key_map[right] = std::make_pair(left, persistent_db_index);
         return true;
     }
 
-    bool remove_by_left_key(unsigned long left)
+    bool RemoveByLeftKey(unsigned long left)
     {
-        // TO DO
-        return true;
+
+        if (FindIndexViaLeftKey(left) == INVALID)
+        {
+            return false;
+        }
+
+        std::string_view right = m_left_key_map[left].first;
+
+        return Remove(left, right);
     }
 
-    bool remove_by_right_key(unsigned long right)
+    bool RemoveByRightKey(const std::string_view &right)
     {
-        // TO DO
-        return true;
+
+        if (FindIndexViaRightKey(right) == INVALID)
+        {
+            return false;
+        }
+
+        unsigned long left = m_right_key_map[right].first;
+
+        return Remove(left, right);
     }
 
-    unsigned long find_index_via_left_key(unsigned long key) const
+    unsigned long FindIndexViaLeftKey(unsigned long left) const
     {
-        // TO DO
-        return 1;
+
+        auto it = m_left_key_map.find(left);
+        if (it != m_left_key_map.end())
+        {
+            return it->second.second;
+        }
+
+        return INVALID;
     }
 
-    unsigned long find_index_via_right_key(std::string_view right) const
+    unsigned long FindIndexViaRightKey(std::string_view right) const
     {
-        // TO DO
-        return true;
+        auto it = m_right_key_map.find(right);
+        if (it != m_right_key_map.end())
+        {
+            return it->second.second;
+        }
+
+        return INVALID;
     }
 };
 
@@ -104,18 +131,18 @@ public:
         m_data[1] = value;
     }
 
-    ~Entry() = delete;
+    ~Entry() = default;
 
     void Update(const T &new_version)
     {
-        memcpy(&(m_data[(version + 1) % 2]), &new_version, sizeof(T));
+        memcpy(&(m_data[(m_version + 1) % 2]), &new_version, sizeof(T));
         spdk_compiler_barrier();
         m_version = (m_version + 1) % 2;
     }
 
     T *GetData(void)
     {
-        return &m_data[version];
+        return &m_data[m_version];
     }
 
     void SetNext(int next)
@@ -205,13 +232,13 @@ public:
 
     PersistentMap(const PersistentMap &other) = delete;
     PersistentMap &operator=(const PersistentMap &other) = delete;
-    ~PersistentMap() = delete;
+    ~PersistentMap() = default;
 
     // will return false if and only if there is already entry like this
     bool InsertEntry(const T &entry, unsigned long left, const std::string_view &right)
     {
-        int index1 = m_volatile_map.find_index_via_left_key(left);
-        int index2 = m_volatile_map.find_index_via_right_key(right);
+        int index1 = m_volatile_map.FindIndexViaLeftKey(left);
+        int index2 = m_volatile_map.FindIndexViaRightKey(right);
 
         assert(index1 == index2);
 
@@ -240,7 +267,7 @@ public:
 
     bool UpdateEntryByLeft(const T &entry, unsigned long left)
     {
-        int index = m_volatile_map.find_index_via_left_key(left);
+        int index = m_volatile_map.FindIndexViaLeftKey(left);
         if (index == INVALID)
         {
             return false;
@@ -254,7 +281,7 @@ public:
 
     bool UpdateEntryByRight(const T &entry, const std::string_view &right)
     {
-        int index = m_volatile_map.find_index_via_right_key(right);
+        int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
         {
             return false;
@@ -267,7 +294,7 @@ public:
 
     bool RemoveEntryByLeft(unsigned long left)
     {
-        int index = m_volatile_map.find_index_via_left_key(left);
+        int index = m_volatile_map.FindIndexViaLeftKey(left);
         if (index == INVALID)
         {
             return false;
@@ -289,7 +316,7 @@ public:
 
     bool RemoveEntryByRight(const std::string_view &right)
     {
-        int index = m_volatile_map.find_index_via_right_key(right);
+        int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
         {
             return false;
@@ -311,7 +338,7 @@ public:
 
     T *GetEntryByLeft(unsigned long left) const
     {
-        int index = m_volatile_map.find_index_via_left_key(left);
+        int index = m_volatile_map.FindIndexViaLeftKey(left);
         if (index == INVALID)
         {
             return NULL;
@@ -321,7 +348,7 @@ public:
 
     T *GetEntryByRight(const std::string_view &right) const
     {
-        int index = m_volatile_map.find_index_via_right_key(right);
+        int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
         {
             return NULL;
