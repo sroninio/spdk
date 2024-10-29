@@ -1,36 +1,45 @@
 #ifndef MYDB_H
 #define MYDB_H
 
-#include <iostream>
-#include <unordered_map>
-#include <cstring>
-#include <string>
-#include <cassert>
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <pthread.h>
 #include <stdbool.h>
-#include <spdk/barrier.h>
+#include "libnfs.h"
+#include "libnfs-raw.h"
+#include "libnfs-raw-mount.h"
+#include "libnfs-raw-nfs.h"
+
+#include <unordered_map>
+#include <iostream>
+#include <string>
+#include <cassert>
+#include <string>
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <new>
 
 #define MAGIC_NUMBER 0x12345678
 #define END_OF_LIST -1
-#define MAX_SIZE_DB 1000000
+#define MAX_SIZE_DB 20
 #define INVALID -1
 #define NA -2
+
+#define MAX_RIGHT_LENGHT 300 // should remove this after we ommit the std::string
 
 class VolatileMap
 {
 private:
-    std::unordered_map<unsigned long, std::pair<std::string_view, int>> m_left_key_map;
-    std::unordered_map<std::string_view, std::pair<unsigned long, int>> m_right_key_map;
+    std::unordered_map<unsigned long, std::pair<std::string, int>> m_left_key_map;
+    std::unordered_map<std::string, std::pair<unsigned long, int>> m_right_key_map;
 
-    bool Remove(unsigned long left, const std::string_view &right)
+    bool Remove(unsigned long left, const std::string &right)
     {
         if (FindIndexViaLeftKey(left) == INVALID || FindIndexViaRightKey(right) == INVALID)
         {
@@ -42,7 +51,6 @@ private:
 
         auto it2 = m_right_key_map.find(right);
         m_right_key_map.erase(it2);
-
         return true;
     }
 
@@ -53,7 +61,7 @@ public:
     VolatileMap &operator=(const VolatileMap &other) = delete;
     ~VolatileMap() = default;
 
-    bool Insert(unsigned long left, const std::string_view &right, unsigned long persistent_db_index)
+    bool Insert(unsigned long left, const std::string &right, unsigned long persistent_db_index)
     {
         if (FindIndexViaLeftKey(left) != INVALID || FindIndexViaRightKey(right) != INVALID)
         {
@@ -72,12 +80,12 @@ public:
             return false;
         }
 
-        std::string_view right = m_left_key_map[left].first;
+        std::string right = m_left_key_map[left].first;
 
         return Remove(left, right);
     }
 
-    bool RemoveByRightKey(const std::string_view &right)
+    bool RemoveByRightKey(const std::string &right)
     {
 
         if (FindIndexViaRightKey(right) == INVALID)
@@ -102,7 +110,7 @@ public:
         return INVALID;
     }
 
-    unsigned long FindIndexViaRightKey(std::string_view right) const
+    unsigned long FindIndexViaRightKey(std::string right) const
     {
         auto it = m_right_key_map.find(right);
         if (it != m_right_key_map.end())
@@ -120,13 +128,18 @@ class Entry
 private:
     int m_next;
     unsigned long m_left;
-    std::string_view m_right;
+    // std::string m_right;
+    char m_right_data[MAX_RIGHT_LENGHT];
+    int m_right_len;
     T m_data[2];
     int m_version;
 
 public:
-    Entry(int next, unsigned long left, std::string_view right, const T &value) : m_next(next), m_left(left), m_right(right), m_version(0)
+    Entry(int next, unsigned long left, std::string right, const T &value) : m_next(next), m_left(left), m_version(0)
     {
+        m_right_len = right.length();
+        memcpy(m_right_data, right.data(), m_right_len);
+
         m_data[0] = value;
         m_data[1] = value;
     }
@@ -159,9 +172,10 @@ public:
     {
         return m_left;
     }
-    std::string_view GetRightKey()
+    std::string GetRightKey()
     {
-        return m_right;
+        std::string right(m_right_data, m_right_len);
+        return right;
     }
 };
 
@@ -205,20 +219,33 @@ private:
             curr_index = m_raw_persistent_data_base->m_entries[curr_index].GetNext();
         }
 
+        // for (size_t i = 0; i < MAX_SIZE_DB; ++i)
+        // {
+        //     std::cout << "--- " << i << " =[" << (is_free_arr[i] ? "FREE" : "NOT_FREEE") << "]" << std::endl;
+        // }
+
         for (size_t i = 0; i < MAX_SIZE_DB; ++i)
         {
             if (!is_free_arr[i])
             {
                 unsigned long left = m_raw_persistent_data_base->m_entries[i].GetLeftKey();
-                std::string_view right = m_raw_persistent_data_base->m_entries[i].GetRightKey();
-                m_volatile_map.insert(left, right, i);
+                std::string right = m_raw_persistent_data_base->m_entries[i].GetRightKey();
+                // std::cout << "====== Entry[" << i << "] left=[" << left << "] right=[" << right << "]" << std::endl;
+
+                bool res = m_volatile_map.Insert(left, right, i);
+                if (!res)
+                {
+                    std::cout << "Error in restoring Entry " << i << "left=[" << left << "] right=[" << right << "]" << std::endl;
+                    exit(-1);
+                }
             }
         }
     }
 
 public:
-    PersistentMap(struct RawPersistentDataBase *pers_db) : m_volatile_map(), m_raw_persistent_data_base(pers_db)
+    PersistentMap(void *shmem_db) : m_volatile_map()
     {
+        m_raw_persistent_data_base = static_cast<RawPersistentDataBase<T> *>(shmem_db);
         if (m_raw_persistent_data_base->m_magic != MAGIC_NUMBER)
         {
             Init();
@@ -228,6 +255,7 @@ public:
         {
             Restore();
         }
+        // m_volatile_map.print_size();
     }
 
     PersistentMap(const PersistentMap &other) = delete;
@@ -235,7 +263,7 @@ public:
     ~PersistentMap() = default;
 
     // will return false if and only if there is already entry like this
-    bool InsertEntry(const T &entry, unsigned long left, const std::string_view &right)
+    bool InsertEntry(const T &entry, unsigned long left, const std::string &right)
     {
         int index1 = m_volatile_map.FindIndexViaLeftKey(left);
         int index2 = m_volatile_map.FindIndexViaRightKey(right);
@@ -279,7 +307,7 @@ public:
         return true;
     }
 
-    bool UpdateEntryByRight(const T &entry, const std::string_view &right)
+    bool UpdateEntryByRight(const T &entry, const std::string &right)
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
@@ -300,7 +328,7 @@ public:
             return false;
         }
 
-        if (m_volatile_map.remove_by_left_key(left) == false)
+        if (m_volatile_map.RemoveByLeftKey(left) == false)
         {
             return false;
         }
@@ -314,7 +342,7 @@ public:
         return true;
     }
 
-    bool RemoveEntryByRight(const std::string_view &right)
+    bool RemoveEntryByRight(const std::string &right)
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
@@ -322,7 +350,7 @@ public:
             return false;
         }
 
-        if (m_volatile_map.remove_by_right_key(right) == false)
+        if (m_volatile_map.RemoveByRightKey(right) == false)
         {
             return false;
         }
@@ -346,11 +374,13 @@ public:
         return m_raw_persistent_data_base->m_entries[index].GetData();
     }
 
-    T *GetEntryByRight(const std::string_view &right) const
+    T *GetEntryByRight(const std::string &right) const
     {
+
         int index = m_volatile_map.FindIndexViaRightKey(right);
         if (index == INVALID)
         {
+
             return NULL;
         }
         return m_raw_persistent_data_base->m_entries[index].GetData();
