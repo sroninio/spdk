@@ -65,17 +65,15 @@ extern "C"
         return db->RemoveEntryByRight(temp);
     }
 
-    // GENERALLY WE WANT TO SPLIT to check_if_exist_byxx and get_by_xxx
-    const struct NfsFsdevEntry *get_entry_by_left(void *data_base, unsigned long left)
+    struct NfsFsdevEntry get_entry_by_left(void *data_base, unsigned long left)
     {
         PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);
         return db->GetEntryByLeft(left);
     }
 
-    const struct NfsFsdevEntry *get_entry_by_right(void *data_base, struct persistent_nfs_fh3 *right)
+    struct NfsFsdevEntry get_entry_by_right(void *data_base, struct persistent_nfs_fh3 *right)
     {
         PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);
-        // std::cout << "data to become string view  " << right->data.data_len << std::endl;
         std::string temp((char *)right->data.data_val, right->data.data_len);
         return db->GetEntryByRight(temp);
     }
@@ -84,5 +82,18 @@ extern "C"
     {
         PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);
         return db->GenerateLeftKey();
+    }
+
+    bool check_if_exist_by_left(void *data_base, unsigned long left)
+    {
+        PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);
+        return db->CheckEntryExistByLeftKey(left);
+    }
+
+    bool check_if_exist_by_right(void *data_base, struct persistent_nfs_fh3 *right)
+    {
+        PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);
+        std::string temp((char *)right->data.data_val, right->data.data_len);
+        return db->CheckEntryExistByRightKey(temp);
     }
 }

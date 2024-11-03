@@ -1,7 +1,6 @@
 #ifndef MYDB_H
 #define MYDB_H
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,9 +152,9 @@ public:
         m_version = (m_version + 1) % 2;
     }
 
-    T *GetData(void)
+    T GetData(void)
     {
-        return &m_data[m_version];
+        return m_data[m_version];
     }
 
     void SetNext(int next)
@@ -219,18 +218,12 @@ private:
             curr_index = m_raw_persistent_data_base->m_entries[curr_index].GetNext();
         }
 
-        // for (size_t i = 0; i < MAX_SIZE_DB; ++i)
-        // {
-        //     std::cout << "--- " << i << " =[" << (is_free_arr[i] ? "FREE" : "NOT_FREEE") << "]" << std::endl;
-        // }
-
         for (size_t i = 0; i < MAX_SIZE_DB; ++i)
         {
             if (!is_free_arr[i])
             {
                 unsigned long left = m_raw_persistent_data_base->m_entries[i].GetLeftKey();
                 std::string right = m_raw_persistent_data_base->m_entries[i].GetRightKey();
-                // std::cout << "====== Entry[" << i << "] left=[" << left << "] right=[" << right << "]" << std::endl;
 
                 bool res = m_volatile_map.Insert(left, right, i);
                 if (!res)
@@ -255,7 +248,6 @@ public:
         {
             Restore();
         }
-        // m_volatile_map.print_size();
     }
 
     PersistentMap(const PersistentMap &other) = delete;
@@ -364,31 +356,35 @@ public:
         return true;
     }
 
-    T *GetEntryByLeft(unsigned long left) const
+    T GetEntryByLeft(unsigned long left) const
     {
         int index = m_volatile_map.FindIndexViaLeftKey(left);
-        if (index == INVALID)
-        {
-            return NULL;
-        }
+        assert(index != INVALID);
         return m_raw_persistent_data_base->m_entries[index].GetData();
     }
 
-    T *GetEntryByRight(const std::string &right) const
+    T GetEntryByRight(const std::string &right) const
     {
-
         int index = m_volatile_map.FindIndexViaRightKey(right);
-        if (index == INVALID)
-        {
-
-            return NULL;
-        }
+        assert(index != INVALID);
         return m_raw_persistent_data_base->m_entries[index].GetData();
     }
 
     unsigned long GenerateLeftKey(void)
     {
         return ++m_raw_persistent_data_base->m_left_key_counter;
+    }
+
+    bool CheckEntryExistByLeftKey(unsigned long left) const
+    {
+        int index = m_volatile_map.FindIndexViaLeftKey(left);
+        return (index != INVALID);
+    }
+
+    bool CheckEntryExistByRightKey(const std::string &right) const
+    {
+        int index = m_volatile_map.FindIndexViaRightKey(right);
+        return (index != INVALID);
     }
 };
 

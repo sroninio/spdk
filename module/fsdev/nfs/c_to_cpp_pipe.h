@@ -20,7 +20,6 @@
 #include "libnfs-raw-nfs.h"
 #include <spdk/barrier.h>
 
-
 #ifdef __cplusplus
 extern "C"
 {
@@ -61,11 +60,15 @@ extern "C"
 
     bool remove_entry_by_right(void *data_base, struct persistent_nfs_fh3 *right);
 
-    const struct NfsFsdevEntry *get_entry_by_left(void *data_base, unsigned long left);
+    struct NfsFsdevEntry get_entry_by_left(void *data_base, unsigned long left);
 
-    const struct NfsFsdevEntry *get_entry_by_right(void *data_base, struct persistent_nfs_fh3 *right);
+    struct NfsFsdevEntry get_entry_by_right(void *data_base, struct persistent_nfs_fh3 *right);
 
     unsigned long generate_left_key(void *data_base);
+
+    bool check_if_exist_by_left(void *data_base, unsigned long left);
+
+    bool check_if_exist_by_right(void *data_base, struct persistent_nfs_fh3 *right);
 
 #ifdef __cplusplus
 }
