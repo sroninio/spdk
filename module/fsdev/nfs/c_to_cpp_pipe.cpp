@@ -65,6 +65,7 @@ extern "C"
         return db->RemoveEntryByRight(temp);
     }
 
+    // GENERALLY WE WANT TO SPLIT to check_if_exist_byxx and get_by_xxx
     const struct NfsFsdevEntry *get_entry_by_left(void *data_base, unsigned long left)
     {
         PersistentMap<struct NfsFsdevEntry> *db = static_cast<PersistentMap<struct NfsFsdevEntry> *>(data_base);

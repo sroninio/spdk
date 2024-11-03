@@ -239,13 +239,18 @@ static int
 lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    //RSRS explicitly set xid = fsdev_io->internal.unique 
 
     if ((unsigned long)fsdev_io->internal.unique < vfsdev->open_close_reply_struct->suffix_xid)
     {
+        //RSRS add warning
+        fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
         return 0;
     }
 
+    //ASSERT IF ENTRY NOT EXIST
     const struct NfsFsdevEntry *real_entry = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.release.fobject);
+
     if (real_entry->state == PENDING_DELETION_STATE)
     {
         printf("Error: trying to get new file descriptor for a file that is pending deletion\n");
@@ -748,6 +753,7 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     const struct NfsFsdevEntry *real_entry = get_entry_by_right(vfsdev->db, &temp_fh);
     if (real_entry != NULL)
     {
+        //RSRS in recovery u may have this entry already, therefore silently success
         printf("Error: Trying to make node that is already exists\n");
         spdk_fsdev_io_complete(fsdev_io, -EINVAL);
         return;
@@ -785,6 +791,7 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     case 0100000: // regular files
 
         const struct NfsFsdevEntry *real_entry = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.mknod.parent_fobject);
+        //RSRS ASSERT!
         if (real_entry != NULL && real_entry->state == PENDING_DELETION_STATE)
         {
             printf("Error: Trying to make I/O request on inode that his parent directory is pending deletion\n");
@@ -810,7 +817,7 @@ lo_mknod(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         }
         return OP_STATUS_ASYNC;
         break;
-    default:
+    default: //all sort of links
         printf("Error: Unexpected file type in mode: %o\n", fsdev_io->u_in.mknod.mode);
         return -EINVAL;
     }
@@ -1075,11 +1082,13 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     }
     struct LOOKUP3res *result = data;
     nfsstat3 ret = result->status;
+    //RSRS remember to free cb data in all cases
     if (ret != NFS3_OK)
     {
         if (ret == NFS3ERR_NOENT)
         {
             printf("Error: lookup result is NFS3ERR_NOENT \n");
+            //RSRS EINVAL
             spdk_fsdev_io_complete(fsdev_io, -ENOENT);
         }
         else
@@ -1093,12 +1102,33 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     struct nfs_fh3 *fh = &(result->LOOKUP3res_u.resok.object);
 
     struct persistent_nfs_fh3 temp = {0};
+    //RSRS UGLY
     temp.data.data_len = result->LOOKUP3res_u.resok.object.data.data_len;
     memcpy(temp.data.data_val, result->LOOKUP3res_u.resok.object.data.data_val,temp.data.data_len);
 
     const struct NfsFsdevEntry *real_entry = get_entry_by_right(vfsdev->db, &temp);
+
+//RSRS
+if entry:
+    set entry to DEL state
+else:
+    add entry with DEL state and refcnt = 0
+
+if refcnt == 0:
+    go on with the deletion
+
+
+
+
+
     if (real_entry != NULL)
     {
+
+
+
+
+
+        //RSRS VALID in case of recovery!
         if (real_entry->state == PENDING_DELETION_STATE)
         {
             printf("Error: trying to delete a file that is already pending deletion \n");
@@ -1137,7 +1167,9 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     }
     else
     {
+        //RENAME THIS TEMP 
         struct NfsFsdevEntry temp = {0};
+        //RSRS here and everywhere use funciton
         temp.state = PENDING_DELETION_STATE;
         temp.ref_count = 0;
         temp.inode_left_key = generate_left_key(vfsdev->db);
@@ -1145,6 +1177,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
         memcpy(temp.fh_right_key.data.data_val, fh->data.data_val, fh->data.data_len);
         if (!insert_entry(vfsdev->db, &temp, temp.inode_left_key, &temp.fh_right_key))
         {
+            //RSRS ASSERT
             printf("Error: falied at inserting an entry upon deletion \n");
             spdk_fsdev_io_complete(fsdev_io, -EINVAL);
             return;
@@ -1183,14 +1216,17 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
+    //RSRS change the name to fateher_real_entry
     const struct NfsFsdevEntry *real_entry = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
 
+    //RSRS ASSERT when logical invariant is broken ASSERT
     if (real_entry->state == PENDING_DELETION_STATE)
     {
         printf("Error: Trying to make I/O request on inode that is pending deletion\n");
         return -EINVAL;
     }
 
+    //RSRS !!!!
     struct LOOKUP3args args = {0};
     args.what.dir.data.data_val = real_entry->fh_right_key.data.data_val;
     args.what.dir.data.data_len = real_entry->fh_right_key.data.data_len;
@@ -1256,6 +1292,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
 
+    //RSRS xid
     if ((unsigned long)fsdev_io->internal.unique < vfsdev->open_close_reply_struct->suffix_xid)
     {
         return 0;
@@ -1276,6 +1313,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         if (temp.state == PENDING_DELETION_STATE)
         {
             struct REMOVE3args args = {0};
+            //RSRS COPY
             args.object.dir.data.data_val = real_entry->reply_unlink_params.parent_fh.data.data_val;
             args.object.dir.data.data_len = real_entry->reply_unlink_params.parent_fh.data.data_len;
             args.object.name = real_entry->reply_unlink_params.name;
@@ -1292,6 +1330,8 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         }
         else
         {
+            //RSRS since we dont follow lookup/forget semantics we dont know if we actually are allowed to removee from
+            //table
             if (!remove_entry_by_left(vfsdev->db, temp.inode_left_key))
             {
                 printf("Error: falied at deleting entry from data base at release I/O request\n");
@@ -1455,6 +1495,7 @@ fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
     {
         if (fsdev_io->internal.unique > 0xffffffff)
         {
+            //RSRS ASSERT
             printf("Error: the xid of the next io request is out of bounds.\n");
             spdk_fsdev_io_complete(fsdev_io, -EINVAL);
             return;
@@ -1544,6 +1585,7 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
         exit(10);
     }
 
+     
     if (!lo_initialize_new_root_entry_and_insert_to_db(1, nfs_get_rootfh(vch->nfs), vfsdev))
     {
         printf("Error: failed in inserting root file handle into map\n");
@@ -1575,6 +1617,7 @@ lo_restore_open_close_reply_struct(struct OpenCloseReply *open_close_reply_struc
 {
     if (open_close_reply_struct->header_xid == open_close_reply_struct->suffix_xid)
     {
+        //IF ENTRY NOT EXISTS SILENTLY SUCCES AND PRINT WARNING
         const struct NfsFsdevEntry *real_entry = get_entry_by_left(vfsdev->db, open_close_reply_struct->file_inode);
         struct NfsFsdevEntry temp = *real_entry;
         temp.ref_count = open_close_reply_struct->expected_ref_count;
