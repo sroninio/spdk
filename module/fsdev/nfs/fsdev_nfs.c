@@ -274,8 +274,6 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
     spdk_compiler_barrier();
 
-    
-
     if (!update_entry_by_left(vfsdev->db, &temp, temp.inode_left_key))
     {
         printf("Error: falied at open I/O request - updating the data base \n");
@@ -459,7 +457,7 @@ lo_getattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
     spdk_fsdev_io_complete(fsdev_io, 0);
 }
 
-static struct GETATTR3args 
+static struct GETATTR3args
 lo_getattr_args(struct NfsFsdevEntry *entry)
 {
     struct GETATTR3args args = {0};
@@ -1021,7 +1019,7 @@ lo_setattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 }
 
 static struct SETATTR3args
-lo_setattr_args( struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_attr *attr, struct NfsFsdevEntry *temp_entry)
+lo_setattr_args(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_attr *attr, struct NfsFsdevEntry *temp_entry)
 {
     struct SETATTR3args args = {0};
     args.object.data.data_len = temp_entry->fh_right_key.data.data_len;
@@ -1080,7 +1078,7 @@ lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
-    struct SETATTR3args args = lo_setattr_args(fsdev_io,&fsdev_io->u_in.setattr.attr, &temp_entry);
+    struct SETATTR3args args = lo_setattr_args(fsdev_io, &fsdev_io->u_in.setattr.attr, &temp_entry);
 
     if (rpc_nfs3_setattr_task(nfs_get_rpc_context(vch->nfs), lo_setattr_cb, &args, fsdev_io) == NULL)
     {
@@ -1624,10 +1622,14 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
         exit(10);
     }
 
-    if (!lo_initialize_new_root_entry_and_insert_to_db(1, nfs_get_rootfh(vch->nfs), vfsdev))
+    if (!check_if_exist_by_left(vfsdev->db, 1))
     {
-        printf("Error: failed in inserting root file handle into map\n");
-        exit(-1);
+        if (!lo_initialize_new_root_entry_and_insert_to_db(1, nfs_get_rootfh(vch->nfs), vfsdev))
+        {
+            printf("Error: failed in inserting root file handle into map\n");
+            exit(-1);
+        }
+        printf("Warning: trying to insert ROOT FH to map, but already exist - we are restoring the data base...\n");
     }
 
     vch->poller = SPDK_POLLER_REGISTER(nfs_io_progress_and_poll, vch, 0);
