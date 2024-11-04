@@ -40,7 +40,7 @@ private:
 
     bool Remove(unsigned long left, const std::string &right)
     {
-        if (FindIndexViaLeftKey(left) == INVALID || FindIndexViaRightKey(right) == INVALID)
+        if (FindIndexViaLeftKey(left) == (int)INVALID || FindIndexViaRightKey(right) == (int)INVALID)
         {
             return false;
         }
@@ -62,7 +62,7 @@ public:
 
     bool Insert(unsigned long left, const std::string &right, unsigned long persistent_db_index)
     {
-        if (FindIndexViaLeftKey(left) != INVALID || FindIndexViaRightKey(right) != INVALID)
+        if (FindIndexViaLeftKey(left) != (int)INVALID || FindIndexViaRightKey(right) != (int)INVALID)
         {
             return false;
         }
@@ -74,7 +74,7 @@ public:
     bool RemoveByLeftKey(unsigned long left)
     {
 
-        if (FindIndexViaLeftKey(left) == INVALID)
+        if (FindIndexViaLeftKey(left) == (int)INVALID)
         {
             return false;
         }
@@ -87,7 +87,7 @@ public:
     bool RemoveByRightKey(const std::string &right)
     {
 
-        if (FindIndexViaRightKey(right) == INVALID)
+        if (FindIndexViaRightKey(right) == (int)INVALID)
         {
             return false;
         }
@@ -97,7 +97,7 @@ public:
         return Remove(left, right);
     }
 
-    unsigned long FindIndexViaLeftKey(unsigned long left) const
+    int FindIndexViaLeftKey(unsigned long left) const
     {
 
         auto it = m_left_key_map.find(left);
@@ -106,10 +106,10 @@ public:
             return it->second.second;
         }
 
-        return INVALID;
+        return (int)INVALID;
     }
 
-    unsigned long FindIndexViaRightKey(std::string right) const
+    int FindIndexViaRightKey(std::string right) const
     {
         auto it = m_right_key_map.find(right);
         if (it != m_right_key_map.end())
@@ -117,7 +117,7 @@ public:
             return it->second.second;
         }
 
-        return INVALID;
+        return (int)INVALID;
     }
 };
 
@@ -262,7 +262,7 @@ public:
 
         assert(index1 == index2);
 
-        if (index1 != INVALID || index2 != INVALID)
+        if (index1 != (int)INVALID || index2 != (int)INVALID)
         {
             std::cout << "Error: Entry Already in volatile map" << std::endl;
             return false;
@@ -288,7 +288,7 @@ public:
     bool UpdateEntryByLeft(const T &entry, unsigned long left)
     {
         int index = m_volatile_map.FindIndexViaLeftKey(left);
-        if (index == INVALID)
+        if (index == (int)INVALID)
         {
             return false;
         }
@@ -302,7 +302,7 @@ public:
     bool UpdateEntryByRight(const T &entry, const std::string &right)
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
-        if (index == INVALID)
+        if (index == (int)INVALID)
         {
             return false;
         }
@@ -315,7 +315,7 @@ public:
     bool RemoveEntryByLeft(unsigned long left)
     {
         int index = m_volatile_map.FindIndexViaLeftKey(left);
-        if (index == INVALID)
+        if (index == (int)INVALID)
         {
             return false;
         }
@@ -337,7 +337,7 @@ public:
     bool RemoveEntryByRight(const std::string &right)
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
-        if (index == INVALID)
+        if (index == (int)INVALID)
         {
             return false;
         }
@@ -359,14 +359,14 @@ public:
     T GetEntryByLeft(unsigned long left) const
     {
         int index = m_volatile_map.FindIndexViaLeftKey(left);
-        assert(index != INVALID);
+        assert(index != (int)INVALID);
         return m_raw_persistent_data_base->m_entries[index].GetData();
     }
 
     T GetEntryByRight(const std::string &right) const
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
-        assert(index != INVALID);
+        assert(index != (int)INVALID);
         return m_raw_persistent_data_base->m_entries[index].GetData();
     }
 
@@ -378,13 +378,13 @@ public:
     bool CheckEntryExistByLeftKey(unsigned long left) const
     {
         int index = m_volatile_map.FindIndexViaLeftKey(left);
-        return (index != INVALID);
+        return (index != (int)INVALID);
     }
 
     bool CheckEntryExistByRightKey(const std::string &right) const
     {
         int index = m_volatile_map.FindIndexViaRightKey(right);
-        return (index != INVALID);
+        return (index != (int)INVALID);
     }
 };
 

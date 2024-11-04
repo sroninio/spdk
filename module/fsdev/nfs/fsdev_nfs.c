@@ -152,7 +152,7 @@ lo_insert_to_data_base(void *db, int state, int ref_count, int inode, struct nfs
     temp.inode_left_key = inode;
     temp.fh_right_key.data.data_len = fh->data.data_len;
     memcpy(temp.fh_right_key.data.data_val, fh->data.data_val, fh->data.data_len);
-    return insert_entry(vfsdev->db, &temp, temp.inode_left_key, &temp.fh_right_key);
+    return insert_entry(db, &temp, temp.inode_left_key, &temp.fh_right_key);
 }
 
 static bool
@@ -267,12 +267,14 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
         return -EINVAL;
     }
 
+    temp.ref_count++;
+
     lo_update_open_close_reply_struct(xid, (unsigned long)fsdev_io->u_in.open.fobject,
-                                      real_entry->ref_count + 1, vfsdev->open_close_reply_struct);
+                                      temp.ref_count, vfsdev->open_close_reply_struct);
 
     spdk_compiler_barrier();
 
-    temp.ref_count++;
+    
 
     if (!update_entry_by_left(vfsdev->db, &temp, temp.inode_left_key))
     {
@@ -1175,8 +1177,8 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     struct nfs_fh3 *fh = &(result->LOOKUP3res_u.resok.object);
 
     struct persistent_nfs_fh3 temp = {0};
-    temp.data.data_len = fh.data.data_len;
-    memcpy(temp.data.data_val, fh.data.data_val, temp.data.data_len);
+    temp.data.data_len = fh->data.data_len;
+    memcpy(temp.data.data_val, fh->data.data_val, temp.data.data_len);
 
     unsigned long ref_count = 0;
     struct NfsFsdevEntry temp_entry = {0};
@@ -1266,21 +1268,21 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (strlen(fsdev_io->u_in.unlink.name) + 1 > MAX_FILE_NAME)
     {
-        printf("Error: file name is too long = [%ld]\n", fsdev_io->u_in.unlink.name);
+        printf("Error: file name is too long = [%s]\n", fsdev_io->u_in.unlink.name);
         exit(1);
     }
 
     struct NfsFsdevEntry temp_parent_struct = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
 
-    if (temp.state == PENDING_DELETION_STATE)
+    if (temp_parent_struct.state == PENDING_DELETION_STATE)
     {
         printf("Error: Trying to delete a file that his parent is already pending deletion\n");
         exit(1);
     }
 
     struct LOOKUP3args args = {0};
-    args.what.dir.data.data_val = temp.fh_right_key.data.data_val;
-    args.what.dir.data.data_len = temp.fh_right_key.data.data_len;
+    args.what.dir.data.data_val = temp_parent_struct.fh_right_key.data.data_val;
+    args.what.dir.data.data_len = temp_parent_struct.fh_right_key.data.data_len;
     args.what.name = fsdev_io->u_in.unlink.name;
 
     struct fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data(_ch, fsdev_io);
@@ -1360,7 +1362,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     temp.ref_count--;
 
     lo_update_open_close_reply_struct(xid, (unsigned long)fsdev_io->u_in.release.fobject,
-                                      real_entry.ref_count, vfsdev->open_close_reply_struct);
+                                      temp.ref_count, vfsdev->open_close_reply_struct);
 
     spdk_compiler_barrier();
 
@@ -1385,7 +1387,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     if (!update_entry_by_left(vfsdev->db, &temp, temp.inode_left_key))
     {
         printf("Error: falied at release I/O request - updating the data base \n");
-        return exit(1);
+        exit(1);
     }
 
     return 0;
@@ -1537,7 +1539,7 @@ fsdev_nfs_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
         unsigned int xid = (unsigned int)fsdev_io->internal.unique;
         assert(xid <= 0xffffffff);
         struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(ch);
-        rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)fsdev_io->internal.unique);
+        rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), xid);
     }
     int status = handlers[op](ch, fsdev_io);
 
