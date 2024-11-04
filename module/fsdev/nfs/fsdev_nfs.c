@@ -350,7 +350,6 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         printf("Warning: Trying to make I/O request on inode that is pending deletion\n");
         return -EINVAL;
     }
-    const struct iovec *invec = fsdev_io->u_in.write.iov;
 
     struct WRITE3args args = lo_write_args(fsdev_io, &temp);
 
@@ -408,6 +407,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+    struct iovec *outvec = fsdev_io->u_in.read.iov;
 
     if (check_if_exist_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle) == false)
     {
@@ -459,7 +459,8 @@ lo_getattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
     spdk_fsdev_io_complete(fsdev_io, 0);
 }
 
-struct GETATTR3args lo_getattr_args(struct NfsFsdevEntry *entry)
+static struct GETATTR3args 
+lo_getattr_args(struct NfsFsdevEntry *entry)
 {
     struct GETATTR3args args = {0};
     args.object.data.data_len = entry->fh_right_key.data.data_len;
@@ -736,7 +737,7 @@ lo_readdir_args(struct spdk_fsdev_io *fsdev_io, struct NfsFsdevEntry *entry)
 {
     struct READDIRPLUS3args args = {0};
     args.dir.data.data_len = entry->fh_right_key.data.data_len;
-    args.dir.data.data_val = entry->fh_right_key.data_val;
+    args.dir.data.data_val = entry->fh_right_key.data.data_val;
     args.cookie = fsdev_io->u_in.readdir.offset;
     args.dircount = 1000000;
     args.maxcount = 1000000;
@@ -1020,7 +1021,7 @@ lo_setattr_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
 }
 
 static struct SETATTR3args
-lo_setattr_args(struct spdk_fsdev_file_attr *attr, struct NfsFsdevEntry *temp_entry)
+lo_setattr_args( struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_file_attr *attr, struct NfsFsdevEntry *temp_entry)
 {
     struct SETATTR3args args = {0};
     args.object.data.data_len = temp_entry->fh_right_key.data.data_len;
@@ -1073,13 +1074,13 @@ lo_setattr(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
         exit(1);
     }
     struct NfsFsdevEntry temp_entry = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.setattr.fobject);
-    if (temp_entry->state == PENDING_DELETION_STATE)
+    if (temp_entry.state == PENDING_DELETION_STATE)
     {
         printf("Warning: Trying to make I/O request on inode that is pending deletion\n");
         return -EINVAL;
     }
 
-    struct SETATTR3args args = lo_setattr_args(&fsdev_io->u_in.setattr.attr, &temp_entry);
+    struct SETATTR3args args = lo_setattr_args(fsdev_io,&fsdev_io->u_in.setattr.attr, &temp_entry);
 
     if (rpc_nfs3_setattr_task(nfs_get_rpc_context(vch->nfs), lo_setattr_cb, &args, fsdev_io) == NULL)
     {
