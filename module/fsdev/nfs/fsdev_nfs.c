@@ -774,8 +774,22 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 
     if (check_if_exist_by_right(vfsdev->db, &temp_fh))
     {
-        printf("Error: Trying to make node that is already exists\n");
-        exit(1);
+        struct NfsFsdevEntry real_entry = get_entry_by_right(vfsdev->db, &temp_fh);
+
+        if (real_entry.fh_right_key.data.data_len == temp_fh.data.data_len && memcmp(real_entry.fh_right_key.data.data_val, temp_fh.data.data_val, temp_fh.data.data_len) == 0)
+        {
+            printf("Warning: reply of mknod\n");
+            fattr3 *res = &result->CREATE3res_u.resok.obj_attributes.post_op_attr_u.attributes;
+            lo_fill_attr(&fsdev_io->u_out.mknod.attr, res, real_entry.inode_left_key);
+            fsdev_io->u_out.mknod.fobject = (struct spdk_fsdev_file_object *)real_entry.inode_left_key;
+            spdk_fsdev_io_complete(fsdev_io, 0);
+        }
+
+        if (!remove_entry_by_right(vfsdev->db, &temp_fh))
+        {
+            printf("Error: problem deleting an entry from the data base\n");
+            exit(1);
+        }
     }
 
     unsigned long new_inode = generate_left_key(vfsdev->db);
@@ -787,8 +801,8 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     }
 
     fattr3 *res = &result->CREATE3res_u.resok.obj_attributes.post_op_attr_u.attributes;
-    lo_fill_attr(&fsdev_io->u_out.mknod.attr, res, new_entry.inode_left_key);
-    fsdev_io->u_out.mknod.fobject = (struct spdk_fsdev_file_object *)new_entry.inode_left_key;
+    lo_fill_attr(&fsdev_io->u_out.mknod.attr, res, new_inode);
+    fsdev_io->u_out.mknod.fobject = (struct spdk_fsdev_file_object *)new_inode;
 
     spdk_fsdev_io_complete(fsdev_io, 0);
 }
