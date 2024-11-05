@@ -246,7 +246,7 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     unsigned long xid = (unsigned long)fsdev_io->internal.unique;
 
-    if (xid < vfsdev->open_close_reply_struct->suffix_xid)
+    if (xid <= vfsdev->open_close_reply_struct->suffix_xid) // should it be equel !? I think so.
     {
         printf("Warning: got and old I/O request\n");
         fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
@@ -1351,7 +1351,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     unsigned long xid = (unsigned long)fsdev_io->internal.unique;
 
-    if (xid < vfsdev->open_close_reply_struct->suffix_xid)
+    if (xid <= vfsdev->open_close_reply_struct->suffix_xid) // check this
     {
         printf("Warning: got and old I/O request\n");
         return 0;
