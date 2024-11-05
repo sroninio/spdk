@@ -26,7 +26,7 @@
 
 #define MAGIC_NUMBER 0x12345678
 #define END_OF_LIST -1
-#define MAX_SIZE_DB 20
+#define MAX_SIZE_DB 200000
 #define INVALID -1
 #define NA -2
 
@@ -265,6 +265,7 @@ public:
         if (index1 != (int)INVALID || index2 != (int)INVALID)
         {
             std::cout << "Error: Entry Already in volatile map" << std::endl;
+            std::cout << "index1 = " << index1 << " , index2 = " << index2 << " " << std::endl;
             return false;
         }
 

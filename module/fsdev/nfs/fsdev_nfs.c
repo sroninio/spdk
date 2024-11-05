@@ -690,7 +690,13 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
         temp_fh.data.data_len = curr_entry->name_handle.post_op_fh3_u.handle.data.data_len;
         memcpy(temp_fh.data.data_val, curr_entry->name_handle.post_op_fh3_u.handle.data.data_val, temp_fh.data.data_len);
 
-        unsigned long inode;
+        unsigned long inode = 0;
+
+        if (curr_entry->name_handle.post_op_fh3_u.handle.data.data_len == 0)
+        {
+            curr_entry = curr_entry->nextentry;
+            continue;
+        }
 
         if (check_if_exist_by_right(vfsdev->db, &temp_fh))
         {
@@ -1624,11 +1630,15 @@ nfs_io_channel_init_create_cb(void *io_device, void *ctx_buf)
 
     if (!check_if_exist_by_left(vfsdev->db, 1))
     {
+        printf("this is not in the map!!! \n");
         if (!lo_initialize_new_root_entry_and_insert_to_db(1, nfs_get_rootfh(vch->nfs), vfsdev))
         {
             printf("Error: failed in inserting root file handle into map\n");
             exit(-1);
         }
+    }
+    else
+    {
         printf("Warning: trying to insert ROOT FH to map, but already exist - we are restoring the data base...\n");
     }
 
