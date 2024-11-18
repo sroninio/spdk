@@ -43,6 +43,8 @@
 #define INVALID_INODE 0
 #define XID_OFFSET 400000
 
+bool global_test = true; // delete later
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -245,10 +247,14 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     unsigned long xid = (unsigned long)fsdev_io->internal.unique;
+    printf("the xid of the current open request is %ld \n", xid);                           //
+    printf("the inode of the current open request is %ld \n", fsdev_io->u_in.open.fobject); //
+    fflush(stdout);
 
     if (xid <= vfsdev->open_close_reply_struct->suffix_xid) // should it be equel !? I think so.
     {
         printf("Warning: got and old I/O request\n");
+        printf("the xid of the crashed X.struct IO request is %ld", vfsdev->open_close_reply_struct->suffix_xid); //
         fsdev_io->u_out.open.fhandle = (struct spdk_fsdev_file_handle *)fsdev_io->u_in.open.fobject;
         return 0;
     }
@@ -273,6 +279,12 @@ lo_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
                                       temp.ref_count, vfsdev->open_close_reply_struct);
 
     spdk_compiler_barrier();
+
+    // if (global_test)
+    // {
+    //     printf("\n......................Self Termination......................\n");
+    //     exit(0);
+    // }
 
     if (!update_entry_by_left(vfsdev->db, &temp, temp.inode_left_key))
     {
@@ -336,6 +348,8 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
 
+    printf("the file indoe we need to read is %ld\n", (unsigned long)fsdev_io->u_in.write.fhandle);
+
     if (check_if_exist_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.write.fhandle) == false)
     {
         printf("Error: trying to write to a none existing file\n");
@@ -346,7 +360,10 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     if (temp.state == PENDING_DELETION_STATE)
     {
         printf("Warning: Trying to make I/O request on inode that is pending deletion\n");
-        return -EINVAL;
+        if (temp.ref_count == 0)
+        {
+            return -EINVAL;
+        }
     }
 
     struct WRITE3args args = lo_write_args(fsdev_io, &temp);
@@ -407,6 +424,8 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
     struct iovec *outvec = fsdev_io->u_in.read.iov;
 
+    printf("the file indoe we need to read is %ld\n", (unsigned long)fsdev_io->u_in.read.fhandle);
+
     if (check_if_exist_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle) == false)
     {
         printf("Error: trying to read a none existing file\n");
@@ -417,7 +436,10 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     if (temp.state == PENDING_DELETION_STATE)
     {
         printf("Warning: Trying to make I/O request on inode that is pending deletion\n");
-        return -EINVAL;
+        if (temp.ref_count == 0)
+        {
+            return -EINVAL;
+        }
     }
 
     struct READ3args args = lo_read_args(fsdev_io, &temp);
@@ -583,7 +605,9 @@ lo_lookup_cb(struct rpc_context *rpc, int status, void *data, void *private_data
         if (temp.state == PENDING_DELETION_STATE)
         {
             printf("Error: Trying to make I/O request on a file that is pending deletion\n");
-            exit(1);
+            spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+            return;
+            // exit(1);
         }
         inode = temp.inode_left_key;
     }
@@ -701,6 +725,12 @@ lo_readdir_cb(struct rpc_context *rpc, int status, void *data, void *private_dat
         if (check_if_exist_by_right(vfsdev->db, &temp_fh))
         {
             struct NfsFsdevEntry temp = get_entry_by_right(vfsdev->db, &temp_fh);
+            if (temp.state == PENDING_DELETION_STATE)
+            {
+                curr_entry = curr_entry->nextentry;
+                continue;
+            }
+
             inode = temp.inode_left_key;
         }
         else
@@ -800,6 +830,12 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     if (result->status != NFS3_OK)
     {
         printf("Error: create returned error [%d]\n", result->status);
+        exit(1);
+    }
+
+    if (result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_len > MAX_FH_DATA_LEN)
+    {
+        printf("Error: file handle returned in mknod too long\n");
         exit(1);
     }
 
@@ -925,7 +961,7 @@ lo_mkdir_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 
     if (result->MKDIR3res_u.resok.obj.post_op_fh3_u.handle.data.data_len > MAX_FH_DATA_LEN)
     {
-        printf("Error: file handle returned in lookup too long\n");
+        printf("Error: file handle returned in mkdir too long\n");
         exit(1);
     }
 
@@ -1144,6 +1180,7 @@ static void
 lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 {
     printf("+=+=+=+=+=+=+=+=  {lo_unlink_lookup_cb} FUNCTION CALLED \n");
+
     fflush(stdout);
 
     struct fsdev_and_fsdev_io *cb_data = private_data;
@@ -1192,6 +1229,9 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
         temp_entry = get_entry_by_right(vfsdev->db, &temp);
         temp_entry.state = PENDING_DELETION_STATE;
 
+        printf("11 file to be deleted : inode = %ld\n", temp_entry.inode_left_key);
+        fflush(stdout);
+
         if (!update_entry_by_left(vfsdev->db, &temp_entry, temp_entry.inode_left_key))
         {
             printf("Error: Not been able to update entry\n");
@@ -1204,12 +1244,19 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     else
     {
         unsigned long new_inode = generate_left_key(vfsdev->db);
+
+        printf("22 file to be deleted : inode = %ld\n", new_inode);
+        fflush(stdout);
+
         if (lo_insert_to_data_base(vfsdev->db, PENDING_DELETION_STATE, 0, new_inode, fh) == false)
         {
             printf("Error: falied in inserting to the map.\n");
             free(cb_data);
             exit(1);
         }
+
+        printf("22 complete \n");
+
         cb_data->key = new_inode;
     }
 
@@ -1218,6 +1265,12 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
         printf("Warning: Trying to UNLINK a file that has positive refrence count this io request will be delayed...\n");
 
         strcpy(temp_entry.reply_unlink_params.name, fsdev_io->u_in.unlink.name);
+
+        struct NfsFsdevEntry temp_parent_entry = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
+
+        temp_entry.reply_unlink_params.parent_fh.data.data_len = temp_parent_entry.fh_right_key.data.data_len;
+        memcpy(temp_entry.reply_unlink_params.parent_fh.data.data_val, temp_parent_entry.fh_right_key.data.data_val, temp_entry.reply_unlink_params.parent_fh.data.data_len);
+
         if (!update_entry_by_left(vfsdev->db, &temp_entry, temp_entry.inode_left_key))
         {
             printf("Error: Not been able to update entry\n");
@@ -1225,7 +1278,7 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
             exit(1);
         }
 
-        spdk_fsdev_io_complete(fsdev_io, -EINVAL);
+        spdk_fsdev_io_complete(fsdev_io, 0);
         return;
     }
 
@@ -1341,17 +1394,25 @@ lo_reply_unlink_cb(struct rpc_context *rpc, int status, void *data, void *privat
         printf("Error: falied at removing entry from data base in unlink reply  \n");
         exit(1);
     }
+
+    printf("we reached here !!!!! done deleting the file...\n");
+
     spdk_fsdev_io_complete(fsdev_io, 0);
 }
 
 static int
 lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
+    // return 0;
     struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
 
     unsigned long xid = (unsigned long)fsdev_io->internal.unique;
 
-    if (xid <= vfsdev->open_close_reply_struct->suffix_xid) // check this
+    printf("the xid of the current release request is %ld \n", xid);                              //
+    printf("the inode of the current release request is %ld \n", fsdev_io->u_in.release.fobject); //
+    fflush(stdout);
+
+    if (xid <= vfsdev->open_close_reply_struct->suffix_xid)
     {
         printf("Warning: got and old I/O request\n");
         return 0;
@@ -1373,6 +1434,7 @@ lo_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
     if (temp.ref_count == 0 && temp.state == PENDING_DELETION_STATE)
     {
+        printf("WE ARE HERE ?????!!!!\n");
         struct REMOVE3args args = {0};
         args.object.dir.data.data_val = temp.reply_unlink_params.parent_fh.data.data_val;
         args.object.dir.data.data_len = temp.reply_unlink_params.parent_fh.data.data_len;
@@ -1672,6 +1734,16 @@ lo_restore_open_close_reply_struct(struct OpenCloseReply *open_close_reply_struc
             printf("Warning: we are in recovery but the operation is no longer needed cause the entry is not in the data structure.\n");
             return;
         }
+
+        //
+        printf("=====\n");
+        printf("THE DATA WE ARE RESTORING: \n");
+        printf("struct xid = [%ld], struct value = [%ld]", open_close_reply_struct->suffix_xid, open_close_reply_struct->expected_ref_count);
+        printf("struct INODE !!! = [%ld]", open_close_reply_struct->file_inode);
+        printf("=====\n");
+
+        // delete later
+
         struct NfsFsdevEntry temp = get_entry_by_left(vfsdev->db, open_close_reply_struct->file_inode);
         temp.ref_count = open_close_reply_struct->expected_ref_count;
         if (!update_entry_by_left(vfsdev->db, &temp, open_close_reply_struct->file_inode))
@@ -1714,6 +1786,7 @@ lo_allocate_and_init_open_close_reply_struct(char *filename, struct nfs_fsdev *v
     }
     else
     {
+        global_test = false;
         lo_restore_open_close_reply_struct(open_close_reply_struct, fd, vfsdev);
     }
     spdk_compiler_barrier();
