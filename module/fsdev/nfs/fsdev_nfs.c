@@ -44,7 +44,7 @@
 #define XID_OFFSET 400000
 
 bool global_test = true; // delete later
-
+bool second_test2 = true;
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -1144,13 +1144,88 @@ lo_allocate_and_initialize_cb_data(struct spdk_io_channel *_ch, struct spdk_fsde
 }
 
 static void
-lo_unlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+lookup_cb_2(struct rpc_context *rpc, int status, void *data, void *private_data)
 {
-    printf("+=+=+=+=+=+=+=+=  {lo_unlink_cb} FUNCTION CALLED \n");
+    printf("\n\nSecond dummy lookup got back for callback !!! \n");
+
     fflush(stdout);
 
     struct fsdev_and_fsdev_io *cb_data = private_data;
+    struct spdk_io_channel *_ch = cb_data->_ch;
     struct spdk_fsdev_io *fsdev_io = cb_data->fsdev_io;
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("Error: LOOKUP FROM UNLINK failed with error [%s]\n", (char *)data);
+        free(cb_data);
+        exit(1);
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("Error: LOOKUP FROM UNLINK failed \n");
+        free(cb_data);
+        exit(1);
+    }
+    struct LOOKUP3res *result = data;
+    nfsstat3 ret = result->status;
+    if (ret != NFS3_OK)
+    {
+        if (ret == NFS3ERR_NOENT)
+        {
+            printf("Error: lookup result is NFS3ERR_NOENT - tried to delete a none existing file \n");
+        }
+        else
+        {
+            printf("Error: lookup result is other than OK or NOENT = [%d]\n", ret);
+        }
+        free(cb_data);
+        exit(1);
+    }
+    else
+    {
+        printf("All good ! you have a differente problem !!\n");
+    }
+    return;
+}
+
+static void
+lo_unlink_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    struct fsdev_and_fsdev_io *cb_data = private_data;
+    struct spdk_fsdev_io *fsdev_io = cb_data->fsdev_io;
+
+    ////////delete lower part
+    printf("Now we are at lo_unlink_cb and we are calling dummy lookup again IN THE SECOND 2 TIME !!!\n");
+    struct spdk_io_channel *_ch = cb_data->_ch;
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+    struct nfs_fsdev *vfsdev = cb_data->vfsdev;
+
+    struct NfsFsdevEntry temp_parent_struct = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.unlink.parent_fobject);
+
+    struct LOOKUP3args args = {0};
+    args.what.dir.data.data_val = temp_parent_struct.fh_right_key.data.data_val;
+    args.what.dir.data.data_len = temp_parent_struct.fh_right_key.data.data_len;
+    args.what.name = fsdev_io->u_in.unlink.name;
+
+    unsigned long xid = (unsigned int)(fsdev_io->internal.unique);
+    unsigned long lookup_xid = xid;
+
+    printf("The lookup XID is : %lu \n", lookup_xid);
+
+    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(lookup_xid));
+
+    if (rpc_nfs3_lookup_task(nfs_get_rpc_context(vch->nfs), lookup_cb_2, &args, cb_data) == NULL)
+    {
+        printf("Error: in calling lookup from UNLINK function\n");
+        exit(1);
+    }
+    return;
+
+    /////// delete from here up !
+
+    printf("+=+=+=+=+=+=+=+=  {lo_unlink_cb} FUNCTION CALLED \n");
+    fflush(stdout);
 
     if (status == RPC_STATUS_ERROR)
     {
@@ -1296,14 +1371,17 @@ lo_unlink_lookup_cb(struct rpc_context *rpc, int status, void *data, void *priva
     args.object.name = fsdev_io->u_in.unlink.name;
 
     struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
-    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(fsdev_io->internal.unique));
+    // rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(fsdev_io->internal.unique));
+    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(fsdev_io->internal.unique + 1));
 
+    printf("now we are calling rpc_remove_file on file called = %s\n", args.object.name);
     if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_unlink_cb, &args, cb_data) == NULL)
     {
         printf("Error: in unlinking a file \n");
         free(cb_data);
         exit(1);
     }
+    printf("done - lo_unlink_lookup_cb\n");
 }
 
 static int
@@ -1346,14 +1424,17 @@ lo_unlink(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
     struct fsdev_and_fsdev_io *cb_data = lo_allocate_and_initialize_cb_data(_ch, fsdev_io);
 
     unsigned long xid = (unsigned int)(fsdev_io->internal.unique);
+    // unsigned long lookup_xid = xid + (unsigned long)XID_OFFSET;
+    unsigned long lookup_xid = xid;
 
-    if (xid + XID_OFFSET > 0xffffffff)
+    if (lookup_xid > 0xffffffff)
     {
         printf("Error: xid out of bounds\n");
         exit(1);
     }
+    printf("The lookup XID is : %lu \n", lookup_xid);
 
-    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(xid + (unsigned long)XID_OFFSET));
+    rpc_set_next_xid(nfs_get_rpc_context(vch->nfs), (unsigned int)(lookup_xid));
 
     if (rpc_nfs3_lookup_task(nfs_get_rpc_context(vch->nfs), lo_unlink_lookup_cb, &args, cb_data) == NULL)
     {
@@ -1787,6 +1868,7 @@ lo_allocate_and_init_open_close_reply_struct(char *filename, struct nfs_fsdev *v
     else
     {
         global_test = false;
+        second_test2 = false;
         lo_restore_open_close_reply_struct(open_close_reply_struct, fd, vfsdev);
     }
     spdk_compiler_barrier();
