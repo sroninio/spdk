@@ -580,6 +580,7 @@ static struct fuse_out_header *
 fuse_dispatcher_fill_out_hdr(struct fuse_io *fuse_io, size_t out_len, int error)
 {
 	struct fuse_out_header *hdr;
+
 	struct iovec *out;
 	uint32_t len;
 

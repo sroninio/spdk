@@ -9,20 +9,15 @@
 #ifndef SPDK_FSDEV_NFS_H
 #define SPDK_FSDEV_NFS_H
 
-#include "spdk/stdinc.h"
-#include "spdk/fsdev_module.h"
+typedef void (*APP_CB)(void *, int);
 
-enum spdk_nfs_bool_param {
-	SPDK_NFS_UNDEFINED = -1,
-	SPDK_NFS_TRUE,
-	SPDK_NFS_FALSE,
-};
+struct nfs_fsdev *
+nfs_fsdev_alloc_and_init(void);
 
-#define SPDK_NFS_MAX_WRITE_UNDEFINED 0
+void
+submit(struct nfs_fsdev *fsdev, char * fuse_header, char * fuse_in, char * fuse_out, APP_CB app_cb, void *app_ctxt);
 
-typedef void (*spdk_delete_nfs_fsdev_complete)(void *cb_arg, int fsdeverrno);
-
-int spdk_fsdev_nfs_create(struct spdk_fsdev **fsdev, const char *name);
-void spdk_fsdev_nfs_delete(const char *name, spdk_delete_nfs_fsdev_complete cb_fn, void *cb_arg);
+void
+progress(struct nfs_fsdev * fsdev);
 
 #endif /* SPDK_FSDEV_NFS_H */
