@@ -813,11 +813,11 @@ static void
 lo_write(struct async_context * context)
 {
     struct fuse_write_in  *write_in = (struct fuse_write_in *)(context->fuse_in);
-    struct fuse_out_header * out_header = (struct fuse_out_header * )(ctx->fuse_out);
+    struct fuse_out_header * out_header = (struct fuse_out_header * )(context->fuse_out);
     struct fuse_write_out  *write_out = (struct fuse_write_out *)(out_header + 1);
 
     write_out->size = write_in->size;
-    complete(conetxt, sizeof(*write_out) ,0)
+    complete(context, sizeof(*write_out), 0);
 }
 
 
