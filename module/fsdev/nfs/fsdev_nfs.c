@@ -47,6 +47,10 @@ WSADATA wsaData;
 #define OPEN_CLOSE_STRUCT_REPLY_MAGIC_NUM 0x2244387115
 #define INIT_VALUE_XID 0
 
+static void compiler_barrier(void)
+{
+    __asm volatile("" ::: "memory");
+}
 
 struct OpenCloseReply
 {
@@ -676,9 +680,70 @@ lo_mknod(struct async_context * context)
     }
 }
 
+static void
+lo_update_open_close_reply_struct(unsigned long xid, unsigned long inode, unsigned long expected_ref_count, struct OpenCloseReply *ptr)
+{
+    ptr->header_xid = xid;
+    spdk_compiler_barrier();
 
+    ptr->file_inode = inode;
+    ptr->expected_ref_count = expected_ref_count;
 
+    spdk_compiler_barrier();
+    ptr->suffix_xid = xid;
+}
 
+static void
+lo_open(struct async_context * context)
+{
+    struct fuse_in_header * hdr = (struct fuse_in_header *)(context->fuse_header);
+    struct fuse_open_in *open_in = (struct fuse_open_in *)(context->fuse_in);
+    struct fuse_open_out *open_out = (struct fuse_open_out *)(context->fuse_out);
+
+    unsigned long xid = hdr.unique;
+    printf("the xid of the current open request is %ld \n", xid);                           //
+    printf("the inode of the current open request is %ld \n", fsdev_io->u_in.open.fobject); //
+    fflush(stdout);
+
+    if (xid <= context->fsdev->open_close_reply_struct->suffix_xid) // should it be equel !? I think so.
+    {
+        printf("Warning: got and old I/O request\n");
+        printf("the xid of the crashed X.struct IO request is %ld", vfsdev->open_close_reply_struct->suffix_xid); //
+        open_out->fh = hdr->nodeid;
+
+        goto COMPLETE;
+
+    }
+
+    if (check_if_exist_by_left(context->fsdev->db, hdr->nodeid) == false)
+    {
+        printf("Error: trying to open a unknown file\n");
+        exit(1);
+    }
+
+    struct NfsFsdevEntry temp = get_entry_by_left(context->fsdev->db, hdr->nodeid);
+
+    if (temp.state == PENDING_DELETION_STATE)
+    {
+        printf("Error: trying to get new file descriptor for a file that is pending deletion\n");
+        exit(1);
+    }
+
+    temp.ref_count++;
+
+    lo_update_open_close_reply_struct(xid, hdr->nodeid, temp.ref_count, context->fsdev->open_close_reply_struct);
+    compiler_barrier();
+
+    if (!update_entry_by_left(context->fsdev->db, &temp, temp.inode_left_key))
+    {
+        printf("Error: falied at open I/O request - updating the data base \n");
+        exit(1);
+    }
+    open_out->fh = hdr->nodeid;
+
+COMPLETE:
+    complete(context, sizeof(*open_out), 0);
+}
 
 
 
@@ -709,7 +774,7 @@ static const struct {
 	[FUSE_RMDIR]	   = { nimp,       "RMDIR"	     },
 	[FUSE_RENAME]	   = { nimp,      "RENAME"	     },
 	[FUSE_LINK]	   = { nimp,	       "LINK"	     },
-	[FUSE_OPEN]	   = { nimp,	       "OPEN"	     },
+	[FUSE_OPEN]	   = { lo_open,	       "OPEN"	     },
 	[FUSE_READ]	   = { nimp,       "READ"	     },
 	[FUSE_WRITE]	   = { nimp,       "WRITE"	     },
 	[FUSE_STATFS]	   = { nimp,      "STATFS"	     },
