@@ -608,7 +608,7 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
         }
     }
 
-    unsigned long new_inode = generate_left_key(context->fsdev->db);
+    unsigned long new_inode = generate_left_key(ctx->fsdev->db);
 
     if (!lo_insert_to_data_base(context->fsdev->db, REGULAR_STATE, 0, new_inode, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle))
     {
@@ -651,7 +651,7 @@ lo_mknod(struct async_context * context)
     struct fuse_mknod_in *mknod_in = (struct fuse_mknod_in *)(context->fuse_in);
     char * name = (char *)(mknod_in + 1);
 
-    switch (mknod->mode & BITS_MASK)
+    switch (mknod_in->mode & BITS_MASK)
     {
     case REGULAR_FILE:
         if (check_if_exist_by_left(context->fsdev->db, hdr->nodeid) == false)
@@ -660,7 +660,7 @@ lo_mknod(struct async_context * context)
             exit(1);
         }
 
-        struct NfsFsdevEntry temp = get_entry_by_left(conext->fsdev->db, hdr->nodeid);
+        struct NfsFsdevEntry temp = get_entry_by_left(context->fsdev->db, hdr->nodeid);
         assert(temp.state != PENDING_DELETION_STATE);
         struct CREATE3args args = lo_mknod_args(hdr, mknod_in, name, &temp); 
 
