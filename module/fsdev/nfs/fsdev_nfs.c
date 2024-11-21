@@ -805,6 +805,7 @@ lo_release(struct async_context * context)
         printf("Error: falied at release I/O request - updating the data base \n");
         exit(1);
     }
+COMPLETE:
     complete(context, 0, 0);
 }
 
