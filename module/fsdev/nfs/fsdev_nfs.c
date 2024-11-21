@@ -809,7 +809,59 @@ COMPLETE:
     complete(context, 0, 0);
 }
 
+static void
+lo_write(struct async_context * context)
+{
+    struct fuse_write_in  *write_in = (struct fuse_write_in *)(context->fuse_in);
+    struct fuse_out_header * out_header = (struct fuse_out_header * )(ctx->fuse_out);
+    struct fuse_write_out  *write_out = (struct fuse_write_out *)(out_header + 1);
 
+    write_out->size = write_in->size;
+    complete(conetxt, sizeof(*write_out) ,0)
+}
+
+
+static void
+lo_read(struct async_context * context)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_read} FUNCTION CALLED \n");
+    struct fuse_read_in  *read_in = (struct fuse_read_in *)(context->fuse_in);
+    complete(context, read_in->size, 0);
+
+/* RSRS NOT NOW
+    struct nfs_fsdev *vfsdev = fsdev_to_nfs_fsdev(fsdev_io->fsdev);
+    struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+    struct iovec *outvec = fsdev_io->u_in.read.iov;
+
+    printf("the file indoe we need to read is %ld\n", (unsigned long)fsdev_io->u_in.read.fhandle);
+
+    if (check_if_exist_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle) == false)
+    {
+        printf("Error: trying to read a none existing file\n");
+        exit(1);
+    }
+
+    struct NfsFsdevEntry temp = get_entry_by_left(vfsdev->db, (unsigned long)fsdev_io->u_in.read.fhandle);
+    if (temp.state == PENDING_DELETION_STATE)
+    {
+        printf("Warning: Trying to make I/O request on inode that is pending deletion\n");
+        if (temp.ref_count == 0)
+        {
+            return -EINVAL;
+        }
+    }
+
+    struct READ3args args = lo_read_args(fsdev_io, &temp);
+
+    if (rpc_nfs3_read_task(nfs_get_rpc_context(vch->nfs), lo_read_cb, outvec[0].iov_base,
+                           outvec[0].iov_len, &args, fsdev_io) == NULL)
+    {
+        printf("Error: in read request \n");
+        exit(1);
+    }
+    return OP_STATUS_ASYNC;
+*/
+}
 
 
 static void
@@ -838,8 +890,8 @@ static const struct {
 	[FUSE_RENAME]	   = { nimp,      "RENAME"	     },
 	[FUSE_LINK]	   = { nimp,	       "LINK"	     },
 	[FUSE_OPEN]	   = { lo_open,	       "OPEN"	     },
-	[FUSE_READ]	   = { nimp,       "READ"	     },
-	[FUSE_WRITE]	   = { nimp,       "WRITE"	     },
+	[FUSE_READ]	   = { lo_read,       "READ"	     },
+	[FUSE_WRITE]	   = { lo_writ,       "WRITE"	     },
 	[FUSE_STATFS]	   = { nimp,      "STATFS"	     },
 	[FUSE_RELEASE]	   = { lo_release,     "RELEASE"     },
 	[FUSE_FSYNC]	   = { nimp,       "FSYNC"	     },
