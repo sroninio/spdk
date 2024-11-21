@@ -17,6 +17,8 @@
 #include "fuse_kernel.h"
 
 
+#define BITS_MASK 0170000
+#define REGULAR_FILE 0100000
 
 
 bool global_test = true; // delete later
@@ -589,7 +591,7 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 
     if (check_if_exist_by_right(ctx->fsdev->db, &temp_fh))
     {
-        struct NfsFsdevEntry real_entry = get_entry_by_right(context->fsdev->db, &temp_fh);
+        struct NfsFsdevEntry real_entry = get_entry_by_right(ctx->fsdev->db, &temp_fh);
 
         if (real_entry.state == PENDING_DELETION_STATE)
         {
@@ -652,24 +654,24 @@ lo_mknod(struct async_context * context)
     switch (mknod->mode & BITS_MASK)
     {
     case REGULAR_FILE:
-        if (check_if_exist_by_left(vfsdev->db, hdr->nodeid) == false)
+        if (check_if_exist_by_left(context->fsdev->db, hdr->nodeid) == false)
         {
             printf("Error: trying to create a new file in a directory that is pending deletion\n");
             exit(1);
         }
 
-        struct NfsFsdevEntry temp = get_entry_by_left(vfsdev->db, hdr->nodeid);
+        struct NfsFsdevEntry temp = get_entry_by_left(conext->fsdev->db, hdr->nodeid);
         assert(temp.state != PENDING_DELETION_STATE);
         struct CREATE3args args = lo_mknod_args(hdr, mknod_in, name, &temp); 
 
-        if (rpc_nfs3_create_task(nfs_get_rpc_context(vch->nfs), lo_mknod_cb, &args, context) == NULL)
+        if (rpc_nfs3_create_task(nfs_get_rpc_context(context->fsdev->nfs), lo_mknod_cb, &args, context) == NULL)
         {
             printf("Error: in calling create\n");
             exit(1);
         }
         break;
     default:
-        printf("Error: Unexpected file type(HARD LINKS, SOFT LINKS, ETC) in mode: %o\n", fsdev_io->u_in.mknod.mode);
+        printf("Error: Unexpected file type(HARD LINKS, SOFT LINKS, ETC) in mode: %o\n", mknod_in->mode);
         exit(1);
     }
 }
