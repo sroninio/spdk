@@ -891,7 +891,7 @@ static const struct {
 	[FUSE_LINK]	   = { nimp,	       "LINK"	     },
 	[FUSE_OPEN]	   = { lo_open,	       "OPEN"	     },
 	[FUSE_READ]	   = { lo_read,       "READ"	     },
-	[FUSE_WRITE]	   = { lo_writ,       "WRITE"	     },
+	[FUSE_WRITE]	   = { lo_write,       "WRITE"	     },
 	[FUSE_STATFS]	   = { nimp,      "STATFS"	     },
 	[FUSE_RELEASE]	   = { lo_release,     "RELEASE"     },
 	[FUSE_FSYNC]	   = { nimp,       "FSYNC"	     },
