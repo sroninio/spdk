@@ -310,7 +310,7 @@ lo_init(struct async_context * context)
 	outarg->max_pages = 32;
 	outarg->map_alignment = 0;
 	memset(outarg->unused, 0, sizeof(outarg->unused));
-    	complete(context, sizeof(*outarg), 0);
+    complete(context, sizeof(*outarg), 0);
 }
 
 
@@ -555,6 +555,134 @@ lo_readdir(struct async_context * context)
 
 
 static void
+lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_mknod_cb} FUNCTION CALLED \n");
+    struct async_context * ctx = private_data;
+
+    if (status == RPC_STATUS_ERROR)
+    {
+        printf("Error: lo_create failed with error [%s]\n", (char *)data);
+        exit(1);
+    }
+    else if (status == RPC_STATUS_CANCEL)
+    {
+        printf("Error: lo_create failed \n");
+        exit(1);
+    }
+    struct CREATE3res *result = data;
+    if (result->status != NFS3_OK)
+    {
+        printf("Error: create returned error [%d]\n", result->status);
+        exit(1);
+    }
+
+    if (result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_len > MAX_FH_DATA_LEN)
+    {
+        printf("Error: file handle returned in mknod too long\n");
+        exit(1);
+    }
+
+    struct persistent_nfs_fh3 temp_fh = {0};
+    temp_fh.data.data_len = result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_len;
+    memcpy(temp_fh.data.data_val, result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_val, temp_fh.data.data_len);
+
+    if (check_if_exist_by_right(context->fsdev->db, &temp_fh))
+    {
+        struct NfsFsdevEntry real_entry = get_entry_by_right(context->fsdev->db, &temp_fh);
+
+        if (real_entry.state == PENDING_DELETION_STATE)
+        {
+            printf("Error: edge case - NFS target reused this file handle ! \n");
+            exit(1);
+        }
+        else
+        {
+            printf("Warning: reply of mknod\n");
+            fattr3 *res = &result->CREATE3res_u.resok.obj_attributes.post_op_attr_u.attributes;
+            lo_fill_entry((struct fuse_entry_out *)(ctx->fuse_out), res, real_entry.inode_left_key);
+            lo_fill_attr((struct fuse_entry_out *)(ctx->fuse_out), res, real_entry.inode_left_key);
+            goto COMPLETE;
+        }
+    }
+
+    unsigned long new_inode = generate_left_key(context->fsdev->db);
+
+    if (!lo_insert_to_data_base(context->fsdev->db, REGULAR_STATE, 0, new_inode, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle))
+    {
+        printf("Error: falied at inserting new entry to our data base \n");
+        exit(1);
+    }
+
+    fattr3 *res = &result->CREATE3res_u.resok.obj_attributes.post_op_attr_u.attributes;
+
+    lo_fill_entry((struct fuse_entry_out *)(ctx->fuse_out), res, new_inode);
+    lo_fill_attr((struct fuse_entry_out *)(ctx->fuse_out), res, new_inode);
+
+COMPLETE:
+    complete(ctx, sizeof(struct fuse_entry_out), 0);
+}
+
+static struct CREATE3args
+lo_mknod_args(char * name, struct NfsFsdevEntry *entry)
+{
+    struct CREATE3args args = {0};
+    args.where.dir.data.data_len = entry->fh_right_key.data.data_len;
+    args.where.dir.data.data_val = entry->fh_right_key.data.data_val;
+    args.where.name = strdup(name); //RSRS better safe than sorry
+    args.how.mode = UNCHECKED; // Or GUARDED, or EXCLUSIVE (UNCHECKED mode creates the file regardless of whether it exists. GUARDED fails if the file exists. EXCLUSIVE is for atomic file creation.)
+    args.how.createhow3_u.obj_attributes.mode.set_it = 1;
+    args.how.createhow3_u.obj_attributes.mode.set_mode3_u.mode = fsdev_io->u_in.mknod.mode & 0777;
+    args.how.createhow3_u.obj_attributes.uid.set_it = 1;
+    args.how.createhow3_u.obj_attributes.uid.set_uid3_u.uid = fsdev_io->u_in.mknod.euid;
+    args.how.createhow3_u.obj_attributes.gid.set_it = 1;
+    args.how.createhow3_u.obj_attributes.gid.set_gid3_u.gid = fsdev_io->u_in.mknod.egid;
+    return args;
+}
+
+
+static void 
+lo_mknod(struct async_context * context)
+{
+    printf("+=+=+=+=+=+=+=+=  {lo_mknod} FUNCTION CALLED \n");
+    struct fuse_in_header * hdr = (struct fuse_in_header *)(context->fuse_header);
+    struct fuse_mknod_in *mknod_in = (struct fuse_mknod_in *)(context->fuse_in);
+    char * name = (char *)(mknod_in + 1);
+
+    switch (mknod->mode & BITS_MASK)
+    {
+    case REGULAR_FILE:
+        if (check_if_exist_by_left(vfsdev->db, hdr->nodeid) == false)
+        {
+            printf("Error: trying to create a new file in a directory that is pending deletion\n");
+            exit(1);
+        }
+
+        struct NfsFsdevEntry temp = get_entry_by_left(vfsdev->db, hdr->nodeid);
+        assert(temp.state != PENDING_DELETION_STATE);
+        struct CREATE3args args = lo_mknod_args(name, &temp); 
+
+        if (rpc_nfs3_create_task(nfs_get_rpc_context(vch->nfs), lo_mknod_cb, &args, context) == NULL)
+        {
+            printf("Error: in calling create\n");
+            exit(1);
+        }
+        break;
+    default:
+        printf("Error: Unexpected file type(HARD LINKS, SOFT LINKS, ETC) in mode: %o\n", fsdev_io->u_in.mknod.mode);
+        exit(1);
+    }
+}
+
+
+
+
+
+
+
+
+
+static void
 nimp(struct async_context * context)
 {
     printf("+=+=+=+=+=+=+=+=  {nimp} FUNCTION CALLED \n");
@@ -573,7 +701,7 @@ static const struct {
 	[FUSE_SETATTR]	   = { nimp,     "SETATTR"     },
 	[FUSE_READLINK]	   = { nimp,    "READLINK"    },
 	[FUSE_SYMLINK]	   = { nimp,     "SYMLINK"     },
-	[FUSE_MKNOD]	   = { nimp,       "MKNOD"	     },
+	[FUSE_MKNOD]	   = { lo_mknod,       "MKNOD"	     },
 	[FUSE_MKDIR]	   = { nimp,       "MKDIR"	     },
 	[FUSE_UNLINK]	   = { nimp,      "UNLINK"	     },
 	[FUSE_RMDIR]	   = { nimp,       "RMDIR"	     },
