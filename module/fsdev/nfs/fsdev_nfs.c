@@ -587,7 +587,7 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
     temp_fh.data.data_len = result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_len;
     memcpy(temp_fh.data.data_val, result->CREATE3res_u.resok.obj.post_op_fh3_u.handle.data.data_val, temp_fh.data.data_len);
 
-    if (check_if_exist_by_right(context->fsdev->db, &temp_fh))
+    if (check_if_exist_by_right(ctx->fsdev->db, &temp_fh))
     {
         struct NfsFsdevEntry real_entry = get_entry_by_right(context->fsdev->db, &temp_fh);
 
@@ -624,7 +624,7 @@ COMPLETE:
 }
 
 static struct CREATE3args
-lo_mknod_args(char * name, struct NfsFsdevEntry *entry)
+lo_mknod_args(struct fuse_in_header * hdr_in ,struct fuse_mknod_in *mknod_in, char * name,  struct NfsFsdevEntry *entry)
 {
     struct CREATE3args args = {0};
     args.where.dir.data.data_len = entry->fh_right_key.data.data_len;
@@ -632,11 +632,11 @@ lo_mknod_args(char * name, struct NfsFsdevEntry *entry)
     args.where.name = strdup(name); //RSRS better safe than sorry
     args.how.mode = UNCHECKED; // Or GUARDED, or EXCLUSIVE (UNCHECKED mode creates the file regardless of whether it exists. GUARDED fails if the file exists. EXCLUSIVE is for atomic file creation.)
     args.how.createhow3_u.obj_attributes.mode.set_it = 1;
-    args.how.createhow3_u.obj_attributes.mode.set_mode3_u.mode = fsdev_io->u_in.mknod.mode & 0777;
+    args.how.createhow3_u.obj_attributes.mode.set_mode3_u.mode = mknod_in->mode & 0777;
     args.how.createhow3_u.obj_attributes.uid.set_it = 1;
-    args.how.createhow3_u.obj_attributes.uid.set_uid3_u.uid = fsdev_io->u_in.mknod.euid;
+    args.how.createhow3_u.obj_attributes.uid.set_uid3_u.uid = hdr_in->uid;
     args.how.createhow3_u.obj_attributes.gid.set_it = 1;
-    args.how.createhow3_u.obj_attributes.gid.set_gid3_u.gid = fsdev_io->u_in.mknod.egid;
+    args.how.createhow3_u.obj_attributes.gid.set_gid3_u.gid = hdr_in->gid;
     return args;
 }
 
@@ -660,7 +660,7 @@ lo_mknod(struct async_context * context)
 
         struct NfsFsdevEntry temp = get_entry_by_left(vfsdev->db, hdr->nodeid);
         assert(temp.state != PENDING_DELETION_STATE);
-        struct CREATE3args args = lo_mknod_args(name, &temp); 
+        struct CREATE3args args = lo_mknod_args(hdr, mknod_in, name, &temp); 
 
         if (rpc_nfs3_create_task(nfs_get_rpc_context(vch->nfs), lo_mknod_cb, &args, context) == NULL)
         {
