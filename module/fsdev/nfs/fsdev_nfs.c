@@ -697,18 +697,17 @@ static void
 lo_open(struct async_context * context)
 {
     struct fuse_in_header * hdr = (struct fuse_in_header *)(context->fuse_header);
-    struct fuse_open_in *open_in = (struct fuse_open_in *)(context->fuse_in);
     struct fuse_open_out *open_out = (struct fuse_open_out *)(context->fuse_out);
 
-    unsigned long xid = hdr.unique;
+    unsigned long xid = hdr->unique;
     printf("the xid of the current open request is %ld \n", xid);                           //
-    printf("the inode of the current open request is %ld \n", fsdev_io->u_in.open.fobject); //
+    printf("the inode of the current open request is %ld \n", hdr->nodeid); //
     fflush(stdout);
 
     if (xid <= context->fsdev->open_close_reply_struct->suffix_xid) // should it be equel !? I think so.
     {
         printf("Warning: got and old I/O request\n");
-        printf("the xid of the crashed X.struct IO request is %ld", vfsdev->open_close_reply_struct->suffix_xid); //
+        printf("the xid of the crashed X.struct IO request is %ld", context->fsdev->open_close_reply_struct->suffix_xid); //
         open_out->fh = hdr->nodeid;
 
         goto COMPLETE;
