@@ -610,7 +610,7 @@ lo_mknod_cb(struct rpc_context *rpc, int status, void *data, void *private_data)
 
     unsigned long new_inode = generate_left_key(ctx->fsdev->db);
 
-    if (!lo_insert_to_data_base(context->fsdev->db, REGULAR_STATE, 0, new_inode, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle))
+    if (!lo_insert_to_data_base(ctx->fsdev->db, REGULAR_STATE, 0, new_inode, &result->CREATE3res_u.resok.obj.post_op_fh3_u.handle))
     {
         printf("Error: falied at inserting new entry to our data base \n");
         exit(1);
