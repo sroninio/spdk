@@ -684,12 +684,12 @@ static void
 lo_update_open_close_reply_struct(unsigned long xid, unsigned long inode, unsigned long expected_ref_count, struct OpenCloseReply *ptr)
 {
     ptr->header_xid = xid;
-    spdk_compiler_barrier();
+    compiler_barrier();
 
     ptr->file_inode = inode;
     ptr->expected_ref_count = expected_ref_count;
 
-    spdk_compiler_barrier();
+    compiler_barrier();
     ptr->suffix_xid = xid;
 }
 
@@ -746,6 +746,69 @@ COMPLETE:
 
 
 
+static void
+lo_release(struct async_context * context)
+{
+    struct fuse_in_header * hdr = (struct fuse_in_header *)(context->fuse_header);
+    struct fuse_release_in *release_in = (struct fuse_release_in *)(context->fuse_in);
+
+    unsigned long xid = hdr->unique;
+
+    printf("the xid of the current release request is %ld \n", xid);                              //
+    printf("the inode of the current release request is %ld \n", release_in->fh); //
+    fflush(stdout);
+
+    if (xid <= context->fsdev->open_close_reply_struct->suffix_xid)
+    {
+        printf("Warning: got and old I/O request\n");
+        goto COMPLETE;
+    }
+
+    if (check_if_exist_by_left(context->fsdev->db, hdr->nodeid) == false)
+    {
+        printf("Error: trying to close fd that don't have an entry in data base \n");
+        exit(1);
+    }
+
+    struct NfsFsdevEntry temp = get_entry_by_left(context->fsdev->db, hdr->nodeid);
+    temp.ref_count--;
+
+    lo_update_open_close_reply_struct(xid, hdr->nodeid, temp.ref_count, context->fsdev->open_close_reply_struct);
+
+    compiler_barrier();
+
+    if (temp.ref_count == 0 && temp.state == PENDING_DELETION_STATE)
+    {
+        printf("NO SEPA POSSIB\n");
+        exit(1);
+        /* RSRS NOT NOW
+        printf("WE ARE HERE ?????!!!!\n");
+        struct REMOVE3args args = {0};
+        args.object.dir.data.data_val = temp.reply_unlink_params.parent_fh.data.data_val;
+        args.object.dir.data.data_len = temp.reply_unlink_params.parent_fh.data.data_len;
+        args.object.name = temp.reply_unlink_params.name;
+
+        struct nfs_io_channel *vch = (struct nfs_io_channel *)spdk_io_channel_get_ctx(_ch);
+
+        if (rpc_nfs3_remove_task(nfs_get_rpc_context(vch->nfs), lo_reply_unlink_cb, &args, fsdev_io) == NULL) // we are sending this with the same xid (of forget/release). (?)
+        {
+            printf("Error: in unlinking (reply) a file \n");
+            exit(1);
+        }
+
+        return OP_STATUS_ASYNC;
+        */
+    }
+
+    if (!update_entry_by_left(context->fsdev->db, &temp, temp.inode_left_key))
+    {
+        printf("Error: falied at release I/O request - updating the data base \n");
+        exit(1);
+    }
+    complete(context, 0, 0);
+}
+
+
 
 
 static void
@@ -777,7 +840,7 @@ static const struct {
 	[FUSE_READ]	   = { nimp,       "READ"	     },
 	[FUSE_WRITE]	   = { nimp,       "WRITE"	     },
 	[FUSE_STATFS]	   = { nimp,      "STATFS"	     },
-	[FUSE_RELEASE]	   = { nimp,     "RELEASE"     },
+	[FUSE_RELEASE]	   = { lo_release,     "RELEASE"     },
 	[FUSE_FSYNC]	   = { nimp,       "FSYNC"	     },
 	[FUSE_SETXATTR]	   = { nimp,    "SETXATTR"    },
 	[FUSE_GETXATTR]	   = { nimp,    "GETXATTR"    },
@@ -866,7 +929,7 @@ lo_initilize_open_close_reply_struct(struct OpenCloseReply *open_close_reply_str
 {
     open_close_reply_struct->header_xid = INIT_VALUE_XID;
     open_close_reply_struct->suffix_xid = INIT_VALUE_XID;
-    spdk_compiler_barrier();
+    compiler_barrier();
     open_close_reply_struct->magic_number = OPEN_CLOSE_STRUCT_REPLY_MAGIC_NUM;
 }
 
@@ -936,7 +999,7 @@ lo_allocate_and_init_open_close_reply_struct(char *filename, struct nfs_fsdev *v
         second_test2 = false;
         lo_restore_open_close_reply_struct(open_close_reply_struct, fd, vfsdev);
     }
-    spdk_compiler_barrier();
+    compiler_barrier();
     return open_close_reply_struct;
 }
 
